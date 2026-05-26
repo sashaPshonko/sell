@@ -1,0 +1,9 @@
+# Замени содержимое после съёма из DevTools:
+# 1. Нажми «Выполнил» на заказе
+# 2. Network → graphql → Payload → скопируй поле "query" сюда
+# 3. В .env: CONFIRM_DEAL_OPERATION=имя из x-gql-op
+#    CONFIRM_DEAL_VARIABLES={"dealId":"DEAL_ID"}  (подставь реальные имена полей)
+
+mutation REPLACE_ME($dealId: ID!) {
+  __typename
+}

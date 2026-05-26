@@ -1,0 +1,23 @@
+{
+  "name": "playerok-sell",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "ws": "^8.18.0"
+  },
+  "scripts": {
+    "start": "node poll.mjs",
+    "once": "node poll.mjs --once",
+    "chats": "node scripts/list-chats.mjs",
+    "messages": "node scripts/chat-messages.mjs",
+    "greet": "node scripts/send-greeting.mjs",
+    "capture": "node scripts/capture-all.mjs",
+    "set-token": "node scripts/set-token.mjs",
+    "token-from-har": "node scripts/token-from-har.mjs",
+    "token-from-curl": "node scripts/token-from-curl.mjs",
+    "capture-curl": "node scripts/capture-curl.mjs",
+    "capture-cancel": "node scripts/capture-curl.mjs captures/paste-cancel.curl",
+    "reset-order": "node scripts/reset-order.mjs"
+  }
+}

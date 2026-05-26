@@ -1,0 +1,8 @@
+mutation createChatMessage($input: CreateChatMessageInput!) {
+  createChatMessage(input: $input) {
+    id
+    text
+    createdAt
+    __typename
+  }
+}

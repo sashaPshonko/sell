@@ -1,0 +1,82 @@
+import { WebSocketServer } from 'ws';
+
+const sellClients = new Set();
+const eventQueue = [];
+
+let wss;
+
+function sendJson(ws, obj) {
+    if (ws.readyState === 1) ws.send(JSON.stringify(obj));
+}
+
+/** События для sell (poll drainBotEvents) */
+export function enqueueBotEvent(ev) {
+    const stamped = { ...ev, at: new Date().toISOString() };
+    eventQueue.push(stamped);
+    const payload = JSON.stringify({ type: 'bot_event', event: stamped });
+    for (const ws of sellClients) {
+        if (ws.readyState === 1) ws.send(payload);
+    }
+}
+
+export function drainBotEvents() {
+    return eventQueue.splice(0, eventQueue.length);
+}
+
+export function startWsServer(handlers = {}, port = Number(process.env.WS_PORT || 8790)) {
+    if (wss) return wss;
+
+    wss = new WebSocketServer({ port });
+
+    wss.on('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+            console.error(
+                `[ws] порт ${port} занят — останови старый sellbot:\n` +
+                    `  kill $(lsof -t -i :${port})`,
+            );
+            process.exit(1);
+        }
+        throw err;
+    });
+
+    console.log(`[ws] sellbot ws://0.0.0.0:${port}`);
+
+    wss.on('connection', (ws) => {
+        let role = null;
+
+        ws.on('message', (raw) => {
+            let msg;
+            try {
+                msg = JSON.parse(String(raw));
+            } catch {
+                return;
+            }
+
+            if (msg?.type === 'register' && msg?.role === 'sell') {
+                role = 'sell';
+                sellClients.add(ws);
+                sendJson(ws, { type: 'hello', role: 'sell' });
+                console.log('[ws] sell подключился');
+                return;
+            }
+
+            if (role !== 'sell') {
+                return;
+            }
+
+            if (msg.type === 'order') {
+                handlers.onOrder?.(msg);
+            } else if (msg.type === 'nick_update') {
+                handlers.onNickUpdate?.(msg.orderId, msg.nick);
+            } else if (msg.type === 'cancel_order') {
+                handlers.onCancel?.(msg.orderId);
+            }
+        });
+
+        ws.on('close', () => {
+            sellClients.delete(ws);
+        });
+    });
+
+    return wss;
+}

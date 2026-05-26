@@ -1,0 +1,8 @@
+mutation updateDeal($input: UpdateItemDealInput!) {
+  updateDeal(input: $input) {
+    id
+    status
+    direction
+    __typename
+  }
+}
