@@ -568,6 +568,8 @@ async function enqueueOrder(order) {
     }
 }
 
+log('воркер запущен');
+
 parentPort.on('message', (data) => {
     if (data?.type === 'health_check') {
         void runHealthCheck();

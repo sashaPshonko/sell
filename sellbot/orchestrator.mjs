@@ -99,16 +99,13 @@ async function runScheduledHealthCheck() {
     try {
         if (!workerEntry) {
             await startWorker('health_check');
-            const ok = await waitForWorkerReady();
-            if (!ok) {
-                clearHealthInProgress();
-                await sendAlert(`⚠️ ${botConfig.username}: проверка — таймаут входа`);
-                return;
-            }
         }
+        // Воркер подключается только после health_check — не ждём ready заранее
+        await new Promise((r) => setTimeout(r, 300));
         if (!safePostToWorker({ type: 'health_check' })) {
             clearHealthInProgress();
             console.warn('[sellbot] health: воркер не принял команду');
+            await sendAlert(`⚠️ ${botConfig.username}: проверка — воркер не отвечает`);
         }
     } catch (e) {
         clearHealthInProgress();
@@ -134,18 +131,8 @@ function scheduleDeliver(order) {
         if (safePostToWorker({ type: 'deliver', order })) return;
         setTimeout(tryDeliver, 2000);
     };
-
-    if (workerReady) {
-        tryDeliver();
-    } else {
-        const waitReady = setInterval(() => {
-            if (workerReady) {
-                clearInterval(waitReady);
-                tryDeliver();
-            }
-        }, 1000);
-        setTimeout(() => clearInterval(waitReady), 120000);
-    }
+    // deliver → ensureBot → ready; ждать ready до deliver нельзя (deadlock)
+    tryDeliver();
 }
 
 async function loadBotConfig() {
@@ -217,7 +204,12 @@ async function startWorker(reason = 'order') {
 
     const worker = new Worker(join(__dirname, 'worker.mjs'), {
         workerData: workerDataPayload(),
+        stdout: true,
+        stderr: true,
     });
+
+    worker.stdout?.on('data', (chunk) => process.stdout.write(chunk));
+    worker.stderr?.on('data', (chunk) => process.stderr.write(chunk));
 
     workerEntry = { worker };
 
@@ -371,6 +363,7 @@ async function startWorker(reason = 'order') {
     });
 
     worker.on('error', async (err) => {
+        console.error('[sellbot] worker error:', err);
         await sendAlert(`❌ ${botConfig.username}: ${err.message}`);
         workerReady = false;
     });
