@@ -20,6 +20,7 @@ import {
     DELIVERY_ANARCHY,
 } from './messages.mjs';
 import { confirmDealOnPlayerok } from './confirm.mjs';
+import { scheduleRepublishItem } from './publish.mjs';
 import {
     registerDealOrders,
     filterActionableDeals,
@@ -213,7 +214,10 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
         if (!paid.chatId) paid.chatId = chatId;
     }
 
-    registerDealOrders(state, deals, cutoffIso);
+    const newlyRegistered = registerDealOrders(state, deals, cutoffIso);
+    for (const order of newlyRegistered) {
+        scheduleRepublishItem(client, state, order);
+    }
     const openDeals = filterActionableDeals(state, deals);
     if (!openDeals.length) return;
 

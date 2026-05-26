@@ -142,12 +142,18 @@ export function createClient() {
             });
         },
 
-        async runMutationFromFile(fileEnvKey, defaultPath, variables, operationName) {
+        async runMutationFromFile(
+            fileEnvKey,
+            defaultPath,
+            variables,
+            operationName,
+            gqlPath = '/chats/[id]',
+        ) {
             const query = await loadQuery(fileEnvKey, defaultPath);
             const op = operationName || process.env.CONFIRM_DEAL_OPERATION || 'confirmDeal';
             return request({
                 gqlOp: op,
-                gqlPath: '/chats/[id]',
+                gqlPath,
                 body: { operationName: op, variables, query },
             });
         },

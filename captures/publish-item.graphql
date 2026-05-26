@@ -1,0 +1,10 @@
+mutation publishItem($input: PublishItemInput!) {
+  publishItem(input: $input) {
+    id
+    slug
+    name
+    status
+    mayBePublished
+    __typename
+  }
+}

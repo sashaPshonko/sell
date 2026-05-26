@@ -252,6 +252,7 @@ export async function flushChatDispatchQueue(state, deals) {
 }
 
 export function registerDealOrders(state, deals, cutoffIso = null) {
+    const newlyRegistered = [];
     for (const paid of deals) {
         const oid = paid.dealId;
         const prev = getOrder(state, oid);
@@ -281,7 +282,9 @@ export function registerDealOrders(state, deals, cutoffIso = null) {
         console.log(
             `[sell] заказ ${oid.slice(0, 8)}…: ${paid.itemName} | ${paid.buyer} | ${paid.amountKk}kk`,
         );
+        newlyRegistered.push(state.orders[oid]);
     }
+    return newlyRegistered;
 }
 
 export function filterActionableDeals(state, deals) {
