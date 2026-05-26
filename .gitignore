@@ -4,8 +4,6 @@
 
 node_modules/
 sellbot/node_modules/
-sellbot/bot.json
-!sellbot/bot.json.example
 
 state.json
 captures/*.har

@@ -1,6 +1,6 @@
 # Sellbot
 
-Выдача на FunTime. Настройки — **`bot.json`** (см. `bot.json.example`, дефолты в `settings.mjs`). Файл `.env` не нужен.
+Всё в **`bot.json`** (см. `bot.json.example`). `.env` не нужен.
 
 ```bash
 npm install
@@ -8,26 +8,16 @@ cp bot.json.example bot.json
 npm start
 ```
 
-Из корня `sell/`: `npm start --prefix sellbot` или `./scripts/run/sellbot.sh`.
+## Telegram
 
-## bot.json
-
-Минимум:
+В `bot.json`:
 
 ```json
-[{ "username": "ник", "password": "пароль", "anarchy": 502 }]
+"telegramToken": "...",
+"telegramChatId": "твой id",
+"telegramProxy": "off"
 ```
 
-Опционально: `wsPort`, `payTemplate`, `paySuffix`, `mockDelivery`, `healthCheckEnabled`, таймауты — см. `settings.mjs`.
+Без `telegramChatId`: напиши боту **`/start`**, перезапусти sellbot — id возьмётся из getUpdates. Команда **`/chatid`** в чате с ботом.
 
-## Telegram (опционально)
-
-Без `TELEGRAM_TOKEN` в окружении — не подключается. При запуске:
-
-```bash
-TELEGRAM_TOKEN=... TELEGRAM_CHAT_ID=... npm start
-```
-
-## Выдача `/pay`
-
-Заказ → подключение → цикл `/pay` до `[✔] Успешно` → отключение после `idleQuitMs` без очереди.
+Если Telegram с VPS не открывается: `"telegramProxy": "socks5h://127.0.0.1:1080"`.

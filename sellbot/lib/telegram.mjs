@@ -5,28 +5,69 @@ import {
     ensureTelegramProxy,
 } from './telegram-proxy.mjs';
 
-export function isTelegramSkipped() {
-    if (process.env.SKIP_TELEGRAM === '1' || process.env.TEST_MODE === '1') return true;
-    if (!process.env.TELEGRAM_TOKEN?.trim()) return true;
+function isTelegramSkipped(telegram) {
+    if (!telegram || telegram.skip) return true;
+    if (!telegram.token?.trim()) return true;
     return false;
 }
 
-export async function createTelegramBot({ onCommand } = {}) {
-    if (isTelegramSkipped()) {
-        console.log('[Telegram] отключён (SKIP_TELEGRAM / нет TELEGRAM_TOKEN)');
+/** Если chatId не задан — последний чат из getUpdates (сначала напиши боту /start) */
+async function resolveChatId(token, chatId) {
+    if (chatId?.trim()) return chatId.trim();
+
+    try {
+        const res = await fetch(`https://api.telegram.org/bot${token}/getUpdates?limit=20`);
+        const data = await res.json();
+        if (!data.ok) {
+            console.warn('[Telegram] getUpdates:', data.description || 'ошибка');
+            return null;
+        }
+        const updates = data.result || [];
+        for (let i = updates.length - 1; i >= 0; i--) {
+            const u = updates[i];
+            const id =
+                u.message?.chat?.id ??
+                u.callback_query?.message?.chat?.id ??
+                u.my_chat_member?.chat?.id;
+            if (id != null) {
+                console.log(
+                    `[Telegram] chatId из getUpdates: ${id} (можно прописать telegramChatId в bot.json)`,
+                );
+                return String(id);
+            }
+        }
+    } catch (e) {
+        console.warn('[Telegram] getUpdates:', e.message);
+    }
+    return null;
+}
+
+export async function createTelegramBot({ telegram, onCommand } = {}) {
+    const tg = telegram || {};
+
+    if (isTelegramSkipped(tg)) {
+        console.log('[Telegram] отключён (нет telegramToken в bot.json или telegramSkip: true)');
         return { bot: null, sendAlert: consoleAlert };
     }
 
-    await ensureTelegramProxy();
-    const token = process.env.TELEGRAM_TOKEN.trim();
-    const chatId = process.env.TELEGRAM_CHAT_ID?.trim();
+    const token = tg.token.trim();
+    const tgProxy = { ...tg, token };
+
+    if (!(await ensureTelegramProxy(tgProxy))) {
+        console.warn('[Telegram] прокси недоступен — только консоль');
+        return { bot: null, sendAlert: consoleAlert };
+    }
+
+    let chatId = await resolveChatId(token, tg.chatId);
     if (!chatId) {
-        console.warn('[Telegram] нет TELEGRAM_CHAT_ID — только консоль');
+        console.warn(
+            '[Telegram] нет telegramChatId — напиши боту /start в Telegram и перезапусти sellbot',
+        );
         return { bot: null, sendAlert: consoleAlert };
     }
 
-    const bot = new TelegramBot(token, buildTelegramBotOptions());
-    attachTelegramDiagnostics(bot);
+    const bot = new TelegramBot(token, buildTelegramBotOptions(tgProxy));
+    attachTelegramDiagnostics(bot, tgProxy);
 
     async function sendAlert(message) {
         console.log(`🔔 ${message}`);
@@ -36,6 +77,12 @@ export async function createTelegramBot({ onCommand } = {}) {
             console.error('[Telegram] send:', e.message);
         }
     }
+
+    bot.onText(/\/chatid/, async (msg) => {
+        const id = String(msg.chat.id);
+        await bot.sendMessage(id, `chatId: ${id}`);
+        console.log(`[Telegram] /chatid → ${id}`);
+    });
 
     try {
         await bot.sendMessage(chatId, '✅ Sellbot оркестратор запущен');
@@ -52,7 +99,7 @@ export async function createTelegramBot({ onCommand } = {}) {
         }
     }
 
-    console.log('✅ Telegram готов');
+    console.log(`✅ Telegram готов (chat ${chatId})`);
     return { bot, sendAlert, chatId };
 }
 

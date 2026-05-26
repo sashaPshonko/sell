@@ -27,4 +27,4 @@ cp sellbot/bot.json.example sellbot/bot.json   # ник, пароль, анар�
 
 Тест без Minecraft: `"mockDelivery": true` в `bot.json`.
 
-Telegram (если нужен) — переменные окружения при запуске: `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`. Без токена Telegram не поднимается.
+Telegram — в `sellbot/bot.json`: `telegramToken`, `telegramChatId` (или напиши боту `/start` и перезапусти — подтянет из getUpdates). `telegramProxy`: `"off"` или SOCKS.

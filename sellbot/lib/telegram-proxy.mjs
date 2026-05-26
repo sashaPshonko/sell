@@ -10,13 +10,13 @@ const XRAY_LOCK = '/tmp/sellbot-telegram-proxy.lock';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** TELEGRAM_PROXY=socks5h://127.0.0.1:1080 | http://127.0.0.1:1080 | off */
-export function resolveTelegramProxyUrl() {
-    const value = process.env.TELEGRAM_PROXY;
-    if (value === 'off' || value === '0' || value === 'false') {
+/** tg.proxy / tg.telegramProxy: `off` | socks5h://... | http://... */
+export function resolveTelegramProxyUrl(tg = {}) {
+    const value = tg.proxy ?? tg.telegramProxy ?? 'off';
+    if (value === 'off' || value === '0' || value === 'false' || !value) {
         return null;
     }
-    return value || 'socks5h://127.0.0.1:1080';
+    return String(value);
 }
 
 function parseProxyHostPort(proxyUrl) {
@@ -46,25 +46,24 @@ export function isTelegramProxyReachable(proxyUrl, timeoutMs = 2000) {
     });
 }
 
-async function runXrayCommand() {
-    const cmd = process.env.TELEGRAM_XRAY_CMD?.trim();
+async function runXrayCommand(tg) {
+    const cmd = (tg.xrayCmd ?? tg.telegramXrayCmd)?.trim();
     if (!cmd) {
-        throw new Error('задай TELEGRAM_XRAY_CMD (команда поднятия SOCKS на сервере)');
+        throw new Error('задай telegramXrayCmd в bot.json');
     }
     console.log(`[Telegram] запуск прокси: ${cmd}`);
     const { stdout, stderr } = await execAsync(cmd, {
         timeout: 180_000,
         maxBuffer: 10 * 1024 * 1024,
-        env: process.env,
     });
     if (stdout?.trim()) console.log(stdout.trim());
     if (stderr?.trim()) console.error(stderr.trim());
 }
 
-export async function ensureTelegramProxy() {
-    const proxyUrl = resolveTelegramProxyUrl();
+export async function ensureTelegramProxy(tg = {}) {
+    const proxyUrl = resolveTelegramProxyUrl(tg);
     if (!proxyUrl) {
-        console.log('[Telegram] без прокси (TELEGRAM_PROXY=off)');
+        console.log('[Telegram] без прокси (telegramProxy: off)');
         return true;
     }
 
@@ -73,14 +72,16 @@ export async function ensureTelegramProxy() {
         return true;
     }
 
-    if (process.env.TELEGRAM_AUTO_XRAY === 'off') {
-        console.error(`[Telegram] прокси недоступен: ${proxyUrl} (TELEGRAM_AUTO_XRAY=off)`);
+    const autoXray = tg.autoXray ?? tg.telegramAutoXray;
+    if (!autoXray) {
+        console.error(`[Telegram] прокси недоступен: ${proxyUrl}`);
         return false;
     }
 
-    if (!process.env.TELEGRAM_XRAY_CMD?.trim()) {
+    const xrayCmd = (tg.xrayCmd ?? tg.telegramXrayCmd)?.trim();
+    if (!xrayCmd) {
         console.error(
-            `[Telegram] прокси ${proxyUrl} недоступен. Подними SOCKS на сервере или TELEGRAM_PROXY=off`,
+            `[Telegram] прокси ${proxyUrl} недоступен. Подними SOCKS или telegramProxy: "off" в bot.json`,
         );
         return false;
     }
@@ -106,7 +107,7 @@ export async function ensureTelegramProxy() {
         if (await isTelegramProxyReachable(proxyUrl)) {
             return true;
         }
-        await runXrayCommand();
+        await runXrayCommand(tg);
         for (let i = 0; i < 12; i++) {
             await sleep(2000);
             if (await isTelegramProxyReachable(proxyUrl)) {
@@ -127,8 +128,8 @@ export async function ensureTelegramProxy() {
     }
 }
 
-export function buildTelegramBotOptions() {
-    const proxyUrl = resolveTelegramProxyUrl();
+export function buildTelegramBotOptions(tg = {}) {
+    const proxyUrl = resolveTelegramProxyUrl(tg);
     if (!proxyUrl) {
         return { polling: true };
     }
@@ -147,7 +148,7 @@ export function buildTelegramBotOptions() {
 
 let lastPollingErrorLog = 0;
 
-export function attachTelegramDiagnostics(bot) {
+export function attachTelegramDiagnostics(bot, tg = {}) {
     bot.on('polling_error', async (error) => {
         const now = Date.now();
         if (now - lastPollingErrorLog < 30_000) {
@@ -156,11 +157,9 @@ export function attachTelegramDiagnostics(bot) {
         lastPollingErrorLog = now;
         console.error('[Telegram polling_error]', error.code || '', error.message);
 
-        if (
-            process.env.TELEGRAM_AUTO_XRAY !== 'off' &&
-            String(error.message).includes('ECONNREFUSED')
-        ) {
-            await ensureTelegramProxy();
+        const autoXray = tg.autoXray ?? tg.telegramAutoXray;
+        if (autoXray && String(error.message).includes('ECONNREFUSED')) {
+            await ensureTelegramProxy(tg);
         }
     });
 }

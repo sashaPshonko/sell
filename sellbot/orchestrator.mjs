@@ -464,6 +464,14 @@ async function main() {
     }
 
     const tg = await createTelegramBot({
+        telegram: {
+            token: cfg.telegramToken,
+            chatId: cfg.telegramChatId,
+            skip: cfg.telegramSkip,
+            proxy: cfg.telegramProxy,
+            autoXray: cfg.telegramAutoXray,
+            xrayCmd: cfg.telegramXrayCmd,
+        },
         onCommand: {
             '/ping': async (_msg, alert) => {
                 const st = workerEntry

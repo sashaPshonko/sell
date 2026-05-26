@@ -2,6 +2,9 @@
   {
     "username": "myChocoBoy",
     "password": "ggggg",
-    "anarchy": 502
+    "anarchy": 502,
+    "telegramToken": "8779973341:AAFoPjPiop1Pndoit4Cdv8dUJ6UWu-9CzC4",
+    "telegramChatId": "",
+    "telegramProxy": "off"
   }
 ]

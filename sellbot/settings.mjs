@@ -27,6 +27,13 @@ export const DEFAULTS = {
     offlineMarkers: ['не в сети', 'оффлайн', 'не онлайн'],
     invalidNickMarkers: ['не найден', 'ник не найден', 'игрок не найден'],
     failMarkers: ['недостаточно', 'ошибка', 'отказано'],
+    telegramToken: '',
+    telegramChatId: '',
+    telegramSkip: false,
+    /** `off` — напрямую; иначе `socks5h://127.0.0.1:1080` и т.п. */
+    telegramProxy: 'off',
+    telegramAutoXray: false,
+    telegramXrayCmd: '',
 };
 
 function parseMarkers(value, fallback) {
@@ -88,6 +95,12 @@ export async function loadSettings(path = BOT_JSON) {
         offlineMarkers: parseMarkers(entry.offlineMarkers, DEFAULTS.offlineMarkers),
         invalidNickMarkers: parseMarkers(entry.invalidNickMarkers, DEFAULTS.invalidNickMarkers),
         failMarkers: parseMarkers(entry.failMarkers, DEFAULTS.failMarkers),
+        telegramToken: String(pick(entry, 'telegramToken', DEFAULTS.telegramToken)).trim(),
+        telegramChatId: String(pick(entry, 'telegramChatId', DEFAULTS.telegramChatId)).trim(),
+        telegramSkip: pick(entry, 'telegramSkip', DEFAULTS.telegramSkip) === true,
+        telegramProxy: pick(entry, 'telegramProxy', DEFAULTS.telegramProxy),
+        telegramAutoXray: pick(entry, 'telegramAutoXray', DEFAULTS.telegramAutoXray) === true,
+        telegramXrayCmd: String(pick(entry, 'telegramXrayCmd', DEFAULTS.telegramXrayCmd)).trim(),
     };
 
     return { bot, settings };

@@ -7,6 +7,9 @@
     "payTemplate": "/pay {nick} {amount}",
     "paySuffix": "kk",
     "mockDelivery": false,
-    "healthCheckEnabled": true
+    "healthCheckEnabled": true,
+    "telegramToken": "BOT_TOKEN_FROM_BOTFATHER",
+    "telegramChatId": "123456789",
+    "telegramProxy": "off"
   }
 ]
