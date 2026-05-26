@@ -10,8 +10,9 @@ const BOT_JSON = join(__dirname, 'bot.json');
 export const DEFAULTS = {
     wsPort: 8790,
     payTemplate: '/pay {nick} {amount}',
-    paySuffix: 'kk',
-    payAmountMultiplier: 0,
+    /** Пусто + multiplier: 200кк → 200000000 в /pay */
+    paySuffix: '',
+    payAmountMultiplier: 1_000_000,
     mockDelivery: false,
     mockDeliveryMs: 300,
     healthCheckEnabled: true,

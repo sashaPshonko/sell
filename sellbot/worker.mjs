@@ -2,6 +2,7 @@ import mineflayer from 'mineflayer';
 import { parentPort, workerData } from 'worker_threads';
 import { antiAfkIfNeeded } from './lib/afk-look.mjs';
 import { parseBalanceFromChat } from './lib/balance.mjs';
+import { createChatLogger } from './lib/chat-log.mjs';
 
 /** Успешная выдача /pay на FunTime */
 const PAY_SUCCESS_MARKERS = ['[✔] Успешно', 'Успешно!'];
@@ -54,9 +55,8 @@ let healthCheckActive = false;
 let payOutcome = null;
 let payFailReason = null;
 
-function log(msg) {
-    console.log(`[${config.username}] ${msg}`);
-}
+const chatLog = createChatLogger(config.username);
+const log = (msg) => chatLog.logInfo(msg);
 
 function postEvent(name, extra = {}) {
     parentPort.postMessage({ name, ...extra });
@@ -277,7 +277,7 @@ async function ensureBot() {
 
         b.on('message', (message) => {
             const text = message.toString();
-            log(`💬 ${text}`);
+            chatLog.logServerMessage(text);
             void onServerChat(text);
         });
 

@@ -3,6 +3,8 @@
     "username": "myChocoBoy",
     "password": "ggggg",
     "anarchy": 502,
+    "payAmountMultiplier": 1000000,
+    "paySuffix": "",
     "telegramToken": "8779973341:AAFoPjPiop1Pndoit4Cdv8dUJ6UWu-9CzC4",
     "telegramChatId": "",
     "telegramProxy": "off"
