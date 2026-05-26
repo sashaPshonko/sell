@@ -12,9 +12,16 @@ const config = {
     anarchy: workerData.anarchy,
     payTemplate: workerData.payTemplate || '/pay {nick} {amount}',
     paySuffix: workerData.paySuffix ?? '',
+    payAmountMultiplier: workerData.payAmountMultiplier ?? 0,
     offlineMarkers: workerData.offlineMarkers || [],
     invalidNickMarkers: workerData.invalidNickMarkers || [],
     failMarkers: workerData.failMarkers || [],
+    idleQuitMs: workerData.idleQuitMs ?? 25_000,
+    deliverTimeoutMs: workerData.deliverTimeoutMs ?? 60_000,
+    payLoopWaitMs: workerData.payLoopWaitMs ?? 2000,
+    balanceWaitMs: workerData.balanceWaitMs ?? 15_000,
+    balanceCmdWaitMs: workerData.balanceCmdWaitMs ?? 2000,
+    healthCheckObserveMs: workerData.healthCheckObserveMs ?? 8000,
 };
 
 const anarchyCmd = `/an${config.anarchy}`;
@@ -84,7 +91,7 @@ function nickInMessage(text, nick) {
 
 function formatPayAmount(amountKk) {
     const n = Number(amountKk);
-    const mult = Number(process.env.PAY_AMOUNT_MULTIPLIER || 0);
+    const mult = Number(config.payAmountMultiplier || 0);
     if (mult > 0) return String(Math.round(n * mult));
     if (config.paySuffix) return `${n}${config.paySuffix}`;
     return String(n);
@@ -104,7 +111,7 @@ function amountHints(order) {
     if (suffix) {
         hints.push(`${n} ${suffix}`, `${n}${suffix}`, `${n} ${suffix}`.toUpperCase());
     }
-    const mult = Number(process.env.PAY_AMOUNT_MULTIPLIER || 0);
+    const mult = Number(config.payAmountMultiplier || 0);
     if (mult > 0) hints.push(String(Math.round(n * mult)));
     return [...new Set(hints.filter(Boolean).map((h) => h.toLowerCase()))];
 }
@@ -136,7 +143,7 @@ function scheduleIdleQuit() {
     idleQuitTimer = setTimeout(() => {
         if (delivering || currentOrder || deliverQueue.length > 0) return;
         shutdownBot('idle');
-    }, Number(process.env.IDLE_QUIT_MS || 25000));
+    }, config.idleQuitMs);
 }
 
 function shutdownBot(reason) {
@@ -164,8 +171,8 @@ async function fetchBalanceLike4Narek() {
     if (!bot?.chat) return null;
 
     botState.balance = null;
-    const deadline = Date.now() + Number(process.env.BALANCE_WAIT_MS || 15_000);
-    const cmdWait = Number(process.env.BALANCE_CMD_WAIT_MS || 2000);
+    const deadline = Date.now() + config.balanceWaitMs;
+    const cmdWait = config.balanceCmdWaitMs;
 
     log('проверка баланса: /balance…');
 
@@ -229,7 +236,7 @@ async function runHealthCheck() {
             if (botState.balance != null) {
                 postEvent('health_balance', { balance: botState.balance });
             }
-            const observe = Number(process.env.HEALTH_CHECK_OBSERVE_MS || 8000);
+            const observe = config.healthCheckObserveMs;
             await sleep(observe);
             if (healthCheckActive) finishHealthCheck('ok');
             return;
@@ -311,7 +318,7 @@ async function ensureBot() {
                     if (botState.balance != null) {
                         postEvent('health_balance', { balance: botState.balance });
                     }
-                    await sleep(Number(process.env.HEALTH_CHECK_OBSERVE_MS || 8000));
+                    await sleep(config.healthCheckObserveMs);
                     if (healthCheckActive) finishHealthCheck('ok');
                     resolve(b);
                     return;
@@ -339,8 +346,8 @@ function resetPayOutcome() {
 
 /** Цикл /pay как safeAH в 4NAREK: antiAfk → команда → пауза → проверка успеха */
 async function payDeliveryLoop() {
-    const deadline = Date.now() + Number(process.env.DELIVER_TIMEOUT_MS || 60000);
-    const loopWait = Number(process.env.PAY_LOOP_WAIT_MS || 2000);
+    const deadline = Date.now() + config.deliverTimeoutMs;
+    const loopWait = config.payLoopWaitMs;
     let attempt = 0;
 
     while (delivering && currentOrder && Date.now() < deadline) {

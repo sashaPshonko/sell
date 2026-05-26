@@ -1,0 +1,12 @@
+[
+  {
+    "username": "BOT_NICK",
+    "password": "BOT_PASSWORD",
+    "anarchy": 502,
+    "wsPort": 8790,
+    "payTemplate": "/pay {nick} {amount}",
+    "paySuffix": "kk",
+    "mockDelivery": false,
+    "healthCheckEnabled": true
+  }
+]

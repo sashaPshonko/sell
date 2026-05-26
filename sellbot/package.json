@@ -4,11 +4,10 @@
   "type": "module",
   "scripts": {
     "start": "node orchestrator.mjs",
-    "start:mock": "MOCK_DELIVERY=1 SKIP_TELEGRAM=1 node orchestrator.mjs",
+    "start:mock": "node orchestrator.mjs",
     "test-order": "node scripts/send-test-order.mjs"
   },
   "dependencies": {
-    "dotenv": "^16.4.5",
     "mineflayer": "^4.35.0",
     "node-telegram-bot-api": "^0.67.0",
     "socks-proxy-agent": "^10.0.0",

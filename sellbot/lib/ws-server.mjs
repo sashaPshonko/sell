@@ -23,7 +23,7 @@ export function drainBotEvents() {
     return eventQueue.splice(0, eventQueue.length);
 }
 
-export function startWsServer(handlers = {}, port = Number(process.env.WS_PORT || 8790)) {
+export function startWsServer(handlers = {}, port = 8790) {
     if (wss) return wss;
 
     wss = new WebSocketServer({ port });

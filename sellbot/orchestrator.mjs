@@ -1,11 +1,9 @@
-import 'dotenv/config';
 import { Worker } from 'worker_threads';
-import { readFile } from 'fs/promises';
-import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { startWsServer, enqueueBotEvent } from './lib/ws-server.mjs';
 import { createTelegramBot } from './lib/telegram.mjs';
+import { loadSettings } from './settings.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -13,6 +11,8 @@ let sendAlert = async (m) => console.log(`🔔 ${m}`);
 let isShuttingDown = false;
 let workerEntry = null;
 let botConfig = null;
+/** @type {import('./settings.mjs').DEFAULTS | null} */
+let cfg = null;
 let workerReady = false;
 let healthCheckPaused = false;
 let healthCheckRunning = false;
@@ -21,23 +21,18 @@ let healthInProgress = false;
 /** orderId → последний заказ (для nick_update) */
 const activeOrders = new Map();
 
-function parseMarkers(envKey, fallback) {
-    const raw = process.env[envKey] || fallback;
-    return raw.split(',').map((s) => s.trim()).filter(Boolean);
-}
-
 function forwardToSell(ev) {
     enqueueBotEvent(ev);
 }
 
 function isMockDelivery() {
-    return process.env.MOCK_DELIVERY === '1';
+    return cfg?.mockDelivery === true;
 }
 
 async function mockDeliverOk(order) {
     const orderId = order.orderId;
     const short = orderId?.slice(0, 8) || '?';
-    const delayMs = Number(process.env.MOCK_DELIVERY_MS || 300);
+    const delayMs = cfg?.mockDeliveryMs ?? 300;
 
     console.log(
         `[sellbot] MOCK delivery_ok ${short}… ${order.nick || '?'} ${order.amount ?? '?'}kk`,
@@ -63,7 +58,7 @@ function isValidNick(nick) {
 }
 
 function healthCheckEnabled() {
-    return process.env.HEALTH_CHECK_ENABLED !== '0' && !isMockDelivery();
+    return cfg?.healthCheckEnabled !== false && !isMockDelivery();
 }
 
 function waitForWorkerReady(timeoutMs = 120_000) {
@@ -124,8 +119,8 @@ async function runScheduledHealthCheck() {
 function startHealthCheckLoop() {
     if (!healthCheckEnabled()) return;
 
-    const intervalMs = Number(process.env.HEALTH_CHECK_MS || 3_600_000);
-    const firstMs = Number(process.env.HEALTH_CHECK_FIRST_MS || 120_000);
+    const intervalMs = cfg.healthCheckMs;
+    const firstMs = cfg.healthCheckFirstMs;
     console.log(
         `[sellbot] проверка анархии: каждые ${Math.round(intervalMs / 60_000)} мин, если нет заказов`,
     );
@@ -154,16 +149,13 @@ function scheduleDeliver(order) {
 }
 
 async function loadBotConfig() {
-    const path = process.env.BOT_CONFIG || join(__dirname, 'bot.json');
-    if (!existsSync(path)) {
-        throw new Error(`нет ${path}`);
-    }
-    const arr = JSON.parse(await readFile(path, 'utf-8'));
-    if (!Array.isArray(arr) || !arr[0]?.username) {
-        throw new Error(`${path}: нужен массив с username/password/anarchy`);
-    }
-    botConfig = arr[0];
+    const loaded = await loadSettings();
+    botConfig = loaded.bot;
+    cfg = loaded.settings;
     console.log(`[sellbot] бот: ${botConfig.username}, анархия ${botConfig.anarchy}`);
+    if (cfg.mockDelivery) {
+        console.log('[sellbot] mockDelivery в bot.json — без Minecraft');
+    }
 }
 
 function workerDataPayload() {
@@ -171,11 +163,18 @@ function workerDataPayload() {
         username: botConfig.username,
         password: botConfig.password,
         anarchy: botConfig.anarchy,
-        payTemplate: process.env.PAY_TEMPLATE || '/pay {nick} {amount}',
-        paySuffix: process.env.PAY_SUFFIX ?? 'kk',
-        offlineMarkers: parseMarkers('PAY_OFFLINE_MARKERS', 'не в сети,оффлайн,не онлайн'),
-        invalidNickMarkers: parseMarkers('PAY_INVALID_NICK_MARKERS', 'не найден,ник не найден,игрок не найден'),
-        failMarkers: parseMarkers('PAY_FAIL_MARKERS', 'недостаточно,ошибка,отказано'),
+        payTemplate: cfg.payTemplate,
+        paySuffix: cfg.paySuffix,
+        payAmountMultiplier: cfg.payAmountMultiplier,
+        offlineMarkers: cfg.offlineMarkers,
+        invalidNickMarkers: cfg.invalidNickMarkers,
+        failMarkers: cfg.failMarkers,
+        idleQuitMs: cfg.idleQuitMs,
+        deliverTimeoutMs: cfg.deliverTimeoutMs,
+        payLoopWaitMs: cfg.payLoopWaitMs,
+        balanceWaitMs: cfg.balanceWaitMs,
+        balanceCmdWaitMs: cfg.balanceCmdWaitMs,
+        healthCheckObserveMs: cfg.healthCheckObserveMs,
     };
 }
 
@@ -261,7 +260,7 @@ async function startWorker(reason = 'order') {
 
             if (message?.name === 'health_balance') {
                 const bal = message.balance;
-                const min = Number(process.env.BALANCE_MIN || 1_000_000_000);
+                const min = cfg.balanceMin;
                 if (bal == null || !Number.isFinite(bal)) {
                     console.warn('[sellbot] health: баланс не получен');
                     await sendAlert(`⚠️ ${botConfig.username}: не удалось прочитать баланс (/balance)`);
@@ -286,7 +285,7 @@ async function startWorker(reason = 'order') {
                     return;
                 }
                 if (st === 'ok') {
-                    const min = Number(process.env.BALANCE_MIN || 1_000_000_000);
+                    const min = cfg.balanceMin;
                     const balNote =
                         bal != null && Number.isFinite(bal)
                             ? `, баланс ${bal.toLocaleString('ru-RU')}`
@@ -460,7 +459,7 @@ async function main() {
 
     if (isMockDelivery()) {
         console.log(
-            '[sellbot] MOCK_DELIVERY=1 — сразу delivery_ok, mineflayer не запускается',
+            '[sellbot] mockDelivery в bot.json — сразу delivery_ok, mineflayer не запускается',
         );
     }
 
@@ -490,11 +489,14 @@ async function main() {
     });
     sendAlert = tg.sendAlert;
 
-    startWsServer({
-        onOrder: handleOrder,
-        onNickUpdate: handleNickUpdate,
-        onCancel: handleCancelOrder,
-    });
+    startWsServer(
+        {
+            onOrder: handleOrder,
+            onNickUpdate: handleNickUpdate,
+            onCancel: handleCancelOrder,
+        },
+        cfg.wsPort,
+    );
 
     console.log(
         '[sellbot] жду подключения sell и заказы (логи появятся при order / MOCK delivery_ok)',
