@@ -3,9 +3,16 @@ import { parentPort, workerData } from 'worker_threads';
 import { antiAfkIfNeeded } from './lib/afk-look.mjs';
 import { parseBalanceFromChat } from './lib/balance.mjs';
 import { createChatLogger } from './lib/chat-log.mjs';
+import { audit } from '../lib/audit.mjs';
 
 /** Успешная выдача /pay на FunTime */
-const PAY_SUCCESS_MARKERS = ['[✔] Успешно', 'Успешно!'];
+const PAY_SUCCESS_MARKERS = [
+    '[✔] Успешно',
+    'Успешно!',
+    'успешно отправлен',
+    'успешно перевед',
+    'перевод успешно',
+];
 
 const config = {
     username: workerData.username,
@@ -121,12 +128,24 @@ function amountInMessage(text, order) {
     return amountHints(order).some((h) => lower.includes(h));
 }
 
-/** «[✔] Успешно!» — без ника/суммы в строке */
+/** Успех /pay — часто без ника в строке; галочка может быть ✔ или ✓ */
 function isPaySuccessLine(text) {
     const plain = stripMcFormatting(text);
     const lower = plain.toLowerCase();
-    if (lower.includes('успешно') && plain.includes('✔')) return true;
-    return PAY_SUCCESS_MARKERS.some((m) => lower.includes(m.toLowerCase()));
+    const hasCheck = /[✔✓]/.test(plain) || /\[\s*[✔✓]\s*\]/.test(plain);
+    if (lower.includes('успешно') && hasCheck) return true;
+    if (PAY_SUCCESS_MARKERS.some((m) => lower.includes(m.toLowerCase()))) return true;
+    if (
+        lower.includes('успешно') &&
+        (lower.includes('перевод') ||
+            lower.includes('отправ') ||
+            lower.includes('передан') ||
+            lower.includes('/pay') ||
+            lower.includes('pay '))
+    ) {
+        return true;
+    }
+    return false;
 }
 
 function messageMatchesOrder(text, order, kind) {
@@ -416,6 +435,7 @@ function trySetPayOutcomeFromChat(text) {
 
     if (isPaySuccessLine(text)) {
         payOutcome = 'ok';
+        logOk(`pay успех: ${text.slice(0, 80)}`);
         return;
     }
     if (matchesAny(text, config.offlineMarkers) && messageMatchesOrder(text, currentOrder, 'offline')) {
@@ -476,12 +496,17 @@ const FATAL_DELIVERY = new Set(['banned', 'captcha']);
 function finishDelivery(result) {
     if (!currentOrder) return;
     const orderId = currentOrder.orderId;
+    const nick = currentOrder.nick;
+    const amountKk = currentOrder.amount;
     const queued = deliverQueue.length;
     delivering = false;
     currentOrder = null;
     resetPayOutcome();
 
-    if (result === 'ok') postEvent('delivery_ok', { orderId });
+    if (result === 'ok') {
+        void audit('game_pay_ok', { orderId, nick, amountKk });
+        postEvent('delivery_ok', { orderId });
+    }
     else if (result === 'offline') postEvent('player_offline', { orderId });
     else if (result === 'invalid_nick') postEvent('invalid_nick', { orderId });
     else if (result === 'banned') postEvent('delivery_failed', { orderId, reason: 'banned' });

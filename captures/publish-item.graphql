@@ -4,7 +4,5 @@ mutation publishItem($input: PublishItemInput!) {
     slug
     name
     status
-    mayBePublished
-    __typename
   }
 }

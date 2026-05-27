@@ -225,22 +225,32 @@ export async function flushChatDispatchQueue(state, deals) {
         if (!nick) continue;
 
         order.nick = nick;
-        console.log(
-            `[sell] ${oid.slice(0, 8)}…: → ws ${nick} ${paid.amountKk}kk (очередь чата)`,
-        );
 
         try {
-            await dispatchOrder({
+            const { sent } = await dispatchOrder({
                 ...order,
                 ...paid,
                 orderId: oid,
                 nick,
                 paidAtMs: Date.parse(paid.paidAt),
             });
-            setOrderPhase(state, oid, 'dispatched', {
-                nick,
-                dispatchedAt: new Date().toISOString(),
-            });
+            if (sent > 0) {
+                console.log(
+                    `[sell] ${oid}: → sellbot ${nick} ${paid.amountKk}kk`,
+                );
+                setOrderPhase(state, oid, 'dispatched', {
+                    nick,
+                    dispatchedAt: new Date().toISOString(),
+                });
+            } else {
+                console.warn(
+                    `[sell] ${oid}: sellbot офлайн — ${nick} ${paid.amountKk}kk (ждём ws)`,
+                );
+                setOrderPhase(state, oid, 'ws_pending', {
+                    nick,
+                    lastError: 'sellbot_offline',
+                });
+            }
         } catch (e) {
             console.error(`[sell] ws ${oid}: ${e.message}`);
             setOrderPhase(state, oid, 'awaiting_nick', {
@@ -289,4 +299,37 @@ export function registerDealOrders(state, deals, cutoffIso = null) {
 
 export function filterActionableDeals(state, deals) {
     return deals.filter((d) => isActionableOrder(getOrder(state, d.dealId)));
+}
+
+/** Повторная отправка в sellbot после переподключения ws */
+export async function retryWsPendingOrders(state) {
+    for (const order of Object.values(state.orders)) {
+        if (order.phase !== 'ws_pending' || !order.nick) continue;
+        const oid = order.orderId || order.dealId;
+        try {
+            const { sent } = await dispatchOrder({
+                orderId: oid,
+                dealId: oid,
+                chatId: order.chatId,
+                buyer: order.buyer,
+                buyerId: order.buyerId,
+                nick: order.nick,
+                amountKk: order.amountKk,
+                paidAt: order.paidAt,
+                paidAtMs: order.paidAt ? Date.parse(order.paidAt) : undefined,
+                itemName: order.itemName,
+                server: order.server,
+            });
+            if (sent > 0) {
+                console.log(`[sell] ${oid}: → sellbot (повтор ws) ${order.nick}`);
+                setOrderPhase(state, oid, 'dispatched', {
+                    nick: order.nick,
+                    dispatchedAt: new Date().toISOString(),
+                    lastError: null,
+                });
+            }
+        } catch (e) {
+            console.warn(`[sell] ws повтор ${oid}: ${e.message}`);
+        }
+    }
 }

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { startWsServer, enqueueBotEvent } from './lib/ws-server.mjs';
 import { createTelegramBot } from './lib/telegram.mjs';
 import { loadSettings } from './settings.mjs';
+import { audit } from '../lib/audit.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -22,6 +23,7 @@ let healthInProgress = false;
 const activeOrders = new Map();
 
 function forwardToSell(ev) {
+    void audit('ws_bot_event', ev);
     enqueueBotEvent(ev);
 }
 
@@ -383,6 +385,15 @@ async function startWorker(reason = 'order') {
 
 async function handleOrder(order) {
     activeOrders.set(order.orderId, order);
+    console.log(
+        `[sellbot] заказ ${order.orderId} | ${order.nick || '?'} | ${order.amount ?? '?'}kk`,
+    );
+    void audit('sellbot_order', {
+        orderId: order.orderId,
+        nick: order.nick,
+        amountKk: order.amount,
+        buyer: order.buyer,
+    });
 
     if (healthInProgress) {
         console.log(`[sellbot] заказ ${order.orderId.slice(0, 8)}… — прерываем проверку`);

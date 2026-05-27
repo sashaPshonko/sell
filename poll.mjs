@@ -1,4 +1,5 @@
 import { loadEnv } from './lib/env.mjs';
+import { audit } from './lib/audit.mjs';
 import { createClient } from './playerok-client.mjs';
 import {
     findAllCurrencyPaidDeals,
@@ -29,6 +30,7 @@ import {
     applyNickCommandUpdates,
     applyCancelCommands,
     flushChatDispatchQueue,
+    retryWsPendingOrders,
 } from './chat-session.mjs';
 import {
     ensurePollStarted,
@@ -68,11 +70,22 @@ async function handleBotEvents(client, state) {
 
         try {
             if (ev.type === 'delivery_ok') {
+                setOrderPhase(state, ev.orderId, order.phase, {
+                    gameDeliveryAt: new Date().toISOString(),
+                });
+                void audit('delivery_ok', {
+                    orderId: ev.orderId,
+                    nick: order.nick,
+                    amountKk: order.amountKk,
+                });
                 await sendChatMessage(
                     client,
                     chatId,
                     buildDeliveryOkHint(order.amountKk),
                 );
+                setOrderPhase(state, ev.orderId, order.phase, {
+                    buyerNotifiedAt: new Date().toISOString(),
+                });
                 await markPlayerokDone(client, state, ev.orderId);
                 console.log(`[sell] выдано: ${ev.orderId} (${order.amountKk}kk)`);
             } else if (ev.type === 'delivery_stalled') {
@@ -273,6 +286,7 @@ async function tick() {
     migrateStaleOrders(state, cutoffIso);
 
     await handleBotEvents(client, state);
+    await retryWsPendingOrders(state);
 
     const viewerData = await client.viewer();
     const sellerUserId = viewerData.viewer.id;
