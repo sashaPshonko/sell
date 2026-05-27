@@ -13,22 +13,16 @@ const DEFAULT_HEADERS = {
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
 };
 
+/** Минимальные cookies — работают с VPS; полная строка с __ddg9_ привязана к IP дома */
 function buildCookie(token) {
     const auid = process.env.PLAYEROK_AUID?.trim();
     const ddg1 = process.env.PLAYEROK_DDG1?.trim();
-    const fromParts = [
-        `token=${token}`,
+    const parts = [
         auid ? `auid=${auid}` : '',
+        `token=${token}`,
         ddg1 ? `__ddg1_=${ddg1}` : '',
-    ]
-        .filter(Boolean)
-        .join('; ');
-
-    const raw = process.env.PLAYEROK_COOKIES?.trim();
-    if (!raw || raw.length < 30) return fromParts;
-    if (/(?:^|;\s*)auid=/i.test(raw)) return raw;
-    if (auid) return fromParts;
-    return raw;
+    ].filter(Boolean);
+    return parts.join('; ');
 }
 
 export function createClient() {
@@ -46,6 +40,7 @@ export function createClient() {
     async function request(opts) {
         const headers = {
             ...baseHeaders,
+            ...(opts.referer ? { referer: opts.referer } : {}),
             ...(opts.gqlOp ? { 'x-gql-op': opts.gqlOp } : {}),
             ...(opts.gqlPath ? { 'x-gql-path': opts.gqlPath } : {}),
         };
@@ -132,6 +127,7 @@ export function createClient() {
                 return request({
                     gqlOp: 'chatMessages',
                     gqlPath: '/chats/[id]',
+                    referer: `https://playerok.com/chats/${chatId}`,
                     persisted: {
                         operationName: 'chatMessages',
                         hash,
