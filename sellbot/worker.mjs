@@ -64,6 +64,7 @@ let payFailReason = null;
 
 const chatLog = createChatLogger(config.username);
 const log = (msg) => chatLog.logInfo(msg);
+const logOk = (msg) => chatLog.logOk(msg);
 
 function postEvent(name, extra = {}) {
     parentPort.postMessage({ name, ...extra });
