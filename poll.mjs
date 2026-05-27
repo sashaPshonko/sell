@@ -44,6 +44,7 @@ import {
     buyerHasFulfillmentOpen,
 } from './lib/playerok-deal-sync.mjs';
 import { ensureChat, getBuyerSession } from './state.mjs';
+import { assertPlayerokAuth } from './lib/check-auth.mjs';
 
 loadEnv();
 
@@ -330,6 +331,7 @@ async function tick() {
 }
 
 async function main() {
+    await assertPlayerokAuth();
     console.log(`[sell] автопродажа | анархия ${DELIVERY_ANARCHY()} | ws sellbot`);
     do {
         try {

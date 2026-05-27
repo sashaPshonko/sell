@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "node poll.mjs",
+    "check": "node scripts/check-auth.mjs",
     "once": "node poll.mjs --once",
     "chats": "node scripts/list-chats.mjs",
     "messages": "node scripts/chat-messages.mjs",
