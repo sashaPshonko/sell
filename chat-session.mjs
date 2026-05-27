@@ -13,7 +13,11 @@ import {
     setOrderPhase,
     ordersInChat,
 } from './state.mjs';
-import { hasGreetingInChat, buildOrderCancelledHint } from './messages.mjs';
+import {
+    hasGreetingInChat,
+    buildOrderCancelledHint,
+    buildDispatchingHint,
+} from './messages.mjs';
 import { sendGreeting, sendChatMessage } from './chat.mjs';
 import { dispatchOrder, dispatchNickUpdate, dispatchCancelOrder } from './dispatch.mjs';
 import { cancelDealOnPlayerok } from './cancel.mjs';
@@ -171,7 +175,15 @@ export async function applyCancelCommands(
 /**
  * Новый /nick — обновить сессию и перезапустить выдачу у dispatched (если завис).
  */
-export async function applyNickCommandUpdates(state, chatId, messages, buyerId, greetingAtIso, knownIds) {
+export async function applyNickCommandUpdates(
+    state,
+    chatId,
+    messages,
+    buyerId,
+    greetingAtIso,
+    knownIds,
+    client = null,
+) {
     const session = getBuyerSession(state, chatId, buyerId);
     const known = knownIds instanceof Set ? knownIds : new Set(knownIds || []);
     const after = nickMessagesAfter(session, greetingAtIso);
@@ -203,12 +215,37 @@ export async function applyNickCommandUpdates(state, chatId, messages, buyerId, 
                 });
             }
         }
+
+        if (client) {
+            await notifyDispatchingForBuyer(client, state, chatId, buyerId, u.nick);
+        }
     }
     return known;
 }
 
+async function notifyDispatchingForBuyer(client, state, chatId, buyerId, nick) {
+    for (const order of ordersInChat(state, chatId)) {
+        if (order.buyerId !== buyerId) continue;
+        if (order.phase === 'completed' || order.phase === 'cancelled') continue;
+        if (order.dispatchAckSentAt) continue;
+
+        try {
+            await sendChatMessage(
+                client,
+                chatId,
+                buildDispatchingHint(nick, order.amountKk),
+            );
+            setOrderPhase(state, order.orderId, order.phase, {
+                dispatchAckSentAt: new Date().toISOString(),
+            });
+        } catch (e) {
+            console.warn(`[sell] «сейчас выдаю»: ${e.message}`);
+        }
+    }
+}
+
 /** Все незавершённые заказы чата → sellbot, строго по времени оплаты */
-export async function flushChatDispatchQueue(state, deals) {
+export async function flushChatDispatchQueue(state, deals, client = null) {
     const sorted = [...deals].sort((a, b) => Date.parse(a.paidAt) - Date.parse(b.paidAt));
 
     for (const paid of sorted) {
@@ -225,6 +262,10 @@ export async function flushChatDispatchQueue(state, deals) {
         if (!nick) continue;
 
         order.nick = nick;
+
+        if (client && !order.dispatchAckSentAt) {
+            await notifyDispatchingForBuyer(client, state, chatId, paid.buyerId, nick);
+        }
 
         try {
             const { sent } = await dispatchOrder({

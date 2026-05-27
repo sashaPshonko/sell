@@ -18,6 +18,7 @@ import {
     buildQueueStallHint,
     buildDeliveryOkHint,
     buildOrderAlreadyDoneHint,
+    buildDispatchingHint,
     DELIVERY_ANARCHY,
 } from './messages.mjs';
 import { confirmDealOnPlayerok } from './confirm.mjs';
@@ -37,7 +38,7 @@ import {
     getDealCutoffIso,
     migrateStaleOrders,
 } from './lib/deal-cutoff.mjs';
-import { ensureChat, getBuyerSession } from './state.mjs';
+import { ensureChat, getBuyerSession, ordersInChat } from './state.mjs';
 
 loadEnv();
 
@@ -127,12 +128,24 @@ async function handleBotEvents(client, state) {
     }
 }
 
+/** Есть незакрытый заказ этого покупателя в чате — ник относится к нему, не к старому completed */
+function buyerHasActiveOrderInChat(state, chatId, buyerId) {
+    return ordersInChat(state, chatId).some(
+        (o) =>
+            o.buyerId === buyerId &&
+            o.phase !== 'completed' &&
+            o.phase !== 'cancelled' &&
+            o.phase !== 'legacy',
+    );
+}
+
 async function handleCompletedLateNick(client, state, chatId, messages, sellerUserId) {
     const chat = ensureChat(state, chatId);
     const greetingAt = chat.greetingAt;
 
     for (const order of Object.values(state.orders)) {
         if (order.chatId !== chatId || order.phase !== 'completed') continue;
+        if (buyerHasActiveOrderInChat(state, chatId, order.buyerId)) continue;
 
         const after =
             order.playerokMarkedAt ||
@@ -266,6 +279,7 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
             buyerId,
             greetingAt,
             knownIds,
+            client,
         );
     }
     chatKnown.processedNickMessageIds = [...knownIds];
@@ -273,7 +287,7 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
 
     warnInvalidNickOnce(client, state, chatId, messages, openDeals, greetingAt);
 
-    await flushChatDispatchQueue(state, openDeals);
+    await flushChatDispatchQueue(state, openDeals, client);
 
     await handleCompletedLateNick(client, state, chatId, messages, sellerUserId);
 }

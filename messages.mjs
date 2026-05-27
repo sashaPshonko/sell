@@ -91,6 +91,18 @@ export function buildOrderAlreadyDoneHint() {
     ].join('\n');
 }
 
+/** Сразу после ника — перед выдачей на сервере */
+export function buildDispatchingHint(nick, amountKk) {
+    const anka = DELIVERY_ANARCHY();
+    const sum = amountKk != null && amountKk > 0 ? `${amountKk}kk ` : '';
+    return [
+        `⏳ Сейчас выдаю ${sum}на ник «${nick}».`,
+        '',
+        `🎮 Будь на анархии ${anka} и в сети (FunTime 1.21).`,
+        'Если не пришло за минуту — /nick твой-ник',
+    ].join('\n');
+}
+
 export function hasGreetingInChat(messages, sellerUserId) {
     const marker = (process.env.GREETING_MARKER || 'выдача автоматическая').toLowerCase();
     for (const msg of messages) {
