@@ -22,7 +22,7 @@ import {
     DELIVERY_ANARCHY,
 } from './messages.mjs';
 import { confirmDealOnPlayerok } from './confirm.mjs';
-import { scheduleRepublishItem } from './publish.mjs';
+import { scheduleRepublishItem, republishWhen } from './publish.mjs';
 import {
     registerDealOrders,
     filterActionableDeals,
@@ -38,7 +38,12 @@ import {
     getDealCutoffIso,
     migrateStaleOrders,
 } from './lib/deal-cutoff.mjs';
-import { ensureChat, getBuyerSession, ordersInChat } from './state.mjs';
+import {
+    buildDealStatusTimeline,
+    syncChatOrdersFromPlayerok,
+    buyerHasFulfillmentOpen,
+} from './lib/playerok-deal-sync.mjs';
+import { ensureChat, getBuyerSession } from './state.mjs';
 
 loadEnv();
 
@@ -52,6 +57,7 @@ async function markPlayerokDone(client, state, dealId) {
         setOrderPhase(state, dealId, 'completed', {
             playerokMarkedAt: new Date().toISOString(),
             playerokStatus: process.env.CONFIRM_DEAL_STATUS || 'SENT',
+            playerokStatusAt: new Date().toISOString(),
         });
         console.log(`[sell] PlayerOK SENT: ${dealId}`);
     } catch (e) {
@@ -88,6 +94,9 @@ async function handleBotEvents(client, state) {
                     buyerNotifiedAt: new Date().toISOString(),
                 });
                 await markPlayerokDone(client, state, ev.orderId);
+                if (republishWhen() === 'sent') {
+                    scheduleRepublishItem(client, state, order);
+                }
                 console.log(`[sell] выдано: ${ev.orderId} (${order.amountKk}kk)`);
             } else if (ev.type === 'delivery_stalled') {
                 const nick =
@@ -128,24 +137,13 @@ async function handleBotEvents(client, state) {
     }
 }
 
-/** Есть незакрытый заказ этого покупателя в чате — ник относится к нему, не к старому completed */
-function buyerHasActiveOrderInChat(state, chatId, buyerId) {
-    return ordersInChat(state, chatId).some(
-        (o) =>
-            o.buyerId === buyerId &&
-            o.phase !== 'completed' &&
-            o.phase !== 'cancelled' &&
-            o.phase !== 'legacy',
-    );
-}
-
 async function handleCompletedLateNick(client, state, chatId, messages, sellerUserId) {
     const chat = ensureChat(state, chatId);
     const greetingAt = chat.greetingAt;
 
     for (const order of Object.values(state.orders)) {
         if (order.chatId !== chatId || order.phase !== 'completed') continue;
-        if (buyerHasActiveOrderInChat(state, chatId, order.buyerId)) continue;
+        if (buyerHasFulfillmentOpen(state, chatId, order.buyerId)) continue;
 
         const after =
             order.playerokMarkedAt ||
@@ -222,6 +220,9 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
     }
 
     const messages = flattenMessages(msgData);
+    const dealTimeline = buildDealStatusTimeline(messages);
+    syncChatOrdersFromPlayerok(state, chatId, dealTimeline);
+
     const deals = findAllCurrencyPaidDeals(messages);
 
     if (!deals.length) {
@@ -241,8 +242,12 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
     }
 
     const newlyRegistered = registerDealOrders(state, deals, cutoffIso);
-    for (const order of newlyRegistered) {
-        scheduleRepublishItem(client, state, order);
+    syncChatOrdersFromPlayerok(state, chatId, dealTimeline);
+
+    if (republishWhen() === 'paid') {
+        for (const order of newlyRegistered) {
+            scheduleRepublishItem(client, state, order);
+        }
     }
     const openDeals = filterActionableDeals(state, deals);
     if (!openDeals.length) return;

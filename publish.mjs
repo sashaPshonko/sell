@@ -13,6 +13,12 @@ function publishDelayMs() {
     return Number(process.env.PUBLISH_DELAY_MS || 10_000);
 }
 
+/** paid — сразу после оплаты (PlayerOK часто отказывает). sent — после SENT/выдачи (по умолчанию). */
+export function republishWhen() {
+    const v = (process.env.REPUBLISH_WHEN || 'sent').trim().toLowerCase();
+    return v === 'paid' ? 'paid' : 'sent';
+}
+
 function buildPublishVariables(itemId) {
     const varsRaw = process.env.PUBLISH_ITEM_VARIABLES;
     if (varsRaw) {
@@ -63,10 +69,10 @@ export function scheduleRepublishItem(client, state, order) {
 
     const dealId = order.dealId || order.orderId;
     const existing = getOrder(state, dealId);
-    if (existing?.republishedAt || existing?.republishScheduled) {
-        return;
-    }
+    if (existing?.republishedAt) return;
     if (pending.has(dealId)) return;
+    // Уже ждём таймер и прошлый раз не падал
+    if (existing?.republishScheduled && !existing?.republishError) return;
 
     const delayMs = publishDelayMs();
     setOrderPhase(state, dealId, existing?.phase || order.phase || 'new', {
@@ -83,11 +89,13 @@ export function scheduleRepublishItem(client, state, order) {
             await publishItemOnPlayerok(client, order.itemId);
             setOrderPhase(state, dealId, getOrder(state, dealId)?.phase || 'new', {
                 republishedAt: new Date().toISOString(),
+                republishError: null,
             });
             console.log(`[sell] лот перевыставлен: ${order.itemName || order.itemId}`);
         } catch (e) {
             console.warn(`[sell] publishItem ${dealId.slice(0, 8)}…: ${e.message}`);
             setOrderPhase(state, dealId, getOrder(state, dealId)?.phase || 'new', {
+                republishScheduled: false,
                 republishError: e.message,
             });
         }

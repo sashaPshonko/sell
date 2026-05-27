@@ -113,7 +113,7 @@ export function createClient() {
             });
         },
 
-        async chatMessages(chatId, first = Number(process.env.CHAT_MESSAGES_FIRST || 10)) {
+        async chatMessages(chatId, first = Number(process.env.CHAT_MESSAGES_FIRST || 40)) {
             const hash = process.env.CHAT_MESSAGES_HASH;
             const variables = {
                 pagination: { first },

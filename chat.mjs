@@ -6,12 +6,7 @@ import { buildGreetingText } from './messages.mjs';
  */
 export async function sendChatMessage(client, chatId, text) {
     const file = process.env.SEND_MESSAGE_MUTATION_FILE || './captures/send-message.graphql';
-    const op = process.env.SEND_MESSAGE_OPERATION;
-    if (!op) {
-        throw new Error(
-            'Задай SEND_MESSAGE_OPERATION в .env (x-gql-op при отправке сообщения в чате в DevTools)',
-        );
-    }
+    const op = process.env.SEND_MESSAGE_OPERATION || 'createChatMessage';
 
     let variables = {
         input: { chatId, imagesIds: [], text },

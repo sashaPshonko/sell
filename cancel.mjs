@@ -1,6 +1,6 @@
 /**
  * Отмена сделки на PlayerOK (mutation из DevTools при ручной отмене).
- * Пока нет cURL — задай CANCEL_DEAL_* в .env после captures/cancel-deal.graphql
+ * Дефолты в lib/defaults.mjs (captures/cancel-deal.graphql)
  */
 export async function cancelDealOnPlayerok(client, dealId) {
     if (process.env.AUTO_CANCEL_PLAYEROK !== '1') {

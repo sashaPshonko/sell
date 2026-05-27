@@ -23,6 +23,11 @@ import { dispatchOrder, dispatchNickUpdate, dispatchCancelOrder } from './dispat
 import { cancelDealOnPlayerok } from './cancel.mjs';
 import { DELIVERY_ANARCHY } from './messages.mjs';
 import { isStaleDeal, isActionableOrder } from './lib/deal-cutoff.mjs';
+import {
+    playerokNeedsDelivery,
+    playerokIsCancelled,
+    playerokIsClosed,
+} from './lib/playerok-deal-sync.mjs';
 
 /**
  * Синхронизирует ник покупателя на весь чат (все его заказы).
@@ -200,7 +205,7 @@ export async function applyNickCommandUpdates(
         console.log(`[sell] чат ${chatId.slice(0, 8)}…: ник → ${u.nick}`);
 
         for (const order of ordersInChat(state, chatId)) {
-            if (order.buyerId !== buyerId || order.phase === 'completed' || order.phase === 'cancelled') {
+            if (order.buyerId !== buyerId || !isActionableOrder(order)) {
                 continue;
             }
             order.nick = u.nick;
@@ -215,32 +220,27 @@ export async function applyNickCommandUpdates(
                 });
             }
         }
-
-        if (client) {
-            await notifyDispatchingForBuyer(client, state, chatId, buyerId, u.nick);
-        }
     }
     return known;
 }
 
-async function notifyDispatchingForBuyer(client, state, chatId, buyerId, nick) {
-    for (const order of ordersInChat(state, chatId)) {
-        if (order.buyerId !== buyerId) continue;
-        if (order.phase === 'completed' || order.phase === 'cancelled') continue;
-        if (order.dispatchAckSentAt) continue;
+/** Одно сообщение — только для этого заказа (не для всех открытых в чате). */
+async function notifyDispatchingForOrder(client, state, chatId, order, nick) {
+    if (!order || order.dispatchAckSentAt) return;
+    if (!isActionableOrder(order)) return;
+    if (order.playerokStatus && !playerokNeedsDelivery(order.playerokStatus)) return;
 
-        try {
-            await sendChatMessage(
-                client,
-                chatId,
-                buildDispatchingHint(nick, order.amountKk),
-            );
-            setOrderPhase(state, order.orderId, order.phase, {
-                dispatchAckSentAt: new Date().toISOString(),
-            });
-        } catch (e) {
-            console.warn(`[sell] «сейчас выдаю»: ${e.message}`);
-        }
+    try {
+        await sendChatMessage(
+            client,
+            chatId,
+            buildDispatchingHint(nick, order.amountKk),
+        );
+        setOrderPhase(state, order.orderId, order.phase, {
+            dispatchAckSentAt: new Date().toISOString(),
+        });
+    } catch (e) {
+        console.warn(`[sell] «сейчас выдаю»: ${e.message}`);
     }
 }
 
@@ -263,8 +263,8 @@ export async function flushChatDispatchQueue(state, deals, client = null) {
 
         order.nick = nick;
 
-        if (client && !order.dispatchAckSentAt) {
-            await notifyDispatchingForBuyer(client, state, chatId, paid.buyerId, nick);
+        if (client) {
+            await notifyDispatchingForOrder(client, state, chatId, order, nick);
         }
 
         try {
@@ -316,6 +316,8 @@ export function registerDealOrders(state, deals, cutoffIso = null) {
                 chatId: paid.chatId,
                 anarchy: DELIVERY_ANARCHY(),
                 phase: 'legacy',
+                playerokStatus: paid.status,
+                playerokStatusAt: paid.paidAt,
             });
             console.log(
                 `[sell] старый заказ (игнор): ${oid.slice(0, 8)}… | ${paid.buyer} | ${paid.amountKk}kk`,
@@ -323,12 +325,23 @@ export function registerDealOrders(state, deals, cutoffIso = null) {
             continue;
         }
 
+        let phase = 'new';
+        if (playerokIsCancelled(paid.status)) {
+            phase = 'cancelled';
+        } else if (playerokIsClosed(paid.status)) {
+            phase = 'completed';
+        } else if (!playerokNeedsDelivery(paid.status)) {
+            phase = 'completed';
+        }
+
         upsertOrder(state, {
             ...paid,
             orderId: oid,
             chatId: paid.chatId,
             anarchy: DELIVERY_ANARCHY(),
-            phase: 'new',
+            phase,
+            playerokStatus: paid.status,
+            playerokStatusAt: paid.paidAt,
         });
         console.log(
             `[sell] заказ ${oid.slice(0, 8)}…: ${paid.itemName} | ${paid.buyer} | ${paid.amountKk}kk`,

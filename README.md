@@ -2,7 +2,7 @@
 
 | Часть | Конфиг |
 |--------|--------|
-| PlayerOK | `.env` — `PLAYEROK_TOKEN`, `WS_URL=ws://127.0.0.1:8790` |
+| PlayerOK | `.env` — только `PLAYEROK_TOKEN`; остальное в `lib/defaults.mjs` |
 | Выдача FunTime | `sellbot/bot.json` — бот и все настройки sellbot (**без .env**) |
 
 ```bash

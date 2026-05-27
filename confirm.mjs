@@ -4,7 +4,7 @@
  */
 export async function confirmDealOnPlayerok(client, dealId) {
     const file = process.env.CONFIRM_DEAL_MUTATION_FILE || './captures/update-deal.graphql';
-    const status = process.env.CONFIRM_DEAL_STATUS || 'CONFIRMED';
+    const status = process.env.CONFIRM_DEAL_STATUS || 'SENT';
     let variables = { input: { id: dealId, status } };
 
     const varsRaw = process.env.CONFIRM_DEAL_VARIABLES;
