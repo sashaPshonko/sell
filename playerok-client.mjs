@@ -14,15 +14,22 @@ const DEFAULT_HEADERS = {
 };
 
 function buildCookie(token) {
-    if (process.env.PLAYEROK_COOKIES?.trim()) {
-        return process.env.PLAYEROK_COOKIES.trim();
-    }
-    const parts = [
+    const auid = process.env.PLAYEROK_AUID?.trim();
+    const ddg1 = process.env.PLAYEROK_DDG1?.trim();
+    const fromParts = [
         `token=${token}`,
-        process.env.PLAYEROK_AUID ? `auid=${process.env.PLAYEROK_AUID}` : '',
-        process.env.PLAYEROK_DDG1 ? `__ddg1_=${process.env.PLAYEROK_DDG1}` : '',
-    ].filter(Boolean);
-    return parts.join('; ');
+        auid ? `auid=${auid}` : '',
+        ddg1 ? `__ddg1_=${ddg1}` : '',
+    ]
+        .filter(Boolean)
+        .join('; ');
+
+    const raw = process.env.PLAYEROK_COOKIES?.trim();
+    if (!raw) return fromParts;
+    // Не даём PLAYEROK_COOKIES=token=… затереть auid из PLAYEROK_AUID
+    if (/(?:^|;\s*)auid=/i.test(raw)) return raw;
+    if (auid) return fromParts;
+    return raw;
 }
 
 export function createClient() {
@@ -72,13 +79,7 @@ export function createClient() {
         }
         if (!res.ok || json.errors?.length) {
             const err = json.errors?.[0]?.message || res.statusText;
-            const hint =
-                opts.persisted?.operationName === 'chatMessages' &&
-                /нет доступа/i.test(String(err)) &&
-                !process.env.PLAYEROK_COOKIES?.includes('auid=')
-                    ? ' (нужен captures/session.cookie — npm run capture-curl)'
-                    : '';
-            throw new Error(`PlayerOK GraphQL: ${err}${hint}`);
+            throw new Error(`PlayerOK GraphQL: ${err}`);
         }
         return json.data;
     }

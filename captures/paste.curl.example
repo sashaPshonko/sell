@@ -1,0 +1,10 @@
+# Вставь сюда Copy as cURL (с компа, где открыт playerok в Chrome).
+# 1) playerok.com → открой чат
+# 2) F12 → Network → фильтр: chatMessages
+# 3) ПКМ по запросу → Copy → Copy as cURL
+# 4) Удали эти строки с # и вставь cURL ниже (должно начинаться с curl 'https://playerok.com/...
+#
+# На VPS:
+#   cp captures/paste.curl.example captures/paste.curl
+#   nano captures/paste.curl
+#   npm run capture-curl

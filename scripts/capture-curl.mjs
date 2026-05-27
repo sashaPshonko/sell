@@ -28,16 +28,38 @@ const pastePath = pasteArg
     ? join(projectRoot, pasteArg.replace(/^\.\//, ''))
     : join(projectRoot, 'captures/paste.curl');
 
-if (!existsSync(pastePath) || (await readFile(pastePath, 'utf8')).trim().length < 20) {
+if (!existsSync(pastePath)) {
+    const example = join(projectRoot, 'captures/paste.curl.example');
+    if (existsSync(example)) {
+        const { copyFile } = await import('fs/promises');
+        await copyFile(example, pastePath);
+    } else {
+        await writeFile(
+            pastePath,
+            '# вставь Copy as cURL (chatMessages) с playerok.com\n',
+        );
+    }
     console.error(`
-Нет файла ${pasteArg || 'captures/paste.curl'}
+Создан файл: ${pasteArg || 'captures/paste.curl'}
 
-1) playerok.com → чаты → открой чат
-2) F12 → Network → клик по запросу chatMessages (или graphql при открытии чата)
-3) ПКМ → Copy → Copy as cURL
-4) Вставь в sell/captures/paste.curl
-5) Напиши «тест» в чат → ещё один graphql POST → Copy as cURL → допиши в тот же файл
-6) npm run capture-curl
+cURL снимаешь на СВОЁМ компе в Chrome (на VPS нет playerok):
+  1) playerok.com → чат → F12 → Network → chatMessages
+  2) Copy as cURL
+  3) На сервере: nano captures/paste.curl  → вставь cURL → сохрани
+  4) npm run capture-curl
+
+Или с Mac: scp captures/paste.curl root@сервер:~/sell/captures/
+`);
+    process.exit(1);
+}
+
+if ((await readFile(pastePath, 'utf8')).trim().length < 20) {
+    console.error(`
+Файл ${pasteArg || 'captures/paste.curl'} пустой (только комментарии).
+
+nano captures/paste.curl
+→ вставь Copy as cURL (chatMessages) с playerok.com
+→ npm run capture-curl
 `);
     process.exit(1);
 }
@@ -70,10 +92,8 @@ if (token && (!process.env.PLAYEROK_TOKEN || process.env.PLAYEROK_TOKEN === 'pas
 
 const cookieHdr = extractCookieHeaderFromCurl(curl);
 if (cookieHdr) {
-    const cookiePath = join(projectRoot, 'captures/session.cookie');
-    await writeFile(cookiePath, cookieHdr + '\n');
-    lines.push(`# cookies в captures/session.cookie (не в .env)`);
-    console.log('[capture-curl] cookies → captures/session.cookie');
+    lines.push(`PLAYEROK_COOKIES=${cookieHdr}`);
+    console.log('[capture-curl] cookies → .env (PLAYEROK_COOKIES)');
 }
 
 const blocks = splitCurlBlocks(curl);
@@ -174,16 +194,13 @@ for (const line of lines) {
     const i = line.indexOf('=');
     if (i > 0) envVars[line.slice(0, i)] = line.slice(i + 1);
 }
+if (cookieHdr) envVars.PLAYEROK_COOKIES = cookieHdr;
 if (Object.keys(envVars).length) {
     const p = await mergeEnvVars(envVars);
     console.log(`\n[capture-curl] записано в ${p}`);
 }
 if (lines.length) {
-    const snippet =
-        '# capture-curl\n' +
-        (cookieHdr ? `PLAYEROK_COOKIES=${cookieHdr}\n` : '') +
-        lines.join('\n') +
-        '\n';
+    const snippet = '# capture-curl\n' + lines.join('\n') + '\n';
     await writeFile(join(projectRoot, 'captures/env.generated'), snippet);
 }
 

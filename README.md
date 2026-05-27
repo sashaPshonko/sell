@@ -2,7 +2,7 @@
 
 | Часть | Конфиг |
 |--------|--------|
-| PlayerOK | `.env` — `PLAYEROK_TOKEN`; cookies → `captures/session.cookie` (`npm run capture-curl`) |
+| PlayerOK | `.env` — `PLAYEROK_TOKEN` + `PLAYEROK_AUID` (+ `PLAYEROK_DDG1` опционально) |
 | Выдача FunTime | `sellbot/bot.json` — бот и все настройки sellbot (**без .env**) |
 
 ```bash
