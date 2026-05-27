@@ -70,9 +70,10 @@ if (token && (!process.env.PLAYEROK_TOKEN || process.env.PLAYEROK_TOKEN === 'pas
 
 const cookieHdr = extractCookieHeaderFromCurl(curl);
 if (cookieHdr) {
-    lines.push(`# полная строка cookie из cURL (нужна для chatMessages)`);
-    lines.push(`PLAYEROK_COOKIES=${cookieHdr}`);
-    console.log('[capture-curl] cookies → .env (PLAYEROK_COOKIES)');
+    const cookiePath = join(projectRoot, 'captures/session.cookie');
+    await writeFile(cookiePath, cookieHdr + '\n');
+    lines.push(`# cookies в captures/session.cookie (не в .env)`);
+    console.log('[capture-curl] cookies → captures/session.cookie');
 }
 
 const blocks = splitCurlBlocks(curl);
@@ -173,13 +174,16 @@ for (const line of lines) {
     const i = line.indexOf('=');
     if (i > 0) envVars[line.slice(0, i)] = line.slice(i + 1);
 }
-if (cookieHdr) envVars.PLAYEROK_COOKIES = cookieHdr;
 if (Object.keys(envVars).length) {
     const p = await mergeEnvVars(envVars);
     console.log(`\n[capture-curl] записано в ${p}`);
 }
 if (lines.length) {
-    const snippet = '# capture-curl\n' + lines.join('\n') + '\n';
+    const snippet =
+        '# capture-curl\n' +
+        (cookieHdr ? `PLAYEROK_COOKIES=${cookieHdr}\n` : '') +
+        lines.join('\n') +
+        '\n';
     await writeFile(join(projectRoot, 'captures/env.generated'), snippet);
 }
 

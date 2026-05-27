@@ -72,7 +72,13 @@ export function createClient() {
         }
         if (!res.ok || json.errors?.length) {
             const err = json.errors?.[0]?.message || res.statusText;
-            throw new Error(`PlayerOK GraphQL: ${err}`);
+            const hint =
+                opts.persisted?.operationName === 'chatMessages' &&
+                /нет доступа/i.test(String(err)) &&
+                !process.env.PLAYEROK_COOKIES?.includes('auid=')
+                    ? ' (нужен captures/session.cookie — npm run capture-curl)'
+                    : '';
+            throw new Error(`PlayerOK GraphQL: ${err}${hint}`);
         }
         return json.data;
     }
