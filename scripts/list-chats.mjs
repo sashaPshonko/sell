@@ -6,7 +6,7 @@ loadEnv();
 
 const client = createClient();
 const v = await client.viewer();
-const userId = process.env.PLAYEROK_USER_ID || v.viewer.id;
+const userId = v.viewer.id;
 const data = await client.userChats(userId);
 const chats = flattenChats(data);
 

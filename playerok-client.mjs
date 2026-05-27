@@ -25,8 +25,7 @@ function buildCookie(token) {
         .join('; ');
 
     const raw = process.env.PLAYEROK_COOKIES?.trim();
-    if (!raw) return fromParts;
-    // Не даём PLAYEROK_COOKIES=token=… затереть auid из PLAYEROK_AUID
+    if (!raw || raw.length < 30) return fromParts;
     if (/(?:^|;\s*)auid=/i.test(raw)) return raw;
     if (auid) return fromParts;
     return raw;

@@ -310,10 +310,9 @@ async function tick() {
 
     const viewerData = await client.viewer();
     const sellerUserId = viewerData.viewer.id;
-    const userId = process.env.PLAYEROK_USER_ID || sellerUserId;
     console.log(`[sell] ${viewerData.viewer.username} | чаты…`);
 
-    const chatsData = await client.userChats(userId);
+    const chatsData = await client.userChats(sellerUserId);
     const chats = flattenChats(chatsData);
     if (!chats.length) {
         console.log('[sell] чатов нет');
