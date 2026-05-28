@@ -7,11 +7,7 @@ import { audit } from '../lib/audit.mjs';
 
 /** Успешная выдача /pay на FunTime */
 const PAY_SUCCESS_MARKERS = [
-    '[✔] Успешно',
-    'Успешно!',
-    'успешно отправлен',
-    'успешно перевед',
-    'перевод успешно',
+    '[✔] Успешно!',
 ];
 
 const config = {
@@ -35,17 +31,6 @@ const config = {
 const anarchyCmd = `/an${config.anarchy}`;
 const AFK_MARKER = 'Данная команда недоступна в режиме AFK';
 const CAPTCHA_MARKER = 'BotFilter >> Введите номер с картинки в чат';
-const BANNED_MARKER = 'вы забанены';
-
-const LOBBY_IGNORE_MARKERS = [
-    '⚡ Наша группа ВК vk.com/funtime',
-    '⚡ Наш Телеграм t.me/funtime',
-    '⚡ Наш Дискорд dd.FunTime.su',
-    '⚡ Наш Сайт FunTime.su',
-    '⚡ Наши сообщества и соц. сети /links',
-    '⚡ Вы играете на FunTime',
-    'Добро пожаловать на FunTime',
-];
 
 const botState = { afk: false, balance: null };
 const deliverQueue = [];
@@ -89,10 +74,6 @@ function matchesAny(text, markers) {
     return markers.some((m) => m && lower.includes(String(m).toLowerCase()));
 }
 
-function isLobbyNoise(text) {
-    return LOBBY_IGNORE_MARKERS.some((m) => text.includes(m));
-}
-
 function nickInMessage(text, nick) {
     return new RegExp(`\\b${escapeRegex(nick)}\\b`, 'i').test(text);
 }
@@ -129,28 +110,34 @@ function amountInMessage(text, order) {
     return amountHints(order).some((h) => lower.includes(h));
 }
 
+function isLikelyPlayerChat(text) {
+    const t = stripMcFormatting(text).trim();
+    // Типовые форматы пользовательского чата: "<nick> ...", "nick: ...", "nick » ..."
+    if (/^<[^>]{1,20}>/.test(t)) return true;
+    if (/^[a-zA-Z0-9_]{3,16}\s*[:»>]/.test(t)) return true;
+    return false;
+}
+
 /** Успех /pay — часто без ника в строке; галочка может быть ✔ или ✓ */
 function isPaySuccessLine(text) {
     const plain = stripMcFormatting(text);
     const lower = plain.toLowerCase();
-    const hasCheck = /[✔✓]/.test(plain) || /\[\s*[✔✓]\s*\]/.test(plain);
-    if (lower.includes('успешно') && hasCheck) return true;
-    if (PAY_SUCCESS_MARKERS.some((m) => lower.includes(m.toLowerCase()))) return true;
-    if (
-        lower.includes('успешно') &&
-        (lower.includes('перевод') ||
-            lower.includes('отправ') ||
-            lower.includes('передан') ||
-            lower.includes('/pay') ||
-            lower.includes('pay '))
-    ) {
-        return true;
-    }
-    return false;
+    if (isLikelyPlayerChat(plain)) return false;
+    return PAY_SUCCESS_MARKERS.some((m) => lower.includes(m.toLowerCase()));
 }
 
 function messageMatchesOrder(text, order, kind) {
-    if (isLobbyNoise(text)) return false;
+    if (
+        text.includes('⚡ Наша группа ВК vk.com/funtime') ||
+        text.includes('⚡ Наш Телеграм t.me/funtime') ||
+        text.includes('⚡ Наш Дискорд dd.FunTime.su') ||
+        text.includes('⚡ Наш Сайт FunTime.su') ||
+        text.includes('⚡ Наши сообщества и соц. сети /links') ||
+        text.includes('⚡ Вы играете на FunTime') ||
+        text.includes('Добро пожаловать на FunTime')
+    ) {
+        return false;
+    }
     const hasNick = nickInMessage(text, order.nick);
     const hasAmount = amountInMessage(text, order);
 
@@ -289,6 +276,35 @@ async function ensureBot() {
             chatLengthLimit: 256,
         });
 
+        let done = false;
+        const connectTimeout = setTimeout(() => {
+            if (done) return;
+            done = true;
+            connecting = false;
+            try {
+                b.quit();
+            } catch {
+                /* ignore */
+            }
+            reject(new Error('таймаут подключения до spawn'));
+        }, 45_000);
+
+        function fail(err) {
+            if (done) return;
+            done = true;
+            clearTimeout(connectTimeout);
+            connecting = false;
+            reject(err instanceof Error ? err : new Error(String(err)));
+        }
+
+        function ok() {
+            if (done) return;
+            done = true;
+            clearTimeout(connectTimeout);
+            connecting = false;
+            resolve(b);
+        }
+
         b.on('scoreboardCreated', (scoreboard) => {
             if (JSON.stringify(scoreboard).includes(`${config.anarchy}`)) {
                 log('scoreboard: на анархии');
@@ -309,11 +325,15 @@ async function ensureBot() {
 
         b.on('kicked', (reason) => {
             postEvent('kicked', { reason: JSON.stringify(reason) });
+            fail(new Error(`kicked: ${JSON.stringify(reason)}`));
             shutdownBot('kicked');
             process.exit(1);
         });
 
         b.on('end', () => {
+            if (!done) {
+                fail(new Error('соединение закрыто до spawn'));
+            }
             if (bot === b) {
                 bot = null;
                 ready = false;
@@ -327,10 +347,9 @@ async function ensureBot() {
                 b.chat(`/l ${config.password}`);
                 await sleep(2000);
                 b.chat(anarchyCmd);
-                await sleep(11000);
+                await sleep(11_000);
                 bot = b;
                 ready = true;
-                connecting = false;
                 postEvent('ready');
                 if (healthCheckActive) {
                     log('на анархии — бан/капча/баланс');
@@ -340,21 +359,19 @@ async function ensureBot() {
                     }
                     await sleep(config.healthCheckObserveMs);
                     if (healthCheckActive) finishHealthCheck('ok');
-                    resolve(b);
+                    ok();
                     return;
                 }
                 log('на анархии, готов к /pay');
                 processNextDeliver();
-                resolve(b);
+                ok();
             } catch (e) {
-                connecting = false;
-                reject(e);
+                fail(e);
             }
         });
 
         b.on('error', (err) => {
-            connecting = false;
-            reject(err);
+            fail(err);
         });
     });
 }
@@ -390,10 +407,20 @@ async function payDeliveryLoop() {
             return;
         }
 
+        if (!bot?.chat) {
+            finishDelivery('disconnected');
+            return;
+        }
+
         if (botState.afk) {
             log(`AFK (круг ${attempt})`);
         }
         await antiAfkIfNeeded(bot, botState, log);
+
+        if (!bot?.chat) {
+            finishDelivery('disconnected');
+            return;
+        }
 
         if (botState.afk) {
             await sleep(loopWait);
@@ -403,7 +430,13 @@ async function payDeliveryLoop() {
         resetPayOutcome();
         const cmd = buildPayCommand(currentOrder);
         log(`/pay #${attempt}: ${cmd}`);
-        bot.chat(cmd);
+        try {
+            bot.chat(cmd);
+        } catch (e) {
+            log(`chat fail: ${e.message}`);
+            finishDelivery('disconnected');
+            return;
+        }
 
         await sleep(loopWait);
 
@@ -456,12 +489,12 @@ function trySetPayOutcomeFromChat(text) {
 async function onServerChat(rawText) {
     const text = stripMcFormatting(rawText);
 
-    if (text.includes(BANNED_MARKER)) {
+    if (text.includes('вы забанены')) {
         if (healthCheckActive) {
             finishHealthCheck('banned');
             return;
         }
-        parentPort.postMessage({ name: 'banned' });
+        parentPort.postMessage(`${config.username} - забанен`);
         finishDelivery('banned');
         shutdownBot('banned');
         return;
@@ -541,7 +574,12 @@ async function startDeliver(order) {
     resetPayOutcome();
     log(`выдача ${order.orderId.slice(0, 8)}…: ${order.nick} ${order.amount}kk`);
 
-    await payDeliveryLoop();
+    try {
+        await payDeliveryLoop();
+    } catch (e) {
+        log(`delivery loop crash: ${e.message}`);
+        finishDelivery('delivery_loop_crash');
+    }
 }
 
 function isValidNick(nick) {
