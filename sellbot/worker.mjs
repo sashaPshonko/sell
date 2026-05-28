@@ -338,6 +338,7 @@ async function ensureBot() {
                 bot = null;
                 ready = false;
             }
+            process.exit(1);
         });
 
         b.once('spawn', async () => {
