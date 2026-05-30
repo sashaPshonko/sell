@@ -3,7 +3,13 @@ import { existsSync } from 'fs';
 
 const PATH = process.env.STATE_FILE || './state.json';
 
-const EMPTY = { orders: {}, confirmedDeals: {}, chats: {} };
+const EMPTY = {
+    orders: {},
+    confirmedDeals: {},
+    chats: {},
+    buyerBonus: {},
+    scheduledChatMessages: [],
+};
 
 export async function loadState() {
     if (!existsSync(PATH)) return structuredClone(EMPTY);
@@ -12,6 +18,8 @@ export async function loadState() {
     if (!state.orders) state.orders = {};
     if (!state.confirmedDeals) state.confirmedDeals = {};
     if (!state.chats) state.chats = {};
+    if (!state.buyerBonus) state.buyerBonus = {};
+    if (!state.scheduledChatMessages) state.scheduledChatMessages = [];
     return state;
 }
 

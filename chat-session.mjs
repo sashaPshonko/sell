@@ -20,6 +20,7 @@ import {
 } from './messages.mjs';
 import { sendGreeting, sendChatMessage } from './chat.mjs';
 import { dispatchOrder, dispatchNickUpdate, dispatchCancelOrder } from './dispatch.mjs';
+import { applyOrderPayBonus } from './lib/pay-bonus.mjs';
 import { cancelDealOnPlayerok } from './cancel.mjs';
 import { DELIVERY_ANARCHY } from './messages.mjs';
 import { isStaleDeal, isActionableOrder } from './lib/deal-cutoff.mjs';
@@ -43,8 +44,9 @@ export function syncChatNick(state, chatId, messages, buyerId, greetingAtIso) {
     const session = getBuyerSession(state, chatId, buyerId);
     const after = nickMessagesAfter(session, greetingAtIso);
 
-    const latest = findLatestBuyerNick(messages, buyerId, after);
-    const first = parseBuyerNick(messages, buyerId, after);
+    const nickParseOpts = { allowNikPhrase: !session.nick };
+    const latest = findLatestBuyerNick(messages, buyerId, after, nickParseOpts);
+    const first = parseBuyerNick(messages, buyerId, after, nickParseOpts);
     const pick = latest?.via === 'command' ? latest : first || latest;
 
     if (pick?.nick) {
@@ -234,7 +236,7 @@ async function notifyDispatchingForOrder(client, state, chatId, order, nick) {
         await sendChatMessage(
             client,
             chatId,
-            buildDispatchingHint(nick, order.amountKk),
+            buildDispatchingHint(nick, order.amountKk, order.payAmountKk),
         );
         setOrderPhase(state, order.orderId, order.phase, {
             dispatchAckSentAt: new Date().toISOString(),
@@ -262,30 +264,34 @@ export async function flushChatDispatchQueue(state, deals, client = null) {
         if (!nick) continue;
 
         order.nick = nick;
+        applyOrderPayBonus(state, order);
 
         if (client) {
             await notifyDispatchingForOrder(client, state, chatId, order, nick);
         }
 
         try {
+            const fresh = getOrder(state, oid) || order;
             const { sent } = await dispatchOrder({
-                ...order,
+                ...fresh,
                 ...paid,
                 orderId: oid,
                 nick,
                 paidAtMs: Date.parse(paid.paidAt),
             });
             if (sent > 0) {
+                const payKk = fresh.payAmountKk ?? paid.amountKk;
                 console.log(
-                    `[sell] ${oid}: → sellbot ${nick} ${paid.amountKk}kk`,
+                    `[sell] ${oid}: → sellbot ${nick} ${payKk}kk (лот ${paid.amountKk}kk)`,
                 );
                 setOrderPhase(state, oid, 'dispatched', {
                     nick,
                     dispatchedAt: new Date().toISOString(),
                 });
             } else {
+                const payKk = fresh.payAmountKk ?? paid.amountKk;
                 console.warn(
-                    `[sell] ${oid}: sellbot офлайн — ${nick} ${paid.amountKk}kk (ждём ws)`,
+                    `[sell] ${oid}: sellbot офлайн — ${nick} ${payKk}kk (ждём ws)`,
                 );
                 setOrderPhase(state, oid, 'ws_pending', {
                     nick,
@@ -360,22 +366,26 @@ export async function retryWsPendingOrders(state) {
     for (const order of Object.values(state.orders)) {
         if (order.phase !== 'ws_pending' || !order.nick) continue;
         const oid = order.orderId || order.dealId;
+        applyOrderPayBonus(state, order);
         try {
+            const fresh = getOrder(state, oid) || order;
             const { sent } = await dispatchOrder({
+                ...fresh,
                 orderId: oid,
                 dealId: oid,
                 chatId: order.chatId,
                 buyer: order.buyer,
                 buyerId: order.buyerId,
                 nick: order.nick,
-                amountKk: order.amountKk,
+                amountKk: fresh.amountKk ?? order.amountKk,
                 paidAt: order.paidAt,
                 paidAtMs: order.paidAt ? Date.parse(order.paidAt) : undefined,
                 itemName: order.itemName,
                 server: order.server,
             });
             if (sent > 0) {
-                console.log(`[sell] ${oid}: → sellbot (повтор ws) ${order.nick}`);
+                const payKk = fresh.payAmountKk ?? order.amountKk;
+                console.log(`[sell] ${oid}: → sellbot (повтор ws) ${order.nick} ${payKk}kk`);
                 setOrderPhase(state, oid, 'dispatched', {
                     nick: order.nick,
                     dispatchedAt: new Date().toISOString(),

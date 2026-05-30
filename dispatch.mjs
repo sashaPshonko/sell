@@ -38,7 +38,7 @@ export async function dispatchOrder(order) {
         buyer: order.buyer,
         buyerId: order.buyerId,
         nick: order.nick,
-        amount: order.amountKk,
+        amount: order.payAmountKk ?? order.amountKk,
         paidAtMs: order.paidAtMs ?? (order.paidAt ? Date.parse(order.paidAt) : undefined),
         anarchy: DELIVERY_ANARCHY(),
         itemName: order.itemName,

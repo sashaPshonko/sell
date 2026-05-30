@@ -10,6 +10,11 @@ import {
     looksLikeInvalidNickAttempt,
 } from './parse.mjs';
 import { loadState, saveState, getOrder, setOrderPhase } from './state.mjs';
+import { recordBuyerDelivery } from './lib/pay-bonus.mjs';
+import {
+    scheduleRepeatPromoMessage,
+    flushScheduledChatMessages,
+} from './lib/scheduled-chat.mjs';
 import { drainBotEvents } from './dispatch.mjs';
 import { sendChatMessage } from './chat.mjs';
 import {
@@ -51,8 +56,11 @@ loadEnv();
 const once = process.argv.includes('--once');
 const pollMs = Number(process.env.POLL_MS || 15000);
 
-async function markPlayerokDone(client, state, dealId) {
-    if (process.env.AUTO_MARK_PLAYEROK === '0') return;
+async function markPlayerokDone(client, state, dealId, chatId) {
+    if (process.env.AUTO_MARK_PLAYEROK === '0') {
+        scheduleRepeatPromoMessage(state, chatId, dealId);
+        return;
+    }
     try {
         await confirmDealOnPlayerok(client, dealId);
         setOrderPhase(state, dealId, 'completed', {
@@ -61,8 +69,10 @@ async function markPlayerokDone(client, state, dealId) {
             playerokStatusAt: new Date().toISOString(),
         });
         console.log(`[sell] PlayerOK SENT: ${dealId}`);
+        scheduleRepeatPromoMessage(state, chatId, dealId);
     } catch (e) {
         console.warn(`[sell] PlayerOK: ${e.message}`);
+        scheduleRepeatPromoMessage(state, chatId, dealId);
     }
 }
 
@@ -78,27 +88,41 @@ async function handleBotEvents(client, state) {
 
         try {
             if (ev.type === 'delivery_ok') {
-                setOrderPhase(state, ev.orderId, order.phase, {
+                const payKk = order.payAmountKk ?? order.amountKk;
+                setOrderPhase(state, ev.orderId, 'completed', {
                     gameDeliveryAt: new Date().toISOString(),
                 });
+                recordBuyerDelivery(state, order.buyerId);
                 void audit('delivery_ok', {
                     orderId: ev.orderId,
                     nick: order.nick,
                     amountKk: order.amountKk,
+                    payAmountKk: payKk,
+                    bonusTotalPct: order.bonusTotalPct,
                 });
                 await sendChatMessage(
                     client,
                     chatId,
-                    buildDeliveryOkHint(order.amountKk),
+                    buildDeliveryOkHint(order.amountKk, {
+                        lotKk: order.amountKk,
+                        payAmountKk: payKk,
+                        wheelPct: order.bonusWheelPct,
+                        repeatPct: order.bonusRepeatPct,
+                        bonusWheelKk: order.bonusWheelKk,
+                        bonusRepeatKk: order.bonusRepeatKk,
+                        totalPct: order.bonusTotalPct,
+                    }),
                 );
-                setOrderPhase(state, ev.orderId, order.phase, {
+                setOrderPhase(state, ev.orderId, 'completed', {
                     buyerNotifiedAt: new Date().toISOString(),
                 });
-                await markPlayerokDone(client, state, ev.orderId);
+                await markPlayerokDone(client, state, ev.orderId, chatId);
                 if (republishWhen() === 'sent') {
                     scheduleRepublishItem(client, state, order);
                 }
-                console.log(`[sell] выдано: ${ev.orderId} (${order.amountKk}kk)`);
+                console.log(
+                    `[sell] выдано: ${ev.orderId} (${payKk}kk, лот ${order.amountKk}kk)`,
+                );
             } else if (ev.type === 'delivery_stalled') {
                 const nick =
                     getBuyerSession(state, chatId, buyerId).nick || order.nick;
@@ -192,15 +216,16 @@ function warnInvalidNickOnce(client, state, chatId, messages, deals, greetingAt)
         if (!order || order.phase === 'completed' || order.phase === 'dispatched' || order.phase === 'cancelled') {
             continue;
         }
-        if (getBuyerSession(state, chatId, paid.buyerId).nick) continue;
-
         const buyerSession = getBuyerSession(state, chatId, paid.buyerId);
+        if (buyerSession.nick) continue;
         if (buyerSession.wrongNickWarned) continue;
+
+        const invalidNickOpts = { allowNikPhrase: true };
 
         for (const msg of messages) {
             if (msg.user?.id !== paid.buyerId || !msg.text) continue;
             if (greetingAt && Date.parse(msg.createdAt) < Date.parse(greetingAt)) continue;
-            if (!looksLikeInvalidNickAttempt(msg.text)) continue;
+            if (!looksLikeInvalidNickAttempt(msg.text, invalidNickOpts)) continue;
 
             buyerSession.wrongNickWarned = true;
             void sendChatMessage(client, chatId, buildWrongNickHint()).catch((e) => {
@@ -306,6 +331,7 @@ async function tick() {
     migrateStaleOrders(state, cutoffIso);
 
     await handleBotEvents(client, state);
+    await flushScheduledChatMessages(client, state);
     await retryWsPendingOrders(state);
 
     const viewerData = await client.viewer();
@@ -326,6 +352,7 @@ async function tick() {
     }
 
     await handleBotEvents(client, state);
+    await flushScheduledChatMessages(client, state);
     await saveState(state);
 }
 

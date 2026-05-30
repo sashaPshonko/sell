@@ -58,13 +58,50 @@ function buildCurrencyDeal(msg) {
 
 const MC_NICK = /^[a-zA-Z0-9_]{3,16}$/;
 
+function textTokens(text) {
+    return String(text)
+        .trim()
+        .split(/[\s:;,，、—–\-]+/)
+        .map((w) => w.replace(/^[`'\"«»\[\]()]+|[`'\"«»\[\]()]+$/g, ''))
+        .filter(Boolean);
+}
+
+function textHasNikWord(text) {
+    return textTokens(text).some((w) => /^ник$/iu.test(w));
+}
+
 /** Отмена заказа покупателем */
 export function isCancelCommand(text) {
     return /^\/cancel\s*$/i.test(String(text || '').trim());
 }
 
-/** Ник из «Steve» или «/nick Steve» */
-export function parseNickFromText(text) {
+/** «ник Steve», «ник: steve123» — только латиница 3–16 */
+export function parseNickFromNikPhrase(text) {
+    if (!text) return null;
+    const t = text.trim();
+    if (!t || t.startsWith('{{')) return null;
+
+    if (!textHasNikWord(t)) return null;
+
+    const tokens = textTokens(t);
+    let afterNik = false;
+    for (const word of tokens) {
+        if (/^ник$/iu.test(word)) {
+            afterNik = true;
+            continue;
+        }
+        if (afterNik && MC_NICK.test(word)) {
+            return { nick: word, via: 'nik_phrase' };
+        }
+    }
+    return null;
+}
+
+/**
+ * Ник из «Steve», «/nick Steve» или (опционально) «ник Steve».
+ * @param {{ allowNikPhrase?: boolean }} [opts]
+ */
+export function parseNickFromText(text, opts = {}) {
     if (!text) return null;
     const t = text.trim();
     if (!t || t.startsWith('{{')) return null;
@@ -73,15 +110,21 @@ export function parseNickFromText(text) {
     if (cmd) return { nick: cmd[1], via: 'command' };
 
     if (MC_NICK.test(t)) return { nick: t, via: 'plain' };
+
+    if (opts.allowNikPhrase) {
+        const fromPhrase = parseNickFromNikPhrase(t);
+        if (fromPhrase) return fromPhrase;
+    }
     return null;
 }
 
 /** Покупатель пытался написать ник, но формат неверный */
-export function looksLikeInvalidNickAttempt(text) {
+export function looksLikeInvalidNickAttempt(text, opts = {}) {
     const t = text?.trim();
     if (!t || t.startsWith('{{')) return false;
-    if (parseNickFromText(t)) return false;
+    if (parseNickFromText(t, opts)) return false;
     if (/^\/nick\b/i.test(t)) return true;
+    if (textHasNikWord(t)) return true;
     if (t.length >= 2 && t.length <= 32) return true;
     return false;
 }
@@ -97,14 +140,14 @@ export function findGreetingAnchorInChat(messages, sellerUserId) {
 }
 
 /** Последний валидный ник покупателя после afterIso (/nick важнее при выборе с first) */
-export function findLatestBuyerNick(messages, buyerUserId, afterIso) {
+export function findLatestBuyerNick(messages, buyerUserId, afterIso, opts = {}) {
     const after = afterIso ? Date.parse(afterIso) : 0;
     let latest = null;
     for (const msg of messages) {
         if (!msg?.text || msg.deal) continue;
         if (msg.user?.id !== buyerUserId) continue;
         if (after && Date.parse(msg.createdAt) < after) continue;
-        const parsed = parseNickFromText(msg.text);
+        const parsed = parseNickFromText(msg.text, opts);
         if (parsed) {
             latest = { ...parsed, messageId: msg.id, at: msg.createdAt, raw: msg.text.trim() };
         }
@@ -113,14 +156,14 @@ export function findLatestBuyerNick(messages, buyerUserId, afterIso) {
 }
 
 /** Первый валидный ник покупателя после приветствия */
-export function parseBuyerNick(messages, buyerUserId, afterIso) {
+export function parseBuyerNick(messages, buyerUserId, afterIso, opts = {}) {
     const after = afterIso ? Date.parse(afterIso) : 0;
     for (const msg of messages) {
         if (!msg?.text || msg.deal) continue;
         if (msg.user?.id !== buyerUserId) continue;
         if (after && Date.parse(msg.createdAt) < after) continue;
 
-        const parsed = parseNickFromText(msg.text);
+        const parsed = parseNickFromText(msg.text, opts);
         if (parsed) {
             return { ...parsed, messageId: msg.id, at: msg.createdAt, raw: msg.text.trim() };
         }
@@ -129,7 +172,13 @@ export function parseBuyerNick(messages, buyerUserId, afterIso) {
 }
 
 /** Любой новый ник (/nick или строка) после момента afterIso */
-export function findBuyerNickAttemptsAfter(messages, buyerUserId, afterIso, knownMessageIds = new Set()) {
+export function findBuyerNickAttemptsAfter(
+    messages,
+    buyerUserId,
+    afterIso,
+    knownMessageIds = new Set(),
+    opts = {},
+) {
     const after = afterIso ? Date.parse(afterIso) : 0;
     const out = [];
     for (const msg of messages) {
@@ -137,7 +186,7 @@ export function findBuyerNickAttemptsAfter(messages, buyerUserId, afterIso, know
         if (msg.user?.id !== buyerUserId) continue;
         if (after && Date.parse(msg.createdAt) < after) continue;
         if (knownMessageIds.has(msg.id)) continue;
-        const parsed = parseNickFromText(msg.text);
+        const parsed = parseNickFromText(msg.text, opts);
         if (parsed) out.push({ ...parsed, messageId: msg.id, at: msg.createdAt });
     }
     return out;

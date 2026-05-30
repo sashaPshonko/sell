@@ -11,7 +11,7 @@ export function buildGreetingText() {
         `ЗАХОДИ НА АНАРХИЮ ${anka}`,
         'ПОСЛЕ ЭТОГО НАПИШИ НИК ОДНИМ СЛОВОМ',
         'твой-ник',
-        'или /nick твой-ник',
+        'или /nick твой-ник [В ЭТОМ ЧАТЕ]',
         '',
         '✅ выдача автоматическая - бот выдаст сам',
         '❗ Валюта только на Minecraft 1.21 (FunTime).',
@@ -73,13 +73,78 @@ export function buildQueueStallHint() {
     ].join('\n');
 }
 
-export function buildDeliveryOkHint(amountKk) {
-    const sum = amountKk != null && amountKk > 0 ? `${amountKk}kk ` : '';
-    return [
-        `✅ ${sum}валюта выдана! Приятной игры! 🎮`,
+function fmtKk(n) {
+    const v = Number(n);
+    if (!Number.isFinite(v) || v <= 0) return '0kk';
+    return `${v}kk`;
+}
+
+function fmtBonusKk(kk, pct) {
+    const k = Number(kk) || 0;
+    const p = Number(pct) || 0;
+    if (k <= 0) return '—';
+    return p > 0 ? `+${k}kk (+${p}%)` : `+${k}kk`;
+}
+
+/**
+ * @param {object} [bonus]
+ * @param {number} [bonus.lotKk]
+ * @param {number} [bonus.payAmountKk]
+ * @param {number} [bonus.wheelPct]
+ * @param {number} [bonus.repeatPct]
+ * @param {number} [bonus.bonusWheelKk]
+ * @param {number} [bonus.bonusRepeatKk]
+ */
+export function buildDeliveryOkHint(amountKk, bonus = null) {
+    const lot = Number(bonus?.lotKk ?? amountKk) || 0;
+    const paid = Number(bonus?.payAmountKk ?? amountKk) || 0;
+    const wheelKk =
+        bonus?.bonusWheelKk ??
+        (bonus?.wheelPct > 0 ? Math.round((lot * bonus.wheelPct) / 100) : 0);
+    const repeatKk =
+        bonus?.bonusRepeatKk ??
+        (bonus?.repeatPct > 0 ? Math.round((lot * bonus.repeatPct) / 100) : 0);
+    const wheelPct = bonus?.wheelPct ?? 0;
+    const repeatPct = bonus?.repeatPct ?? 0;
+
+    const lines = ['✅ Валюта выдана!', ''];
+
+    if (lot > 0 && paid > 0) {
+        lines.push(`💰 Итого выдано: ${fmtKk(paid)}`, '');
+        lines.push(`📦 По заказу (лот): ${fmtKk(lot)}`);
+
+        if (wheelKk > 0 || wheelPct > 0) {
+            lines.push(`🎲 Случайный бонус: ${fmtBonusKk(wheelKk, wheelPct)}`);
+        }
+
+        if (repeatKk > 0 || repeatPct > 0) {
+            lines.push(
+                `🔁 Бонус за повторную покупку (24ч): ${fmtBonusKk(repeatKk, repeatPct)}`,
+            );
+        }
+
+        lines.push('', '🎮 Приятной игры!');
+    } else {
+        lines.push('🎮 Приятной игры!');
+    }
+
+    lines.push(
         '',
         '⭐ Пожалуйста, подтверди заказ на PlayerOK.',
         '⭐ Оставь отзыв — это очень помогает!',
+    );
+    return lines.join('\n');
+}
+
+/** Через 10с после подтверждения сделки на PlayerOK */
+export function buildRepeatPurchaseHint() {
+    return [
+        '🎁 Хочешь ещё валюту?',
+        '',
+        'Если купишь снова в течение 24 часов — к случайному бонусу добавим отдельную строку:',
+        '🔁 «Бонус за повторную покупку» — ещё +5% к сумме лота.',
+        '',
+        '⚡ Выдача автоматическая — после оплаты напиши ник.',
     ].join('\n');
 }
 
@@ -92,9 +157,10 @@ export function buildOrderAlreadyDoneHint() {
 }
 
 /** Сразу после ника — перед выдачей на сервере */
-export function buildDispatchingHint(nick, amountKk) {
+export function buildDispatchingHint(nick, amountKk, payAmountKk = null) {
     const anka = DELIVERY_ANARCHY();
-    const sum = amountKk != null && amountKk > 0 ? `${amountKk}kk ` : '';
+    const pay = payAmountKk != null && payAmountKk > 0 ? payAmountKk : amountKk;
+    const sum = pay != null && pay > 0 ? `${pay}kk ` : '';
     return [
         `⏳ Сейчас выдаю ${sum}на ник «${nick}».`,
         '',
