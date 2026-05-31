@@ -149,6 +149,39 @@ export function createClient() {
             });
         },
 
+        /** Лоты продавца (профиль → products). Hash из DevTools: operationName=items */
+        async sellerItems(userId, { first = 16, after = null, username = null } = {}) {
+            const hash =
+                process.env.ITEMS_HASH ||
+                'bacca5d020eef37b4ff7a2253ad33ecd8b7e144b9ef854c20051f42ebcd04d82';
+            const pagination = after ? { first, after } : { first };
+            const profileUser =
+                username?.trim() ||
+                process.env.PLAYEROK_USERNAME?.trim() ||
+                null;
+            const referer = profileUser
+                ? `https://playerok.com/profile/${profileUser}/products`
+                : 'https://playerok.com/profile/products';
+            return request({
+                gqlOp: 'items',
+                gqlPath: '/profile/[username]/products',
+                referer,
+                persisted: {
+                    operationName: 'items',
+                    hash,
+                    variables: {
+                        pagination,
+                        filter: {
+                            userId,
+                            status: ['APPROVED', 'PENDING_MODERATION', 'PENDING_APPROVAL'],
+                            withOfficial: false,
+                        },
+                        showForbiddenImage: true,
+                    },
+                },
+            });
+        },
+
         async runMutationFromFile(
             fileEnvKey,
             defaultPath,

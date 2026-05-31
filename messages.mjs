@@ -148,6 +148,38 @@ export function buildRepeatPurchaseHint() {
     ].join('\n');
 }
 
+/**
+ * @param {{ emoji: string, upsellKk: number, baseKk?: number, priceRub?: number, url: string }} opts
+ */
+export function buildProfileUpsellHint(opts) {
+    const marker = opts.emoji || '🎁';
+    const upsellKk = Math.round(Number(opts.upsellKk) || 0);
+    const baseKk = opts.baseKk != null ? Math.round(Number(opts.baseKk)) : null;
+    const priceRub = opts.priceRub != null ? Math.round(Number(opts.priceRub)) : null;
+    const url = String(opts.url || '').trim();
+
+    const priceLine =
+        priceRub != null && priceRub > 0
+            ? `за те же ${priceRub} ₽`
+            : 'за ту же цену';
+
+    const compareLine =
+        baseKk != null && baseKk > 0 && upsellKk > baseKk
+            ? `больше, чем ${baseKk}kk в этом заказе`
+            : 'больше валюты за те же деньги';
+
+    const titleExample = `${upsellKk}KK ${marker} МОМЕНТАЛЬНО ${marker} БОНУС`;
+
+    return [
+        '💡 На профиле выгоднее',
+        '',
+        `Следующий раз: «${titleExample}» ${priceLine} — ${compareLine}.`,
+        '',
+        `👇 Пролистай профиль вниз — в названии ${marker} вместо · (больше kk за те же ₽, без премки).`,
+        url,
+    ].join('\n');
+}
+
 export function buildOrderAlreadyDoneHint() {
     return [
         '✅ Заказ уже выполнен — валюта выдана.',

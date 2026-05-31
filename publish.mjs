@@ -5,8 +5,11 @@ import { setOrderPhase, getOrder, saveState } from './state.mjs';
 
 const pending = new Map();
 
+/** Временно выкл — ждём отдельный запрос для бесплатного перевыставления 🎁-лотов */
+const REPUBLISH_ENABLED = false;
+
 function publishEnabled() {
-    return process.env.AUTO_PUBLISH_ITEM !== '0';
+    return REPUBLISH_ENABLED && process.env.AUTO_PUBLISH_ITEM !== '0';
 }
 
 function publishDelayMs() {

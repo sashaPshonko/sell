@@ -394,6 +394,8 @@ async function tick() {
 
     const viewerData = await client.viewer();
     const sellerUserId = viewerData.viewer.id;
+    state.sellerUserId = sellerUserId;
+    state.sellerUsername = viewerData.viewer.username;
     console.log(`[sell] ${viewerData.viewer.username} | чаты…`);
 
     const chatsData = await client.userChats(sellerUserId);

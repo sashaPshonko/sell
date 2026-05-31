@@ -50,6 +50,7 @@ function buildCurrencyDeal(msg) {
         buyerId: msg.deal.user?.id,
         itemId: item?.id,
         itemName: name,
+        itemPriceRub: item?.price != null ? Math.round(Number(item.price)) : null,
         amountKk,
         server: parseServer(name),
         paidAt: msg.createdAt,
