@@ -307,13 +307,10 @@ export async function flushChatDispatchQueue(state, deals, client = null) {
         const order = getOrder(state, oid);
         if (!order) continue;
         if (!canDispatchToSellbot(order)) {
-            console.log(
-                `[sell] ${oid.slice(0, 8)}…: выдача пропущена (phase=${order.phase}, playerok=${order.playerokStatus || '?'}, game=${order.gameDeliveryAt ? 'ok' : 'нет'})`,
-            );
             continue;
         }
         if (order.phase === 'dispatched') {
-            console.log(`[sell] ${oid.slice(0, 8)}…: dispatched без выдачи — повтор в очередь`);
+            continue;
         }
 
         const chatId = paid.chatId || order.chatId;

@@ -114,10 +114,15 @@ export function createClient() {
             });
         },
 
-        async chatMessages(chatId, first = Number(process.env.CHAT_MESSAGES_FIRST || 40)) {
+        async chatMessages(
+            chatId,
+            first = Number(process.env.CHAT_MESSAGES_FIRST || 40),
+            after = null,
+        ) {
             const hash = process.env.CHAT_MESSAGES_HASH;
+            const pagination = after ? { first, after } : { first };
             const variables = {
-                pagination: { first },
+                pagination,
                 filter: { chatId },
                 hasSupportAccess: process.env.CHAT_HAS_SUPPORT_ACCESS === '1',
                 showForbiddenImage: process.env.CHAT_SHOW_FORBIDDEN_IMAGE !== '0',

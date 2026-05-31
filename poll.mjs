@@ -52,6 +52,11 @@ import {
     syncChatOrdersFromPlayerok,
     buyerHasFulfillmentOpen,
 } from './lib/playerok-deal-sync.mjs';
+import {
+    chatHasStuckOrders,
+    fetchChatMessagesDeep,
+    reconcileOrdersFromChatHistory,
+} from './lib/chat-reconcile.mjs';
 import { ensureChat, getBuyerSession } from './state.mjs';
 import { assertPlayerokAuth } from './lib/check-auth.mjs';
 
@@ -280,7 +285,18 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
         return;
     }
 
-    const messages = flattenMessages(msgData);
+    let messages = flattenMessages(msgData);
+    if (chatHasStuckOrders(state, chatId)) {
+        try {
+            messages = await fetchChatMessagesDeep(client, chatId);
+            console.log(
+                `[sell] чат ${chatId.slice(0, 8)}…: глубокая история, ${messages.length} сообщ.`,
+            );
+        } catch (e) {
+            console.warn(`[sell] глубокая история чата: ${e.message}`);
+        }
+    }
+    reconcileOrdersFromChatHistory(state, chatId, messages, sellerUserId);
     const dealTimeline = buildDealStatusTimeline(messages);
     syncChatOrdersFromPlayerok(state, chatId, dealTimeline);
 
