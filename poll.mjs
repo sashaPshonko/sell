@@ -31,6 +31,8 @@ import { scheduleRepublishItem, republishWhen } from './publish.mjs';
 import {
     registerDealOrders,
     filterActionableDeals,
+    mergeChatDeals,
+    chatHasOpenOrders,
     ensureChatGreeting,
     syncChatNick,
     applyNickCommandUpdates,
@@ -47,6 +49,7 @@ import {
     buildDealStatusTimeline,
     syncChatOrdersFromPlayerok,
     buyerHasFulfillmentOpen,
+    playerokIsClosed,
 } from './lib/playerok-deal-sync.mjs';
 import { ensureChat, getBuyerSession } from './state.mjs';
 import { assertPlayerokAuth } from './lib/check-auth.mjs';
@@ -74,6 +77,15 @@ async function markPlayerokDone(client, state, dealId, chatId) {
         console.warn(`[sell] PlayerOK: ${e.message}`);
         scheduleRepeatPromoMessage(state, chatId, dealId);
     }
+}
+
+/** Не слать «повтори /nick», если выдача уже была или сделка закрыта на PlayerOK */
+function shouldProcessBotRetryEvent(order) {
+    if (!order) return false;
+    if (order.phase === 'completed' || order.phase === 'cancelled') return false;
+    if (order.gameDeliveryAt) return false;
+    if (order.playerokStatus && playerokIsClosed(order.playerokStatus)) return false;
+    return true;
 }
 
 async function handleBotEvents(client, state) {
@@ -124,6 +136,12 @@ async function handleBotEvents(client, state) {
                     `[sell] выдано: ${ev.orderId} (${payKk}kk, лот ${order.amountKk}kk)`,
                 );
             } else if (ev.type === 'delivery_stalled') {
+                if (!shouldProcessBotRetryEvent(order)) {
+                    console.log(
+                        `[sell] stall ${ev.orderId.slice(0, 8)}… игнор (заказ уже закрыт)`,
+                    );
+                    continue;
+                }
                 const nick =
                     getBuyerSession(state, chatId, buyerId).nick || order.nick;
                 setOrderPhase(state, ev.orderId, 'awaiting_nick', {
@@ -133,6 +151,12 @@ async function handleBotEvents(client, state) {
                 await sendChatMessage(client, chatId, buildQueueStallHint());
                 console.warn(`[sell] stall ${ev.orderId} (очередь ${ev.queued ?? '?'})`);
             } else if (ev.type === 'delivery_failed') {
+                if (!shouldProcessBotRetryEvent(order)) {
+                    console.log(
+                        `[sell] fail ${ev.orderId.slice(0, 8)}… игнор (заказ уже закрыт): ${ev.reason || '?'}`,
+                    );
+                    continue;
+                }
                 const nick =
                     getBuyerSession(state, chatId, buyerId).nick || order.nick;
                 setOrderPhase(state, ev.orderId, 'awaiting_nick', {
@@ -150,6 +174,12 @@ async function handleBotEvents(client, state) {
                 });
                 await sendChatMessage(client, chatId, buildWrongNickHint());
             } else if (ev.type === 'player_offline') {
+                if (!shouldProcessBotRetryEvent(order)) {
+                    console.log(
+                        `[sell] offline ${ev.orderId.slice(0, 8)}… игнор (заказ уже закрыт)`,
+                    );
+                    continue;
+                }
                 setOrderPhase(state, ev.orderId, 'awaiting_nick', {
                     lastError: 'player_offline',
                     nick: getBuyerSession(state, chatId, buyerId).nick || order.nick,
@@ -249,9 +279,9 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
     const dealTimeline = buildDealStatusTimeline(messages);
     syncChatOrdersFromPlayerok(state, chatId, dealTimeline);
 
-    const deals = findAllCurrencyPaidDeals(messages);
+    const dealsFromMessages = findAllCurrencyPaidDeals(messages);
 
-    if (!deals.length) {
+    if (!dealsFromMessages.length && !chatHasOpenOrders(state, chatId)) {
         for (const skip of findIgnoredPaidDeals(messages)) {
             const key = `skip:${skip.dealId}`;
             if (!state._loggedSkips) state._loggedSkips = {};
@@ -260,14 +290,17 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
                 console.log(`[sell] пропуск (не валюта kk): ${skip.itemName}`);
             }
         }
+        await handleCompletedLateNick(client, state, chatId, messages, sellerUserId);
         return;
     }
+
+    const deals = mergeChatDeals(state, chatId, dealsFromMessages);
 
     for (const paid of deals) {
         if (!paid.chatId) paid.chatId = chatId;
     }
 
-    const newlyRegistered = registerDealOrders(state, deals, cutoffIso);
+    const newlyRegistered = registerDealOrders(state, dealsFromMessages, cutoffIso);
     syncChatOrdersFromPlayerok(state, chatId, dealTimeline);
 
     if (republishWhen() === 'paid') {
@@ -276,7 +309,10 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
         }
     }
     const openDeals = filterActionableDeals(state, deals);
-    if (!openDeals.length) return;
+    if (!openDeals.length) {
+        await handleCompletedLateNick(client, state, chatId, messages, sellerUserId);
+        return;
+    }
 
     const greetingAt = await ensureChatGreeting(
         client,

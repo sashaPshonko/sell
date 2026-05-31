@@ -361,6 +361,36 @@ export function filterActionableDeals(state, deals) {
     return deals.filter((d) => isActionableOrder(getOrder(state, d.dealId)));
 }
 
+/** Оплаты из чата + открытые заказы из state (если ITEM_PAID выпал из ленты). */
+export function mergeChatDeals(state, chatId, dealsFromMessages) {
+    const byId = new Map();
+    for (const d of dealsFromMessages) {
+        byId.set(d.dealId, d);
+    }
+    for (const order of ordersInChat(state, chatId)) {
+        if (!isActionableOrder(order)) continue;
+        const id = order.orderId || order.dealId;
+        if (!id || byId.has(id)) continue;
+        byId.set(id, {
+            dealId: id,
+            chatId,
+            buyerId: order.buyerId,
+            buyer: order.buyer,
+            amountKk: order.amountKk,
+            status: order.playerokStatus,
+            paidAt: order.paidAt,
+            itemId: order.itemId,
+            itemName: order.itemName,
+            server: order.server,
+        });
+    }
+    return [...byId.values()].sort((a, b) => Date.parse(a.paidAt) - Date.parse(b.paidAt));
+}
+
+export function chatHasOpenOrders(state, chatId) {
+    return ordersInChat(state, chatId).some((o) => isActionableOrder(o));
+}
+
 /** Повторная отправка в sellbot после переподключения ws */
 export async function retryWsPendingOrders(state) {
     for (const order of Object.values(state.orders)) {
