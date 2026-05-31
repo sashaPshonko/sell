@@ -330,13 +330,16 @@ export async function flushChatDispatchQueue(state, deals, client = null) {
 
         try {
             const fresh = getOrder(state, oid) || order;
-            const { sent } = await dispatchOrder({
-                ...fresh,
-                ...paid,
-                orderId: oid,
-                nick,
-                paidAtMs: Date.parse(paid.paidAt),
-            });
+            const { sent } = await dispatchOrder(
+                {
+                    ...fresh,
+                    ...paid,
+                    orderId: oid,
+                    nick,
+                    paidAtMs: Date.parse(paid.paidAt),
+                },
+                state,
+            );
             if (sent > 0) {
                 const payKk = fresh.payAmountKk ?? paid.amountKk;
                 console.log(
@@ -463,20 +466,23 @@ export async function retryWsPendingOrders(state) {
         applyOrderPayBonus(state, order);
         try {
             const fresh = getOrder(state, oid) || order;
-            const { sent } = await dispatchOrder({
-                ...fresh,
-                orderId: oid,
-                dealId: oid,
-                chatId: order.chatId,
-                buyer: order.buyer,
-                buyerId: order.buyerId,
-                nick: order.nick,
-                amountKk: fresh.amountKk ?? order.amountKk,
-                paidAt: order.paidAt,
-                paidAtMs: order.paidAt ? Date.parse(order.paidAt) : undefined,
-                itemName: order.itemName,
-                server: order.server,
-            });
+            const { sent } = await dispatchOrder(
+                {
+                    ...fresh,
+                    orderId: oid,
+                    dealId: oid,
+                    chatId: order.chatId,
+                    buyer: order.buyer,
+                    buyerId: order.buyerId,
+                    nick: order.nick,
+                    amountKk: fresh.amountKk ?? order.amountKk,
+                    paidAt: order.paidAt,
+                    paidAtMs: order.paidAt ? Date.parse(order.paidAt) : undefined,
+                    itemName: order.itemName,
+                    server: order.server,
+                },
+                state,
+            );
             if (sent > 0) {
                 const payKk = fresh.payAmountKk ?? order.amountKk;
                 console.log(`[sell] ${oid}: → sellbot (повтор ws) ${order.nick} ${payKk}kk`);

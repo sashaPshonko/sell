@@ -20,6 +20,7 @@
     "capture-curl": "node scripts/capture-curl.mjs",
     "capture-cancel": "node scripts/capture-curl.mjs captures/paste-cancel.curl",
     "capture-publish": "node scripts/capture-curl.mjs captures/paste-publish.curl",
-    "reset-order": "node scripts/reset-order.mjs"
+    "reset-order": "node scripts/reset-order.mjs",
+    "close-order": "node scripts/close-order.mjs"
   }
 }

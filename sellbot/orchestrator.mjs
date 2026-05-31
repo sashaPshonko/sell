@@ -21,6 +21,8 @@ let healthCheckRunning = false;
 let healthInProgress = false;
 /** orderId → последний заказ (для nick_update) */
 const activeOrders = new Map();
+/** Закрытые sell'ом — не принимать повторно */
+const closedOrderIds = new Set();
 
 function forwardToSell(ev) {
     void audit('ws_bot_event', ev);
@@ -51,6 +53,7 @@ async function mockDeliverOk(order) {
     }
 
     forwardToSell({ type: 'delivery_ok', orderId });
+    closedOrderIds.add(orderId);
     activeOrders.delete(orderId);
     await sendAlert(`✅ MOCK: заказ ${short}…`);
 }
@@ -338,6 +341,7 @@ async function startWorker(reason = 'order') {
                 const order = activeOrders.get(orderId);
 
                 if (evType === 'delivery_ok') {
+                    closedOrderIds.add(orderId);
                     activeOrders.delete(orderId);
                     await sendAlert(`✅ Выдано: заказ ${short}…`);
                 } else if (evType === 'delivery_stalled') {
@@ -384,7 +388,12 @@ async function startWorker(reason = 'order') {
 }
 
 async function handleOrder(order) {
-    activeOrders.set(order.orderId, order);
+    const oid = order.orderId;
+    if (closedOrderIds.has(oid)) {
+        console.log(`[sellbot] игнор закрытого заказа ${oid.slice(0, 8)}…`);
+        return;
+    }
+    activeOrders.set(oid, order);
     console.log(
         `[sellbot] заказ ${order.orderId} | ${order.nick || '?'} | ${order.amount ?? '?'}kk`,
     );
@@ -427,6 +436,7 @@ async function handleOrder(order) {
 }
 
 function handleCancelOrder(orderId) {
+    closedOrderIds.add(orderId);
     activeOrders.delete(orderId);
     safePostToWorker({ type: 'cancel_order', orderId });
     console.log(`[sellbot] отмена заказа ${orderId.slice(0, 8)}…`);

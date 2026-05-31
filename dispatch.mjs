@@ -25,7 +25,22 @@ async function getTransport() {
 }
 
 /** Отправить заказ ботам по WebSocket */
-export async function dispatchOrder(order) {
+export async function dispatchOrder(order, state = null) {
+    if (state?.orders) {
+        const oid = order.orderId || order.dealId;
+        const existing = state.orders[oid];
+        if (existing) {
+            const { canDispatchToSellbot } = await import('./lib/playerok-deal-sync.mjs');
+            if (!canDispatchToSellbot(existing)) {
+                console.log(
+                    `[dispatch] пропуск ${oid?.slice(0, 8)}… (заказ закрыт, phase=${existing.phase})`,
+                );
+                void dispatchCancelOrder(oid);
+                return { sent: 0, skipped: true };
+            }
+        }
+    }
+
     const t = await getTransport();
     if (!t) {
         console.warn('[dispatch] WS отключён');

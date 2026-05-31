@@ -15,7 +15,9 @@ import {
     scheduleRepeatPromoMessage,
     flushScheduledChatMessages,
 } from './lib/scheduled-chat.mjs';
-import { drainBotEvents } from './dispatch.mjs';
+import { drainBotEvents, dispatchCancelOrder } from './dispatch.mjs';
+import { cancelClosedOrdersOnSellbot } from './lib/sellbot-cancel.mjs';
+import { isOrderFulfilled } from './lib/playerok-deal-sync.mjs';
 import { sendChatMessage } from './chat.mjs';
 import {
     buildWrongNickHint,
@@ -49,7 +51,6 @@ import {
     buildDealStatusTimeline,
     syncChatOrdersFromPlayerok,
     buyerHasFulfillmentOpen,
-    playerokIsClosed,
 } from './lib/playerok-deal-sync.mjs';
 import { ensureChat, getBuyerSession } from './state.mjs';
 import { assertPlayerokAuth } from './lib/check-auth.mjs';
@@ -82,10 +83,7 @@ async function markPlayerokDone(client, state, dealId, chatId) {
 /** Не слать «повтори /nick», если выдача уже была или сделка закрыта на PlayerOK */
 function shouldProcessBotRetryEvent(order) {
     if (!order) return false;
-    if (order.phase === 'completed' || order.phase === 'cancelled') return false;
-    if (order.gameDeliveryAt) return false;
-    if (order.playerokStatus && playerokIsClosed(order.playerokStatus)) return false;
-    return true;
+    return !isOrderFulfilled(order);
 }
 
 async function handleBotEvents(client, state) {
@@ -128,6 +126,7 @@ async function handleBotEvents(client, state) {
                 setOrderPhase(state, ev.orderId, 'completed', {
                     buyerNotifiedAt: new Date().toISOString(),
                 });
+                void dispatchCancelOrder(ev.orderId);
                 await markPlayerokDone(client, state, ev.orderId, chatId);
                 if (republishWhen() === 'sent') {
                     scheduleRepublishItem(client, state, order);
@@ -371,6 +370,7 @@ async function tick() {
     ensurePollStarted(state);
     const cutoffIso = getDealCutoffIso(state);
     migrateStaleOrders(state, cutoffIso);
+    cancelClosedOrdersOnSellbot(state);
 
     await handleBotEvents(client, state);
     await flushScheduledChatMessages(client, state);
