@@ -17,6 +17,8 @@ import {
     hasGreetingInChat,
     buildOrderCancelledHint,
     buildDispatchingHint,
+    buildOrderAlreadyDoneHint,
+    buildOrderClosedOnPlayerokHint,
 } from './messages.mjs';
 import { sendGreeting, sendChatMessage } from './chat.mjs';
 import { dispatchOrder, dispatchNickUpdate, dispatchCancelOrder } from './dispatch.mjs';
@@ -206,20 +208,74 @@ export async function applyNickCommandUpdates(
 
         console.log(`[sell] чат ${chatId.slice(0, 8)}…: ник → ${u.nick}`);
 
-        for (const order of ordersInChat(state, chatId)) {
-            if (order.buyerId !== buyerId || !isActionableOrder(order)) {
+        let queuedForDelivery = false;
+        const buyerOrders = ordersInChat(state, chatId).filter((o) => o.buyerId === buyerId);
+
+        for (const order of buyerOrders) {
+            order.nick = u.nick;
+
+            if (order.phase === 'completed' || order.phase === 'cancelled') {
                 continue;
             }
-            order.nick = u.nick;
+            if (order.playerokStatus && playerokIsClosed(order.playerokStatus)) {
+                continue;
+            }
+
             order.wrongNickWarned = false;
 
-            if (order.phase === 'dispatched' && changed) {
-                await dispatchNickUpdate(order.orderId, u.nick);
-            } else if (order.phase !== 'dispatched') {
-                setOrderPhase(state, order.orderId, 'awaiting_nick', {
-                    nick: u.nick,
-                    lastError: null,
-                });
+            if (order.phase === 'dispatched') {
+                if (order.gameDeliveryAt) {
+                    continue;
+                }
+                if (changed) {
+                    await dispatchNickUpdate(order.orderId, u.nick);
+                } else {
+                    setOrderPhase(state, order.orderId, 'awaiting_nick', {
+                        nick: u.nick,
+                        lastError: null,
+                    });
+                    queuedForDelivery = true;
+                }
+                continue;
+            }
+
+            if (!isActionableOrder(order)) {
+                continue;
+            }
+
+            setOrderPhase(state, order.orderId, 'awaiting_nick', {
+                nick: u.nick,
+                lastError: null,
+            });
+            queuedForDelivery = true;
+        }
+
+        if (!queuedForDelivery && client) {
+            const closed = buyerOrders.find(
+                (o) =>
+                    o.phase === 'completed'
+                    || (o.playerokStatus && playerokIsClosed(o.playerokStatus)),
+            );
+            if (closed) {
+                const hint = closed.gameDeliveryAt
+                    ? buildOrderAlreadyDoneHint()
+                    : buildOrderClosedOnPlayerokHint();
+                try {
+                    await sendChatMessage(client, chatId, hint);
+                    console.log(
+                        `[sell] ${closed.orderId.slice(0, 8)}…: /nick после закрытия (playerok=${closed.playerokStatus || '?'})`,
+                    );
+                } catch (e) {
+                    console.warn(`[sell] ответ в чат: ${e.message}`);
+                }
+            } else {
+                console.warn(
+                    `[sell] ник ${u.nick} — нечего выдавать (заказы: ${
+                        buyerOrders
+                            .map((o) => `${o.orderId?.slice(0, 8)}… ${o.phase}`)
+                            .join(', ') || 'нет'
+                    })`,
+                );
             }
         }
     }
@@ -254,8 +310,18 @@ export async function flushChatDispatchQueue(state, deals, client = null) {
         const oid = paid.dealId;
         const order = getOrder(state, oid);
         if (!order) continue;
-        if (order.phase === 'completed' || order.phase === 'dispatched' || order.phase === 'cancelled') {
+        if (order.phase === 'completed' || order.phase === 'cancelled') {
+            console.log(
+                `[sell] ${oid.slice(0, 8)}…: выдача пропущена (phase=${order.phase}, playerok=${order.playerokStatus || '?'})`,
+            );
             continue;
+        }
+        if (order.phase === 'dispatched') {
+            if (order.gameDeliveryAt) {
+                console.log(`[sell] ${oid.slice(0, 8)}…: уже dispatched + выдано в игре`);
+                continue;
+            }
+            console.log(`[sell] ${oid.slice(0, 8)}…: dispatched без выдачи — повтор в очередь`);
         }
 
         const chatId = paid.chatId || order.chatId;

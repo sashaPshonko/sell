@@ -156,6 +156,16 @@ export function buildOrderAlreadyDoneHint() {
     ].join('\n');
 }
 
+/** Закрыто на PlayerOK, в игру sellbot не платил */
+export function buildOrderClosedOnPlayerokHint() {
+    return [
+        '✅ Сделка на PlayerOK уже закрыта (подтверждена).',
+        '',
+        'Если валюта в игру не приходила — напиши в поддержку PlayerOK.',
+        'Новый /nick для этой оплаты не сработает.',
+    ].join('\n');
+}
+
 /** Сразу после ника — перед выдачей на сервере */
 export function buildDispatchingHint(nick, amountKk, payAmountKk = null) {
     const anka = DELIVERY_ANARCHY();
