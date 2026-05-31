@@ -166,6 +166,12 @@ async function handleBotEvents(client, state) {
                 await sendChatMessage(client, chatId, buildRetryNickHint());
                 console.warn(`[sell] fail ${ev.orderId}: ${ev.reason || '?'}`);
             } else if (ev.type === 'invalid_nick') {
+                if (!shouldProcessBotRetryEvent(order)) {
+                    console.log(
+                        `[sell] invalid_nick ${ev.orderId.slice(0, 8)}… игнор (заказ уже закрыт)`,
+                    );
+                    continue;
+                }
                 const session = getBuyerSession(state, chatId, buyerId);
                 delete session.nick;
                 setOrderPhase(state, ev.orderId, 'awaiting_nick', {

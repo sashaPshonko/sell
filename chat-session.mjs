@@ -30,6 +30,7 @@ import {
     playerokNeedsDelivery,
     playerokIsCancelled,
     playerokIsClosed,
+    canDispatchToSellbot,
 } from './lib/playerok-deal-sync.mjs';
 
 /**
@@ -214,19 +215,13 @@ export async function applyNickCommandUpdates(
         for (const order of buyerOrders) {
             order.nick = u.nick;
 
-            if (order.phase === 'completed' || order.phase === 'cancelled') {
-                continue;
-            }
-            if (order.playerokStatus && playerokIsClosed(order.playerokStatus)) {
+            if (!canDispatchToSellbot(order)) {
                 continue;
             }
 
             order.wrongNickWarned = false;
 
             if (order.phase === 'dispatched') {
-                if (order.gameDeliveryAt) {
-                    continue;
-                }
                 if (changed) {
                     await dispatchNickUpdate(order.orderId, u.nick);
                 } else {
@@ -254,6 +249,7 @@ export async function applyNickCommandUpdates(
             const closed = buyerOrders.find(
                 (o) =>
                     o.phase === 'completed'
+                    || o.gameDeliveryAt
                     || (o.playerokStatus && playerokIsClosed(o.playerokStatus)),
             );
             if (closed) {
@@ -310,17 +306,13 @@ export async function flushChatDispatchQueue(state, deals, client = null) {
         const oid = paid.dealId;
         const order = getOrder(state, oid);
         if (!order) continue;
-        if (order.phase === 'completed' || order.phase === 'cancelled') {
+        if (!canDispatchToSellbot(order)) {
             console.log(
-                `[sell] ${oid.slice(0, 8)}…: выдача пропущена (phase=${order.phase}, playerok=${order.playerokStatus || '?'})`,
+                `[sell] ${oid.slice(0, 8)}…: выдача пропущена (phase=${order.phase}, playerok=${order.playerokStatus || '?'}, game=${order.gameDeliveryAt ? 'ok' : 'нет'})`,
             );
             continue;
         }
         if (order.phase === 'dispatched') {
-            if (order.gameDeliveryAt) {
-                console.log(`[sell] ${oid.slice(0, 8)}…: уже dispatched + выдано в игре`);
-                continue;
-            }
             console.log(`[sell] ${oid.slice(0, 8)}…: dispatched без выдачи — повтор в очередь`);
         }
 
@@ -462,6 +454,12 @@ export async function retryWsPendingOrders(state) {
     for (const order of Object.values(state.orders)) {
         if (order.phase !== 'ws_pending' || !order.nick) continue;
         const oid = order.orderId || order.dealId;
+        if (!canDispatchToSellbot(order)) {
+            console.log(
+                `[sell] ${oid.slice(0, 8)}…: ws_pending пропуск (phase=${order.phase}, game=${order.gameDeliveryAt ? 'ok' : 'нет'})`,
+            );
+            continue;
+        }
         applyOrderPayBonus(state, order);
         try {
             const fresh = getOrder(state, oid) || order;
