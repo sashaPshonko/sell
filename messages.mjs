@@ -31,7 +31,7 @@ export function buildGreetingText(ctx = null) {
     if (lotKk > 0) {
         bonusLines.push(
             '',
-            `📦 Лот заказа: ${lotKk}kk — итоговая выдача будет больше (лот + бонусы).`,
+            `📦 Лот заказа: ${lotKk}кк — итоговая выдача будет больше (лот + бонусы).`,
         );
     }
 
@@ -109,15 +109,15 @@ export function buildQueueStallHint() {
 
 function fmtKk(n) {
     const v = Number(n);
-    if (!Number.isFinite(v) || v <= 0) return '0kk';
-    return `${v}kk`;
+    if (!Number.isFinite(v) || v <= 0) return '0кк';
+    return `${v}кк`;
 }
 
 function fmtBonusKk(kk, pct) {
     const k = Number(kk) || 0;
     const p = Number(pct) || 0;
     if (k <= 0) return '—';
-    return p > 0 ? `+${k}kk (+${p}%)` : `+${k}kk`;
+    return p > 0 ? `+${k}кк (+${p}%)` : `+${k}кк`;
 }
 
 /**
@@ -207,6 +207,16 @@ export function buildRepeatPurchaseHint() {
     ].join('\n');
 }
 
+/** Нет конкретного лота-аналога — подсказка про 🎁 на профиле (без ссылки). */
+export function buildProfileBrowseHint(opts = {}) {
+    const marker = opts.emoji || '🎁';
+    return [
+        '💡 На профиле есть предложения выгоднее',
+        '',
+        `Пролистай профиль вниз — лоты с ${marker} в названии (больше кк за те же ₽).`,
+    ].join('\n');
+}
+
 /**
  * @param {{ emoji: string, upsellKk: number, baseKk?: number, priceRub?: number, url: string }} opts
  */
@@ -224,17 +234,17 @@ export function buildProfileUpsellHint(opts) {
 
     const compareLine =
         baseKk != null && baseKk > 0 && upsellKk > baseKk
-            ? `больше, чем ${baseKk}kk в этом заказе`
+            ? `больше, чем ${baseKk}кк в этом заказе`
             : 'больше валюты за те же деньги';
 
-    const titleExample = `${upsellKk}KK ${marker} МОМЕНТАЛЬНО ${marker} БОНУС`;
+    const titleExample = `${upsellKk}КК ${marker} МОМЕНТАЛЬНО ${marker} БОНУС`;
 
     return [
         '💡 На профиле выгоднее',
         '',
         `Следующий раз: «${titleExample}» ${priceLine} — ${compareLine}.`,
         '',
-        `👇 Пролистай профиль вниз — в названии ${marker} вместо · (больше kk за те же ₽, без премки).`,
+        `👇 Пролистай профиль вниз — в названии ${marker} (больше кк за те же ₽).`,
         url,
     ].join('\n');
 }
