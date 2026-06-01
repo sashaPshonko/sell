@@ -89,38 +89,51 @@ export function buildNewOrderTwinHint(ctx = null) {
     return lines.join('\n');
 }
 
+/** Красная «рамка» для бан-сообщений (симметрично сверху и снизу). */
+function buildRedAlertFrame(headline, bodyLines, footerLines = []) {
+    const border =
+        '🛑🛑🛑🛑🛑🛑 ⛔⛔⛔⛔⛔⛔ ⛔⛔⛔⛔⛔⛔ 🛑🛑🛑🛑🛑🛑';
+    const title = `🔴🔴🔴🔴🔴 ${headline} 🔴🔴🔴🔴🔴`;
+    const footer =
+        '🛑🛑🛑🛑🛑🛑 🔴🔴🔴🔴🔴🔴 🔴🔴🔴🔴🔴🔴 🛑🛑🛑🛑🛑🛑';
+
+    return [
+        border,
+        title,
+        border,
+        '',
+        ...bodyLines,
+        '',
+        ...footerLines,
+        '',
+        border,
+        footer,
+        border,
+    ].join('\n');
+}
+
 /** Сразу после /ban продавцом — заказы с аккаунта не принимаются. */
 export function buildBannedBuyerBlockedNotice() {
-    return [
-        '🛑🛑🛑 ⛔ ⛔ ⛔',
-        '🔴🔴🔴 ЗАКАЗЫ НЕ ПРИНИМАЮТСЯ 🔴🔴🔴',
-        '',
-        '🚫 Тебя добавили в банлист продавца.',
-        '❌ С этого аккаунта валюту больше не выдают.',
-        '🚫 Любые новые оплаты будут отменены с возвратом.',
-        '',
-        '🛑🛑🛑 🔴 🔴 🔴',
-    ].join('\n');
+    return buildRedAlertFrame('ЗАКАЗЫ НЕ ПРИНИМАЮТСЯ', [
+        '🚫🚫 Тебя добавили в банлист продавца.',
+        '❌❌ С этого аккаунта валюту больше не выдают.',
+        '🚫🚫 Любые новые оплаты будут отменены с возвратом.',
+    ]);
 }
 
 /** Забаненный покупатель снова оплатил — возврат, без выдачи. */
 export function buildBannedBuyerRefundHint(playerokCancelled = false) {
-    const lines = [
-        '🛑🛑🛑 ⛔ ⛔ ⛔',
-        '🔴🔴🔴 ВЫДАЧА ОТКЛОНЕНА 🔴🔴🔴',
-        '',
-        'Продавец посчитал, что тебе больше не стоит выдавать валюту.',
-        '🚫 Повторные покупки с этого аккаунта не принимаются.',
-        '',
-        '💰 Оплата возвращена.',
-    ];
+    const footer = ['💰💰 Оплата возвращена.'];
     if (playerokCancelled) {
-        lines.push('✅ Возврат оформлен на PlayerOK.');
+        footer.push('✅✅ Возврат оформлен на PlayerOK.');
     } else {
-        lines.push('💬 Если деньги не вернулись — поддержка PlayerOK.');
+        footer.push('💬💬 Если деньги не вернулись — поддержка PlayerOK.');
     }
-    lines.push('', '🛑🛑🛑 🔴 🔴 🔴');
-    return lines.join('\n');
+
+    return buildRedAlertFrame('ВЫДАЧА ОТКЛОНЕНА', [
+        '⛔⛔ Продавец посчитал, что тебе больше не стоит выдавать валюту.',
+        '🚫🚫 Повторные покупки с этого аккаунта не принимаются.',
+    ], footer);
 }
 
 export function buildOrderCancelledHint(playerokCancelled = false) {
