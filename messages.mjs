@@ -4,7 +4,7 @@ import { DELIVERY_ANARCHY } from './config.mjs';
 export { DELIVERY_ANARCHY };
 
 /** Предупреждение: выдача /pay — риск бана, только твинк. */
-function twinAccountWarningLines() {
+export function twinAccountWarningLines() {
     return [
         '⛔⛔⛔ ОБЯЗАТЕЛЬНО ТВИНК ⛔⛔⛔',
         'Выдача через /pay — на основном аккаунте часто дают БАН.',
@@ -62,6 +62,31 @@ export function buildGreetingText(ctx = null) {
         '⏳ Бот не выдал — повтори в ЭТОМ чате: /nick твой-ник',
         '❌ Отмена: /cancel',
     ].join('\n');
+}
+
+/**
+ * Повторная оплата в том же чате — без полного приветствия, но с напоминанием про твинк.
+ * @param {{ lotKk?: number, repeatEligible?: boolean }} [ctx]
+ */
+export function buildNewOrderTwinHint(ctx = null) {
+    const anka = DELIVERY_ANARCHY;
+    const lotKk = Number(ctx?.lotKk);
+    const repeatEligible = Boolean(ctx?.repeatEligible);
+
+    const lines = [
+        '✅ Оплата получена.',
+        '',
+        ...twinAccountWarningLines(),
+        `🎮 Анархия ${anka} — будь в сети.`,
+        'В ЭТОМ чате PlayerOK напиши ник твинка: /nick твой-ник',
+    ];
+    if (lotKk > 0) {
+        lines.push('', `📦 Лот: ${lotKk}кк`);
+    }
+    if (repeatEligible) {
+        lines.push(`🔁 Повтор за 24ч — ещё +${REPEAT_EXTRA_PCT}% к лоту.`);
+    }
+    return lines.join('\n');
 }
 
 export function buildOrderCancelledHint(playerokCancelled = false) {

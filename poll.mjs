@@ -25,6 +25,7 @@ import {
     buildQueueStallHint,
     buildDeliveryOkHint,
     buildOrderAlreadyDoneHint,
+    hasGreetingInChat,
     DELIVERY_ANARCHY,
 } from './messages.mjs';
 import { confirmDealOnPlayerok } from './confirm.mjs';
@@ -35,6 +36,7 @@ import {
     mergeChatDeals,
     chatHasOpenOrders,
     ensureChatGreeting,
+    sendTwinRemindersForNewOrders,
     syncChatNick,
     applyNickCommandUpdates,
     applyCancelCommands,
@@ -341,6 +343,10 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
         return;
     }
 
+    const chatBeforeGreeting = ensureChat(state, chatId);
+    const hadGreetingBefore =
+        chatBeforeGreeting.greetingSent || hasGreetingInChat(messages, sellerUserId);
+
     const greetingAt = await ensureChatGreeting(
         client,
         state,
@@ -349,6 +355,10 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
         sellerUserId,
         openDeals,
     );
+
+    if (hadGreetingBefore && newlyRegistered.length) {
+        await sendTwinRemindersForNewOrders(client, state, chatId, newlyRegistered);
+    }
 
     const buyerIds = [...new Set(openDeals.map((d) => d.buyerId))];
     const chatKnown = ensureChat(state, chatId);

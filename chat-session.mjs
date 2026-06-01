@@ -15,6 +15,7 @@ import {
 } from './state.mjs';
 import {
     hasGreetingInChat,
+    buildNewOrderTwinHint,
     buildOrderCancelledHint,
     buildDispatchingHint,
     buildOrderAlreadyDoneHint,
@@ -119,6 +120,38 @@ export async function ensureChatGreeting(client, state, chatId, messages, seller
         });
     }
     return chat.greetingAt;
+}
+
+/**
+ * Новые оплаты, когда полное приветствие в чате уже было — коротко про твинк.
+ * @param {object[]} newOrders — заказы из registerDealOrders
+ */
+export async function sendTwinRemindersForNewOrders(client, state, chatId, newOrders) {
+    if (!newOrders?.length) return;
+
+    const chat = ensureChat(state, chatId);
+
+    for (const order of newOrders) {
+        if (!order || !isActionableOrder(order)) continue;
+        if (order.twinReminderSentAt) continue;
+
+        await sendChatMessage(
+            client,
+            chatId,
+            buildNewOrderTwinHint({
+                lotKk: order.amountKk,
+                repeatEligible: buyerEligibleForRepeatBonus(state, order.buyerId),
+            }),
+        );
+        const phase = order.phase === 'new' ? 'awaiting_nick' : order.phase;
+        setOrderPhase(state, order.orderId, phase, {
+            twinReminderSentAt: new Date().toISOString(),
+            greetedAt: order.greetedAt || chat.greetingAt,
+        });
+        console.log(
+            `[sell] чат ${chatId.slice(0, 8)}…: напоминание твинк (заказ ${order.orderId.slice(0, 8)}…)`,
+        );
+    }
 }
 
 /**
