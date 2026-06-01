@@ -2,6 +2,7 @@ import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { DELIVERY_ANARCHY_NUM } from '../config.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BOT_JSON = join(__dirname, 'bot.json');
@@ -69,7 +70,8 @@ export async function loadSettings(path = BOT_JSON) {
     const bot = {
         username: entry.username,
         password: entry.password,
-        anarchy: Number(entry.anarchy) || 502,
+        /** Анархия — только из sell/config.mjs (поле anarchy в bot.json не используется) */
+        anarchy: DELIVERY_ANARCHY_NUM,
     };
 
     const settings = {

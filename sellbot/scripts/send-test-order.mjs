@@ -5,6 +5,7 @@
  * Терминал 2: npm run test-order
  */
 import WebSocket from 'ws';
+import { DELIVERY_ANARCHY_NUM } from '../../config.mjs';
 
 const url = process.env.WS_URL || 'ws://127.0.0.1:8790';
 const orderId = process.env.TEST_ORDER_ID || `test-${Date.now()}`;
@@ -18,7 +19,7 @@ const order = {
     amount,
     buyer: 'test-buyer',
     paidAtMs: Date.now(),
-    anarchy: 502,
+    anarchy: DELIVERY_ANARCHY_NUM,
 };
 
 const ws = new WebSocket(url);

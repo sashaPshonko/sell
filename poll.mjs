@@ -424,7 +424,7 @@ async function tick() {
 
 async function main() {
     await assertPlayerokAuth();
-    console.log(`[sell] автопродажа | анархия ${DELIVERY_ANARCHY()} | ws sellbot`);
+    console.log(`[sell] автопродажа | анархия ${DELIVERY_ANARCHY} | ws sellbot`);
     do {
         try {
             await tick();

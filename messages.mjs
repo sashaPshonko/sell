@@ -1,6 +1,17 @@
 import { REPEAT_EXTRA_PCT } from './lib/pay-bonus.mjs';
+import { DELIVERY_ANARCHY } from './config.mjs';
 
-export const DELIVERY_ANARCHY = () => process.env.DELIVERY_ANARCHY || '502';
+export { DELIVERY_ANARCHY };
+
+/** Предупреждение: выдача /pay — риск бана, только твинк. */
+function twinAccountWarningLines() {
+    return [
+        '⛔⛔⛔ ОБЯЗАТЕЛЬНО ТВИНК ⛔⛔⛔',
+        'Выдача через /pay — на основном аккаунте часто дают БАН.',
+        'Указывай ник ЗАПАСНОГО аккаунта (твинка), не основного!',
+        '————————————————',
+    ];
+}
 
 /**
  * @param {{ lotKk?: number, repeatEligible?: boolean }} [ctx]
@@ -10,7 +21,7 @@ export function buildGreetingText(ctx = null) {
     const custom = process.env.GREETING_MESSAGE?.trim();
     if (custom) return custom;
 
-    const anka = DELIVERY_ANARCHY();
+    const anka = DELIVERY_ANARCHY;
     const lotKk = Number(ctx?.lotKk);
     const repeatEligible = Boolean(ctx?.repeatEligible);
 
@@ -37,8 +48,9 @@ export function buildGreetingText(ctx = null) {
 
     return [
         `ЗАХОДИ НА АНАРХИЮ ${anka}`,
+        ...twinAccountWarningLines(),
         'ПОСЛЕ ЭТОГО НАПИШИ НИК В ЭТОМ ЧАТЕ PlayerOK (не в игре):',
-        'ник твой-ник',
+        'ник твой-ник  ← ник ТВИНКА в игре',
         'или /nick твой-ник',
         ...bonusLines,
         '',
@@ -46,7 +58,6 @@ export function buildGreetingText(ctx = null) {
         '❗ Валюта только на Minecraft 1.21 (FunTime).',
         'На 1.16 не выдаём — отмена: /cancel',
         '💸 Выдача через /pay на сервере (автоматически).',
-        '👥 Лучше купи на твинк, тк через /pay могут забанить',
         '🔁 Ошибся в нике — напиши в ЭТОМ чате: /nick твой-ник',
         '⏳ Бот не выдал — повтори в ЭТОМ чате: /nick твой-ник',
         '❌ Отмена: /cancel',
@@ -82,7 +93,7 @@ export function buildWrongNickHint() {
 }
 
 export function buildRetryNickHint() {
-    const anka = DELIVERY_ANARCHY();
+    const anka = DELIVERY_ANARCHY;
     return [
         '⏳ Сейчас не удалось выдать (сервер занят или ты не в сети в игре).',
         '',
@@ -95,7 +106,7 @@ export function buildRetryNickHint() {
 
 /** Таймаут выдачи при очереди — заказ сброшен, нужен повторный /nick */
 export function buildQueueStallHint() {
-    const anka = DELIVERY_ANARCHY();
+    const anka = DELIVERY_ANARCHY;
     return [
         '⏱ Выдача заняла слишком долго (очередь на сервере).',
         '',
@@ -274,7 +285,7 @@ export function buildOrderClosedOnPlayerokHint() {
  * @param {object|null} [bonus] — payAmountKk и поля бонуса (как у buildDeliveryOkHint)
  */
 export function buildDispatchingHint(nick, amountKk, bonus = null) {
-    const anka = DELIVERY_ANARCHY();
+    const anka = DELIVERY_ANARCHY;
     const payoutBonus =
         bonus && typeof bonus === 'object'
             ? bonus
@@ -291,6 +302,7 @@ export function buildDispatchingHint(nick, amountKk, bonus = null) {
     lines.push(
         '',
         `🎮 Будь на анархии ${anka} и в сети (FunTime 1.21).`,
+        '⛔ Ник должен быть твинка — на основном высокий риск бана за /pay.',
         'Если не пришло за минуту — в ЭТОМ чате: /nick твой-ник',
     );
     return lines.join('\n');

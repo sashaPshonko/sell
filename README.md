@@ -3,7 +3,8 @@
 | Часть | Конфиг |
 |--------|--------|
 | PlayerOK | `.env` — `PLAYEROK_TOKEN` + `PLAYEROK_AUID` (+ `PLAYEROK_DDG1` опционально) |
-| Выдача FunTime | `sellbot/bot.json` — бот и все настройки sellbot (**без .env**) |
+| Анархия выдачи | **`config.mjs`** — `DELIVERY_ANARCHY` (git pull на VPS) |
+| Выдача FunTime | `sellbot/bot.json` — ник/пароль бота и настройки sellbot (**без .env**) |
 
 ```bash
 npm install
@@ -21,7 +22,7 @@ cp sellbot/bot.json.example sellbot/bot.json   # ник, пароль, анар�
 
 ### sellbot/bot.json
 
-Обязательно: `username`, `password`, `anarchy`.
+Обязательно: `username`, `password`. Анархия — в `config.mjs`, не в `bot.json`.
 
 Остальное опционально (дефолты в `sellbot/settings.mjs`): `wsPort`, `payTemplate`, `paySuffix`, `mockDelivery`, `healthCheckEnabled`, таймауты и т.д.
 

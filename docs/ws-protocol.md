@@ -15,7 +15,7 @@
   "buyer": "Plato5",
   "nick": "Steve",
   "amount": 100,
-  "anarchy": "502",
+  "anarchy": "221",
   "itemName": "100KK FUNTIME 1.21"
 }
 ```

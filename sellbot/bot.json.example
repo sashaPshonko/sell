@@ -2,7 +2,7 @@
   {
     "username": "BOT_NICK",
     "password": "BOT_PASSWORD",
-    "anarchy": 502,
+    "anarchy": 221,
     "wsPort": 8790,
     "payTemplate": "/pay {nick} {amount}",
     "payAmountMultiplier": 1000000,
