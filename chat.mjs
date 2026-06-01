@@ -22,8 +22,19 @@ export async function sendChatMessage(client, chatId, text) {
     return client.runMutationFromFile('SEND_MESSAGE_MUTATION_FILE', file, variables, op);
 }
 
-export async function sendGreeting(client, chatId, orderId) {
-    const text = buildGreetingText();
-    console.log(`[sell] приветствие → чат ${chatId} (${orderId})`);
+/**
+ * @param {{ orderId?: string, lotKk?: number, repeatEligible?: boolean }} [ctx]
+ */
+export async function sendGreeting(client, chatId, ctx = null) {
+    const orderId = ctx?.orderId ?? ctx;
+    const greetingCtx =
+        ctx && typeof ctx === 'object' && !Array.isArray(ctx)
+            ? {
+                  lotKk: ctx.lotKk,
+                  repeatEligible: ctx.repeatEligible,
+              }
+            : null;
+    const text = buildGreetingText(greetingCtx);
+    console.log(`[sell] приветствие → чат ${chatId} (${orderId ?? '?'})`);
     return sendChatMessage(client, chatId, text);
 }

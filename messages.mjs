@@ -1,17 +1,46 @@
+import { REPEAT_EXTRA_PCT } from './lib/pay-bonus.mjs';
+
 export const DELIVERY_ANARCHY = () => process.env.DELIVERY_ANARCHY || '502';
 
-/** Текст после оплаты (без номера заказа — только для логов/WS) */
-export function buildGreetingText() {
+/**
+ * @param {{ lotKk?: number, repeatEligible?: boolean }} [ctx]
+ * Текст после оплаты (без номера заказа — только для логов/WS)
+ */
+export function buildGreetingText(ctx = null) {
     const custom = process.env.GREETING_MESSAGE?.trim();
     if (custom) return custom;
 
     const anka = DELIVERY_ANARCHY();
+    const lotKk = Number(ctx?.lotKk);
+    const repeatEligible = Boolean(ctx?.repeatEligible);
+
+    const bonusLines = [
+        '',
+        '🎁 БОНУС к выдаче:',
+        'После ника к лоту добавим случайный бонус: +5%, +8%, +12% или +15%.',
+    ];
+    if (repeatEligible) {
+        bonusLines.push(
+            `🔁 У тебя повторная покупка за 24 часа — ещё +${REPEAT_EXTRA_PCT}% к лоту!`,
+        );
+    } else {
+        bonusLines.push(
+            `🔁 Купишь снова в течение 24ч — к бонусу добавим ещё +${REPEAT_EXTRA_PCT}%.`,
+        );
+    }
+    if (lotKk > 0) {
+        bonusLines.push(
+            '',
+            `📦 Лот заказа: ${lotKk}kk — итоговая выдача будет больше (лот + бонусы).`,
+        );
+    }
 
     return [
         `ЗАХОДИ НА АНАРХИЮ ${anka}`,
-        'ПОСЛЕ ЭТОГО НАПИШИ НИК ОДНИМ СЛОВОМ',
-        'твой-ник',
-        'или /nick твой-ник [В ЭТОМ ЧАТЕ]',
+        'ПОСЛЕ ЭТОГО НАПИШИ НИК В ЧАТЕ:',
+        'ник твой-ник',
+        'или /nick твой-ник',
+        ...bonusLines,
         '',
         '✅ выдача автоматическая - бот выдаст сам',
         '❗ Валюта только на Minecraft 1.21 (FunTime).',
@@ -46,7 +75,8 @@ export function buildWrongNickHint() {
         '⚠️ Ник не подошёл.',
         '',
         '👤 Нужен ник Minecraft: 3–16 символов, a-z, 0-9, _',
-        'Исправь: /nick твой-ник',
+        'Напиши: ник твой-ник',
+        'или /nick твой-ник',
     ].join('\n');
 }
 
@@ -87,6 +117,54 @@ function fmtBonusKk(kk, pct) {
 }
 
 /**
+ * @param {object} bonus
+ * @param {number} [bonus.lotKk]
+ * @param {number} [bonus.payAmountKk]
+ * @param {number} [bonus.wheelPct]
+ * @param {number} [bonus.repeatPct]
+ * @param {number} [bonus.bonusWheelKk]
+ * @param {number} [bonus.bonusRepeatKk]
+ * @param {number} [defaultLotKk]
+ */
+function resolvePayoutParts(bonus, defaultLotKk = 0) {
+    const lot = Number(bonus?.lotKk ?? defaultLotKk) || 0;
+    const paid = Number(bonus?.payAmountKk ?? defaultLotKk) || 0;
+    const wheelPct = bonus?.wheelPct ?? 0;
+    const repeatPct = bonus?.repeatPct ?? 0;
+    const wheelKk =
+        bonus?.bonusWheelKk ??
+        (wheelPct > 0 ? Math.round((lot * wheelPct) / 100) : 0);
+    const repeatKk =
+        bonus?.bonusRepeatKk ??
+        (repeatPct > 0 ? Math.round((lot * repeatPct) / 100) : 0);
+    return { lot, paid, wheelKk, repeatKk, wheelPct, repeatPct };
+}
+
+/** @param {object} bonus @param {number} [defaultLotKk] @param {{ totalLabel?: string }} [opts] */
+function buildPayoutBreakdownLines(bonus, defaultLotKk = 0, opts = null) {
+    const { lot, paid, wheelKk, repeatKk, wheelPct, repeatPct } = resolvePayoutParts(
+        bonus,
+        defaultLotKk,
+    );
+    if (lot <= 0 || paid <= 0) return [];
+
+    const totalLabel = opts?.totalLabel || 'Итого';
+    const lines = [`💰 ${totalLabel}: ${fmtKk(paid)}`, `📦 Лот: ${fmtKk(lot)}`];
+
+    if (wheelKk > 0 || wheelPct > 0) {
+        lines.push(`🎲 Случайный бонус: ${fmtBonusKk(wheelKk, wheelPct)}`);
+    }
+
+    if (repeatKk > 0 || repeatPct > 0) {
+        lines.push(
+            `🔁 Бонус за повторную покупку (24ч): ${fmtBonusKk(repeatKk, repeatPct)}`,
+        );
+    }
+
+    return lines;
+}
+
+/**
  * @param {object} [bonus]
  * @param {number} [bonus.lotKk]
  * @param {number} [bonus.payAmountKk]
@@ -96,34 +174,11 @@ function fmtBonusKk(kk, pct) {
  * @param {number} [bonus.bonusRepeatKk]
  */
 export function buildDeliveryOkHint(amountKk, bonus = null) {
-    const lot = Number(bonus?.lotKk ?? amountKk) || 0;
-    const paid = Number(bonus?.payAmountKk ?? amountKk) || 0;
-    const wheelKk =
-        bonus?.bonusWheelKk ??
-        (bonus?.wheelPct > 0 ? Math.round((lot * bonus.wheelPct) / 100) : 0);
-    const repeatKk =
-        bonus?.bonusRepeatKk ??
-        (bonus?.repeatPct > 0 ? Math.round((lot * bonus.repeatPct) / 100) : 0);
-    const wheelPct = bonus?.wheelPct ?? 0;
-    const repeatPct = bonus?.repeatPct ?? 0;
-
+    const breakdown = buildPayoutBreakdownLines(bonus, amountKk, { totalLabel: 'Итого выдано' });
     const lines = ['✅ Валюта выдана!', ''];
 
-    if (lot > 0 && paid > 0) {
-        lines.push(`💰 Итого выдано: ${fmtKk(paid)}`, '');
-        lines.push(`📦 По заказу (лот): ${fmtKk(lot)}`);
-
-        if (wheelKk > 0 || wheelPct > 0) {
-            lines.push(`🎲 Случайный бонус: ${fmtBonusKk(wheelKk, wheelPct)}`);
-        }
-
-        if (repeatKk > 0 || repeatPct > 0) {
-            lines.push(
-                `🔁 Бонус за повторную покупку (24ч): ${fmtBonusKk(repeatKk, repeatPct)}`,
-            );
-        }
-
-        lines.push('', '🎮 Приятной игры!');
+    if (breakdown.length) {
+        lines.push(...breakdown, '', '🎮 Приятной игры!');
     } else {
         lines.push('🎮 Приятной игры!');
     }
@@ -198,17 +253,33 @@ export function buildOrderClosedOnPlayerokHint() {
     ].join('\n');
 }
 
-/** Сразу после ника — перед выдачей на сервере */
-export function buildDispatchingHint(nick, amountKk, payAmountKk = null) {
+/**
+ * Сразу после ника — перед выдачей на сервере.
+ * @param {string} nick
+ * @param {number} amountKk — сумма лота
+ * @param {object|null} [bonus] — payAmountKk и поля бонуса (как у buildDeliveryOkHint)
+ */
+export function buildDispatchingHint(nick, amountKk, bonus = null) {
     const anka = DELIVERY_ANARCHY();
-    const pay = payAmountKk != null && payAmountKk > 0 ? payAmountKk : amountKk;
-    const sum = pay != null && pay > 0 ? `${pay}kk ` : '';
-    return [
-        `⏳ Сейчас выдаю ${sum}на ник «${nick}».`,
+    const payoutBonus =
+        bonus && typeof bonus === 'object'
+            ? bonus
+            : bonus != null && Number(bonus) > 0
+              ? { payAmountKk: bonus, lotKk: amountKk }
+              : { lotKk: amountKk, payAmountKk: amountKk };
+
+    const breakdown = buildPayoutBreakdownLines(payoutBonus, amountKk);
+
+    const lines = [`⏳ Сейчас выдаю на ник «${nick}»:`];
+    if (breakdown.length) {
+        lines.push('', ...breakdown);
+    }
+    lines.push(
         '',
         `🎮 Будь на анархии ${anka} и в сети (FunTime 1.21).`,
         'Если не пришло за минуту — /nick твой-ник',
-    ].join('\n');
+    );
+    return lines.join('\n');
 }
 
 export function hasGreetingInChat(messages, sellerUserId) {

@@ -1,6 +1,6 @@
 import {
     parseBuyerNick,
-    parseBuyerNickUpdates,
+    parseBuyerNickIntakes,
     findLatestBuyerNick,
     findGreetingAnchorInChat,
     isCancelCommand,
@@ -22,7 +22,7 @@ import {
 } from './messages.mjs';
 import { sendGreeting, sendChatMessage } from './chat.mjs';
 import { dispatchOrder, dispatchNickUpdate, dispatchCancelOrder } from './dispatch.mjs';
-import { applyOrderPayBonus } from './lib/pay-bonus.mjs';
+import { applyOrderPayBonus, buyerEligibleForRepeatBonus } from './lib/pay-bonus.mjs';
 import { cancelDealOnPlayerok } from './cancel.mjs';
 import { DELIVERY_ANARCHY } from './messages.mjs';
 import { isStaleDeal, isActionableOrder } from './lib/deal-cutoff.mjs';
@@ -31,6 +31,8 @@ import {
     playerokIsCancelled,
     playerokIsClosed,
     canDispatchToSellbot,
+    buyerHasPendingOrder,
+    isOrderFulfilled,
 } from './lib/playerok-deal-sync.mjs';
 
 /**
@@ -47,7 +49,7 @@ export function syncChatNick(state, chatId, messages, buyerId, greetingAtIso) {
     const session = getBuyerSession(state, chatId, buyerId);
     const after = nickMessagesAfter(session, greetingAtIso);
 
-    const nickParseOpts = { allowNikPhrase: !session.nick };
+    const nickParseOpts = { allowNikPhrase: true };
     const latest = findLatestBuyerNick(messages, buyerId, after, nickParseOpts);
     const first = parseBuyerNick(messages, buyerId, after, nickParseOpts);
     const pick = latest?.via === 'command' ? latest : first || latest;
@@ -89,10 +91,24 @@ export async function ensureChatGreeting(client, state, chatId, messages, seller
         if (!chat.greetingAt) {
             chat.greetingAt = findGreetingAnchorInChat(messages, sellerUserId) || new Date().toISOString();
         }
+        for (const paid of deals) {
+            const o = getOrder(state, paid.dealId);
+            if (!o || !isActionableOrder(o)) continue;
+            if (o.phase === 'new') {
+                setOrderPhase(state, paid.dealId, 'awaiting_nick', {
+                    greetedAt: chat.greetingAt,
+                });
+            }
+        }
         return chat.greetingAt;
     }
 
-    await sendGreeting(client, chatId, deals[0]?.dealId);
+    const firstDeal = deals[0];
+    await sendGreeting(client, chatId, {
+        orderId: firstDeal?.dealId,
+        lotKk: firstDeal?.amountKk,
+        repeatEligible: buyerEligibleForRepeatBonus(state, firstDeal?.buyerId),
+    });
     chat.greetingSent = true;
     chat.greetingAt = new Date().toISOString();
     console.log(`[sell] чат ${chatId.slice(0, 8)}…: приветствие`);
@@ -197,7 +213,7 @@ export async function applyNickCommandUpdates(
     const session = getBuyerSession(state, chatId, buyerId);
     const known = knownIds instanceof Set ? knownIds : new Set(knownIds || []);
     const after = nickMessagesAfter(session, greetingAtIso);
-    const updates = parseBuyerNickUpdates(messages, buyerId, after, known);
+    const updates = parseBuyerNickIntakes(messages, buyerId, after, known);
 
     for (const u of updates) {
         known.add(u.messageId);
@@ -246,32 +262,38 @@ export async function applyNickCommandUpdates(
         }
 
         if (!queuedForDelivery && client) {
-            const closed = buyerOrders.find(
-                (o) =>
-                    o.phase === 'completed'
-                    || o.gameDeliveryAt
-                    || (o.playerokStatus && playerokIsClosed(o.playerokStatus)),
-            );
-            if (closed) {
-                const hint = closed.gameDeliveryAt
-                    ? buildOrderAlreadyDoneHint()
-                    : buildOrderClosedOnPlayerokHint();
-                try {
-                    await sendChatMessage(client, chatId, hint);
-                    console.log(
-                        `[sell] ${closed.orderId.slice(0, 8)}…: /nick после закрытия (playerok=${closed.playerokStatus || '?'})`,
-                    );
-                } catch (e) {
-                    console.warn(`[sell] ответ в чат: ${e.message}`);
-                }
-            } else {
-                console.warn(
-                    `[sell] ник ${u.nick} — нечего выдавать (заказы: ${
+            if (buyerHasPendingOrder(state, chatId, buyerId)) {
+                console.log(
+                    `[sell] ник ${u.nick} (${u.via}) — открытый заказ, выдачу ждём flush (${
                         buyerOrders
+                            .filter((o) => !isOrderFulfilled(o))
                             .map((o) => `${o.orderId?.slice(0, 8)}… ${o.phase}`)
-                            .join(', ') || 'нет'
+                            .join(', ') || '?'
                     })`,
                 );
+            } else if (u.via === 'command') {
+                const closed = buyerOrders.find((o) => isOrderFulfilled(o));
+                if (closed) {
+                    const hint = closed.gameDeliveryAt
+                        ? buildOrderAlreadyDoneHint()
+                        : buildOrderClosedOnPlayerokHint();
+                    try {
+                        await sendChatMessage(client, chatId, hint);
+                        console.log(
+                            `[sell] ${closed.orderId.slice(0, 8)}…: /nick после закрытия (playerok=${closed.playerokStatus || '?'})`,
+                        );
+                    } catch (e) {
+                        console.warn(`[sell] ответ в чат: ${e.message}`);
+                    }
+                } else {
+                    console.warn(
+                        `[sell] /nick ${u.nick} — нечего выдавать (заказы: ${
+                            buyerOrders
+                                .map((o) => `${o.orderId?.slice(0, 8)}… ${o.phase}`)
+                                .join(', ') || 'нет'
+                        })`,
+                    );
+                }
             }
         }
     }
@@ -288,7 +310,14 @@ async function notifyDispatchingForOrder(client, state, chatId, order, nick) {
         await sendChatMessage(
             client,
             chatId,
-            buildDispatchingHint(nick, order.amountKk, order.payAmountKk),
+            buildDispatchingHint(nick, order.amountKk, {
+                lotKk: order.amountKk,
+                payAmountKk: order.payAmountKk,
+                wheelPct: order.bonusWheelPct,
+                repeatPct: order.bonusRepeatPct,
+                bonusWheelKk: order.bonusWheelKk,
+                bonusRepeatKk: order.bonusRepeatKk,
+            }),
         );
         setOrderPhase(state, order.orderId, order.phase, {
             dispatchAckSentAt: new Date().toISOString(),
@@ -407,6 +436,16 @@ export function registerDealOrders(state, deals, cutoffIso = null) {
             playerokStatus: paid.status,
             playerokStatusAt: paid.paidAt,
         });
+        if (
+            paid.chatId
+            && paid.buyerId
+            && paid.paidAt
+            && phase !== 'completed'
+            && phase !== 'cancelled'
+        ) {
+            const session = getBuyerSession(state, paid.chatId, paid.buyerId);
+            session.nickResetAt = paid.paidAt;
+        }
         console.log(
             `[sell] заказ ${oid.slice(0, 8)}…: ${paid.itemName} | ${paid.buyer} | ${paid.amountKk}kk`,
         );

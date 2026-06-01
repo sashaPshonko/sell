@@ -99,7 +99,8 @@ export function parseNickFromNikPhrase(text) {
 }
 
 /**
- * Ник из «Steve», «/nick Steve» или (опционально) «ник Steve».
+ * Ник из «/nick Steve» или «ник Steve» (слово «ник» обязательно, кроме /nick).
+ * Одно слово «Steve» без «ник» — не ник.
  * @param {{ allowNikPhrase?: boolean }} [opts]
  */
 export function parseNickFromText(text, opts = {}) {
@@ -110,9 +111,7 @@ export function parseNickFromText(text, opts = {}) {
     const cmd = t.match(/^\/nick\s+([a-zA-Z0-9_]{3,16})\s*$/i);
     if (cmd) return { nick: cmd[1], via: 'command' };
 
-    if (MC_NICK.test(t)) return { nick: t, via: 'plain' };
-
-    if (opts.allowNikPhrase) {
+    if (opts.allowNikPhrase !== false) {
         const fromPhrase = parseNickFromNikPhrase(t);
         if (fromPhrase) return fromPhrase;
     }
@@ -172,7 +171,7 @@ export function parseBuyerNick(messages, buyerUserId, afterIso, opts = {}) {
     return null;
 }
 
-/** Любой новый ник (/nick или строка) после момента afterIso */
+/** Новый ник (/nick или «ник …») после момента afterIso */
 export function findBuyerNickAttemptsAfter(
     messages,
     buyerUserId,
@@ -208,6 +207,19 @@ export function parseBuyerNickUpdates(messages, buyerUserId, afterIso, knownMess
         }
     }
     return updates;
+}
+
+/**
+ * Новые сообщения с ником для выдачи: /nick или «ник Steve».
+ * (для «заказ уже выполнен» — только /nick, см. parseBuyerNickUpdates)
+ */
+export function parseBuyerNickIntakes(
+    messages,
+    buyerUserId,
+    afterIso,
+    knownMessageIds = new Set(),
+) {
+    return findBuyerNickAttemptsAfter(messages, buyerUserId, afterIso, knownMessageIds);
 }
 
 /** Оплаты не-валюты (предметы) — только для лога */

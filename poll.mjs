@@ -6,7 +6,7 @@ import {
     findIgnoredPaidDeals,
     flattenChats,
     flattenMessages,
-    findBuyerNickAttemptsAfter,
+    parseBuyerNickUpdates,
     looksLikeInvalidNickAttempt,
 } from './parse.mjs';
 import { loadState, saveState, getOrder, setOrderPhase } from './state.mjs';
@@ -25,7 +25,6 @@ import {
     buildQueueStallHint,
     buildDeliveryOkHint,
     buildOrderAlreadyDoneHint,
-    buildDispatchingHint,
     DELIVERY_ANARCHY,
 } from './messages.mjs';
 import { confirmDealOnPlayerok } from './confirm.mjs';
@@ -50,7 +49,7 @@ import {
 import {
     buildDealStatusTimeline,
     syncChatOrdersFromPlayerok,
-    buyerHasFulfillmentOpen,
+    buyerHasPendingOrder,
 } from './lib/playerok-deal-sync.mjs';
 import {
     chatHasStuckOrders,
@@ -202,47 +201,54 @@ async function handleBotEvents(client, state) {
     }
 }
 
-async function handleCompletedLateNick(client, state, chatId, messages, sellerUserId) {
-    const chat = ensureChat(state, chatId);
-    const greetingAt = chat.greetingAt;
-
+/**
+ * Ответ «заказ уже выполнен» — только на явный /nick после закрытия старой сделки.
+ * «ник Steve» и /nick для новой оплаты — в syncChatNick / applyNickIntakes.
+ */
+async function handleCompletedLateNick(client, state, chatId, messages, dealTimeline) {
     for (const order of Object.values(state.orders)) {
         if (order.chatId !== chatId || order.phase !== 'completed') continue;
-        if (buyerHasFulfillmentOpen(state, chatId, order.buyerId)) continue;
+        if (buyerHasPendingOrder(state, chatId, order.buyerId)) continue;
 
-        const after =
-            order.playerokMarkedAt ||
-            order.dispatchedAt ||
-            order.greetedAt ||
-            greetingAt ||
-            new Date(0).toISOString();
-        const known = new Set(order.seenMessageIds || []);
-        const attempts = findBuyerNickAttemptsAfter(
-            messages,
-            order.buyerId,
-            after,
-            known,
+        const completionAt =
+            order.playerokMarkedAt || order.gameDeliveryAt || order.buyerNotifiedAt || null;
+        if (!completionAt) continue;
+
+        const oid = order.orderId || order.dealId;
+        const hasNewerPaid = [...dealTimeline.values()].some(
+            (snap) =>
+                snap.buyerId === order.buyerId
+                && snap.dealId !== oid
+                && snap.status === 'PAID'
+                && snap.at
+                && Date.parse(snap.at) > Date.parse(completionAt),
         );
+        if (hasNewerPaid) continue;
 
-        for (const a of attempts) {
-            known.add(a.messageId);
+        const known = new Set(order.seenLateNickMessageIds || []);
+        const updates = parseBuyerNickUpdates(messages, order.buyerId, completionAt, known);
+
+        for (const u of updates) {
+            known.add(u.messageId);
             if (order.lateNickHandled) continue;
             try {
                 await sendChatMessage(client, chatId, buildOrderAlreadyDoneHint());
-                console.log(`[sell] ${order.orderId.slice(0, 8)}…: /nick после выполнения`);
+                console.log(
+                    `[sell] ${oid.slice(0, 8)}…: /nick после выполнения (${u.nick})`,
+                );
             } catch (e) {
                 console.warn(`[sell] ${e.message}`);
             }
-            setOrderPhase(state, order.orderId, 'completed', {
-                seenMessageIds: [...known],
+            setOrderPhase(state, oid, 'completed', {
+                seenLateNickMessageIds: [...known],
                 lateNickHandled: true,
             });
             break;
         }
 
-        if (attempts.length) {
-            setOrderPhase(state, order.orderId, 'completed', {
-                seenMessageIds: [...known],
+        if (updates.length) {
+            setOrderPhase(state, oid, 'completed', {
+                seenLateNickMessageIds: [...known],
             });
         }
     }
@@ -296,7 +302,7 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
             console.warn(`[sell] глубокая история чата: ${e.message}`);
         }
     }
-    reconcileOrdersFromChatHistory(state, chatId, messages, sellerUserId);
+    reconcileOrdersFromChatHistory(state, chatId, messages);
     const dealTimeline = buildDealStatusTimeline(messages);
     syncChatOrdersFromPlayerok(state, chatId, dealTimeline);
 
@@ -311,7 +317,7 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
                 console.log(`[sell] пропуск (не валюта kk): ${skip.itemName}`);
             }
         }
-        await handleCompletedLateNick(client, state, chatId, messages, sellerUserId);
+        await handleCompletedLateNick(client, state, chatId, messages, dealTimeline);
         return;
     }
 
@@ -331,7 +337,7 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
     }
     const openDeals = filterActionableDeals(state, deals);
     if (!openDeals.length) {
-        await handleCompletedLateNick(client, state, chatId, messages, sellerUserId);
+        await handleCompletedLateNick(client, state, chatId, messages, dealTimeline);
         return;
     }
 
@@ -377,7 +383,7 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
 
     await flushChatDispatchQueue(state, openDeals, client);
 
-    await handleCompletedLateNick(client, state, chatId, messages, sellerUserId);
+    await handleCompletedLateNick(client, state, chatId, messages, dealTimeline);
 }
 
 async function tick() {
