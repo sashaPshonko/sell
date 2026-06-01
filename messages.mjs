@@ -89,6 +89,40 @@ export function buildNewOrderTwinHint(ctx = null) {
     return lines.join('\n');
 }
 
+/** Сразу после /ban продавцом — заказы с аккаунта не принимаются. */
+export function buildBannedBuyerBlockedNotice() {
+    return [
+        '🛑🛑🛑 ⛔ ⛔ ⛔',
+        '🔴🔴🔴 ЗАКАЗЫ НЕ ПРИНИМАЮТСЯ 🔴🔴🔴',
+        '',
+        '🚫 Тебя добавили в банлист продавца.',
+        '❌ С этого аккаунта валюту больше не выдают.',
+        '🚫 Любые новые оплаты будут отменены с возвратом.',
+        '',
+        '🛑🛑🛑 🔴 🔴 🔴',
+    ].join('\n');
+}
+
+/** Забаненный покупатель снова оплатил — возврат, без выдачи. */
+export function buildBannedBuyerRefundHint(playerokCancelled = false) {
+    const lines = [
+        '🛑🛑🛑 ⛔ ⛔ ⛔',
+        '🔴🔴🔴 ВЫДАЧА ОТКЛОНЕНА 🔴🔴🔴',
+        '',
+        'Продавец посчитал, что тебе больше не стоит выдавать валюту.',
+        '🚫 Повторные покупки с этого аккаунта не принимаются.',
+        '',
+        '💰 Оплата возвращена.',
+    ];
+    if (playerokCancelled) {
+        lines.push('✅ Возврат оформлен на PlayerOK.');
+    } else {
+        lines.push('💬 Если деньги не вернулись — поддержка PlayerOK.');
+    }
+    lines.push('', '🛑🛑🛑 🔴 🔴 🔴');
+    return lines.join('\n');
+}
+
 export function buildOrderCancelledHint(playerokCancelled = false) {
     const lines = [
         '❌ Заказ отменён.',

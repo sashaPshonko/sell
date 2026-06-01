@@ -46,11 +46,11 @@ function nickMessagesAfter(session, greetingAtIso) {
     return candidates.reduce((a, b) => (Date.parse(a) >= Date.parse(b) ? a : b));
 }
 
-export function syncChatNick(state, chatId, messages, buyerId, greetingAtIso) {
+export function syncChatNick(state, chatId, messages, buyerId, greetingAtIso, sellerUserId = null) {
     const session = getBuyerSession(state, chatId, buyerId);
     const after = nickMessagesAfter(session, greetingAtIso);
 
-    const nickParseOpts = { allowNikPhrase: true };
+    const nickParseOpts = { allowNikPhrase: true, sellerUserId };
     const latest = findLatestBuyerNick(messages, buyerId, after, nickParseOpts);
     const first = parseBuyerNick(messages, buyerId, after, nickParseOpts);
     const pick = latest?.via === 'command' ? latest : first || latest;
@@ -242,11 +242,15 @@ export async function applyNickCommandUpdates(
     greetingAtIso,
     knownIds,
     client = null,
+    sellerUserId = null,
 ) {
     const session = getBuyerSession(state, chatId, buyerId);
     const known = knownIds instanceof Set ? knownIds : new Set(knownIds || []);
     const after = nickMessagesAfter(session, greetingAtIso);
-    const updates = parseBuyerNickIntakes(messages, buyerId, after, known);
+    const updates = parseBuyerNickIntakes(messages, buyerId, after, known, {
+        allowNikPhrase: true,
+        sellerUserId,
+    });
 
     for (const u of updates) {
         known.add(u.messageId);
@@ -256,7 +260,8 @@ export async function applyNickCommandUpdates(
         session.messageId = u.messageId;
         session.nickAt = u.at;
 
-        console.log(`[sell] чат ${chatId.slice(0, 8)}…: ник → ${u.nick}`);
+        const who = u.fromSeller ? ' (продавец)' : '';
+        console.log(`[sell] чат ${chatId.slice(0, 8)}…: ник → ${u.nick}${who}`);
 
         let queuedForDelivery = false;
         const buyerOrders = ordersInChat(state, chatId).filter((o) => o.buyerId === buyerId);

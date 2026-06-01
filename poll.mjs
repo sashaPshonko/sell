@@ -49,6 +49,11 @@ import {
     migrateStaleOrders,
 } from './lib/deal-cutoff.mjs';
 import {
+    applySellerBanCommands,
+    rejectBannedBuyerOrdersInChat,
+    isBuyerBanned,
+} from './lib/banlist.mjs';
+import {
     buildDealStatusTimeline,
     syncChatOrdersFromPlayerok,
     buyerHasPendingOrder,
@@ -205,9 +210,9 @@ async function handleBotEvents(client, state) {
 
 /**
  * Ответ «заказ уже выполнен» — только на явный /nick после закрытия старой сделки.
- * «ник Steve» и /nick для новой оплаты — в syncChatNick / applyNickIntakes.
+ * «ник Steve» и /nick для новой оплаты — в syncChatNick / applyNickIntakes (и /nick от продавца).
  */
-async function handleCompletedLateNick(client, state, chatId, messages, dealTimeline) {
+async function handleCompletedLateNick(client, state, chatId, messages, dealTimeline, sellerUserId) {
     for (const order of Object.values(state.orders)) {
         if (order.chatId !== chatId || order.phase !== 'completed') continue;
         if (buyerHasPendingOrder(state, chatId, order.buyerId)) continue;
@@ -228,7 +233,13 @@ async function handleCompletedLateNick(client, state, chatId, messages, dealTime
         if (hasNewerPaid) continue;
 
         const known = new Set(order.seenLateNickMessageIds || []);
-        const updates = parseBuyerNickUpdates(messages, order.buyerId, completionAt, known);
+        const updates = parseBuyerNickUpdates(
+            messages,
+            order.buyerId,
+            completionAt,
+            known,
+            sellerUserId,
+        );
 
         for (const u of updates) {
             known.add(u.messageId);
@@ -308,6 +319,16 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
     const dealTimeline = buildDealStatusTimeline(messages);
     syncChatOrdersFromPlayerok(state, chatId, dealTimeline);
 
+    const chatForBan = ensureChat(state, chatId);
+    chatForBan.processedBanMessageIds = await applySellerBanCommands(
+        client,
+        state,
+        chatId,
+        messages,
+        sellerUserId,
+        new Set(chatForBan.processedBanMessageIds || []),
+    );
+
     const dealsFromMessages = findAllCurrencyPaidDeals(messages);
 
     if (!dealsFromMessages.length && !chatHasOpenOrders(state, chatId)) {
@@ -319,7 +340,7 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
                 console.log(`[sell] пропуск (не валюта kk): ${skip.itemName}`);
             }
         }
-        await handleCompletedLateNick(client, state, chatId, messages, dealTimeline);
+        await handleCompletedLateNick(client, state, chatId, messages, dealTimeline, sellerUserId);
         return;
     }
 
@@ -331,15 +352,19 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
 
     const newlyRegistered = registerDealOrders(state, dealsFromMessages, cutoffIso);
     syncChatOrdersFromPlayerok(state, chatId, dealTimeline);
+    await rejectBannedBuyerOrdersInChat(client, state, chatId);
 
     if (republishWhen() === 'paid') {
         for (const order of newlyRegistered) {
+            if (isBuyerBanned(state, order.buyerId)) continue;
             scheduleRepublishItem(client, state, order);
         }
     }
-    const openDeals = filterActionableDeals(state, deals);
+    const openDeals = filterActionableDeals(state, deals).filter(
+        (d) => !isBuyerBanned(state, d.buyerId),
+    );
     if (!openDeals.length) {
-        await handleCompletedLateNick(client, state, chatId, messages, dealTimeline);
+        await handleCompletedLateNick(client, state, chatId, messages, dealTimeline, sellerUserId);
         return;
     }
 
@@ -375,7 +400,7 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
             greetingAt,
             cancelIds,
         );
-        syncChatNick(state, chatId, messages, buyerId, greetingAt);
+        syncChatNick(state, chatId, messages, buyerId, greetingAt, sellerUserId);
         knownIds = await applyNickCommandUpdates(
             state,
             chatId,
@@ -384,16 +409,18 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
             greetingAt,
             knownIds,
             client,
+            sellerUserId,
         );
     }
     chatKnown.processedNickMessageIds = [...knownIds];
     chatKnown.processedCancelMessageIds = [...cancelIds];
+    chatKnown.processedBanMessageIds = chatForBan.processedBanMessageIds;
 
     warnInvalidNickOnce(client, state, chatId, messages, openDeals, greetingAt);
 
     await flushChatDispatchQueue(state, openDeals, client);
 
-    await handleCompletedLateNick(client, state, chatId, messages, dealTimeline);
+    await handleCompletedLateNick(client, state, chatId, messages, dealTimeline, sellerUserId);
 }
 
 async function tick() {

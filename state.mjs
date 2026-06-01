@@ -8,6 +8,7 @@ const EMPTY = {
     confirmedDeals: {},
     chats: {},
     buyerBonus: {},
+    bannedBuyers: {},
     scheduledChatMessages: [],
 };
 
@@ -20,6 +21,7 @@ export async function loadState() {
     if (!state.chats) state.chats = {};
     if (!state.buyerBonus) state.buyerBonus = {};
     if (!state.scheduledChatMessages) state.scheduledChatMessages = [];
+    if (!state.bannedBuyers) state.bannedBuyers = {};
     return state;
 }
 
