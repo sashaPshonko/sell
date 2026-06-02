@@ -44,6 +44,7 @@ if (chat?.buyers?.[order.buyerId]) {
     delete buyer.via;
     delete buyer.messageId;
     delete buyer.nickAt;
+    delete buyer.appliedNickMessageId;
     delete buyer.wrongNickWarned;
     buyer.nickResetAt = new Date().toISOString();
 }

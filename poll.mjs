@@ -8,8 +8,9 @@ import {
     flattenMessages,
     parseBuyerNickUpdates,
     looksLikeInvalidNickAttempt,
+    findGreetingAnchorInChat,
 } from './parse.mjs';
-import { loadState, saveState, getOrder, setOrderPhase } from './state.mjs';
+import { loadState, saveState, getOrder, setOrderPhase, ordersInChat } from './state.mjs';
 import { recordBuyerDelivery } from './lib/pay-bonus.mjs';
 import {
     scheduleRepeatPromoMessage,
@@ -35,6 +36,7 @@ import {
     filterActionableDeals,
     mergeChatDeals,
     chatHasOpenOrders,
+    chatHasPendingOrders,
     ensureChatGreeting,
     sendTwinRemindersForNewOrders,
     syncChatNick,
@@ -399,7 +401,7 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
 
     const dealsFromMessages = findAllCurrencyPaidDeals(messages);
 
-    if (!dealsFromMessages.length && !chatHasOpenOrders(state, chatId)) {
+    if (!dealsFromMessages.length && !chatHasOpenOrders(state, chatId) && !chatHasPendingOrders(state, chatId)) {
         for (const skip of findIgnoredPaidDeals(messages)) {
             const key = `skip:${skip.dealId}`;
             if (!state._loggedSkips) state._loggedSkips = {};
@@ -431,7 +433,14 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
     const openDeals = filterActionableDeals(state, deals).filter(
         (d) => !isBuyerBanned(state, d.buyerId),
     );
-    if (!openDeals.length) {
+    const pendingBuyerIds = [
+        ...new Set(
+            ordersInChat(state, chatId)
+                .filter((o) => o.buyerId && !isOrderFulfilled(o) && !isBuyerBanned(state, o.buyerId))
+                .map((o) => o.buyerId),
+        ),
+    ];
+    if (!openDeals.length && !pendingBuyerIds.length) {
         await handleCompletedLateNick(client, state, chatId, messages, dealTimeline, sellerUserId);
         return;
     }
@@ -440,20 +449,25 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
     const hadGreetingBefore =
         chatBeforeGreeting.greetingSent || hasGreetingInChat(messages, sellerUserId);
 
-    const greetingAt = await ensureChatGreeting(
-        client,
-        state,
-        chatId,
-        messages,
-        sellerUserId,
-        openDeals,
-    );
+    let greetingAt = chatBeforeGreeting.greetingAt || null;
+    if (openDeals.length) {
+        greetingAt = await ensureChatGreeting(
+            client,
+            state,
+            chatId,
+            messages,
+            sellerUserId,
+            openDeals,
+        );
+    } else if (!greetingAt) {
+        greetingAt = findGreetingAnchorInChat(messages, sellerUserId);
+    }
 
     if (hadGreetingBefore && newlyRegistered.length) {
         await sendTwinRemindersForNewOrders(client, state, chatId, newlyRegistered);
     }
 
-    const buyerIds = [...new Set(openDeals.map((d) => d.buyerId))];
+    const buyerIds = [...new Set([...openDeals.map((d) => d.buyerId), ...pendingBuyerIds])];
     const chatKnown = ensureChat(state, chatId);
     if (!chatKnown.processedNickByBuyer) {
         chatKnown.processedNickByBuyer = {};

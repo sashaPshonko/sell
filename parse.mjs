@@ -68,7 +68,7 @@ function sellerNickCommandText(text) {
     return /^\/nick\s+[a-zA-Z0-9_]{3,16}\s*$/i.test(String(text || '').trim());
 }
 
-function isSellerNickCommand(msg, sellerUserId, sellerUsername) {
+export function isSellerNickCommand(msg, sellerUserId, sellerUsername) {
     if (!msg?.text || !sellerNickCommandText(msg.text)) return false;
     const uid = msg.user?.id;
     if (sellerUserId && sameUserId(uid, sellerUserId)) return true;
@@ -246,7 +246,7 @@ export function findBuyerNickAttemptsAfter(
     const sellerKnownIds = opts.sellerKnownIds ?? null;
     const parseOpts = { ...opts, sellerUserId, sellerUsername };
     const after = afterIso ? Date.parse(afterIso) : 0;
-    const out = [];
+    let latest = null;
     for (const msg of messages) {
         if (!isNickMessageForBuyer(msg, buyerUserId, sellerUserId, parseOpts)) continue;
         if (after && Date.parse(msg.createdAt) < after) continue;
@@ -258,9 +258,16 @@ export function findBuyerNickAttemptsAfter(
         }
         if (nickIntakeAlreadyKnown(msg, buyerUserId, knownMessageIds)) continue;
         const parsed = parseNickFromMessage(msg, buyerUserId, sellerUserId, parseOpts);
-        if (parsed) out.push({ ...parsed, messageId: msg.id, at: msg.createdAt });
+        if (!parsed) continue;
+        const fromSeller = isSellerNickCommand(msg, sellerUserId, sellerUsername);
+        latest = {
+            ...parsed,
+            fromSeller,
+            messageId: msg.id,
+            at: msg.createdAt,
+        };
     }
-    return out;
+    return latest ? [latest] : [];
 }
 
 /** Новые /nick после уже отправленного заказа (смена ника, только команда) */
