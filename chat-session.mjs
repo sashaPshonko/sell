@@ -41,9 +41,12 @@ import {
  * @returns {string|null}
  */
 function nickMessagesAfter(session, greetingAtIso) {
-    const candidates = [greetingAtIso, session.nickResetAt].filter(Boolean);
-    if (!candidates.length) return null;
-    return candidates.reduce((a, b) => (Date.parse(a) >= Date.parse(b) ? a : b));
+    /**
+     * Критично: не сужаем окно /nick по свежему greetingAt.
+     * Иначе после ресинка/повторного приветствия поздний /nick может "выпасть".
+     */
+    if (session.nickResetAt) return session.nickResetAt;
+    return greetingAtIso || null;
 }
 
 export function syncChatNick(state, chatId, messages, buyerId, greetingAtIso, sellerUserId = null) {
