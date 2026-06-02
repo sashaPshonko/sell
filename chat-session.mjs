@@ -250,10 +250,26 @@ export async function applyNickCommandUpdates(
     const session = getBuyerSession(state, chatId, buyerId);
     const known = knownIds instanceof Set ? knownIds : new Set(knownIds || []);
     const after = nickMessagesAfter(session, greetingAtIso);
-    const updates = parseBuyerNickIntakes(messages, buyerId, after, known, {
+    let updates = parseBuyerNickIntakes(messages, buyerId, after, known, {
         allowNikPhrase: true,
         sellerUserId,
     });
+
+    // Fallback: если /nick уже был в чате, но "залип" в processedNickMessageIds,
+    // а у покупателя есть незавершённые заказы без выданного статуса — подхватываем повторно.
+    if (!updates.length) {
+        const buyerOrders = ordersInChat(state, chatId).filter((o) => o.buyerId === buyerId);
+        const hasOpen = buyerOrders.some((o) => isActionableOrder(o) && canDispatchToSellbot(o));
+        if (hasOpen) {
+            const latest = findLatestBuyerNick(messages, buyerId, after, {
+                allowNikPhrase: true,
+                sellerUserId,
+            });
+            if (latest?.nick && latest.messageId && latest.messageId !== session.messageId) {
+                updates = [latest];
+            }
+        }
+    }
 
     for (const u of updates) {
         known.add(u.messageId);
