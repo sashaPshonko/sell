@@ -20,7 +20,6 @@ const config = {
     playerOfflineMarker:
         workerData.playerOfflineMarker || '[✘] Ошибка! Указанный игрок не найден!',
     invalidNickMarkers: workerData.invalidNickMarkers || [],
-    failMarkers: workerData.failMarkers || [],
     idleQuitMs: workerData.idleQuitMs ?? 25_000,
     deliverTimeoutMs: workerData.deliverTimeoutMs ?? 60_000,
     payLoopWaitMs: workerData.payLoopWaitMs ?? 2000,
@@ -46,7 +45,6 @@ let idleQuitTimer = null;
 let healthCheckActive = false;
 /** Результат текущей итерации /pay (ставится из чата) */
 let payOutcome = null;
-let payFailReason = null;
 
 const chatLog = createChatLogger(config.username);
 const log = (msg) => chatLog.logInfo(msg);
@@ -94,23 +92,6 @@ function buildPayCommand(order) {
         .replace(/\{amount\}/gi, amount);
 }
 
-function amountHints(order) {
-    const n = Number(order.amount);
-    const hints = [String(n), formatPayAmount(order.amount)];
-    const suffix = config.paySuffix || '';
-    if (suffix) {
-        hints.push(`${n} ${suffix}`, `${n}${suffix}`, `${n} ${suffix}`.toUpperCase());
-    }
-    const mult = Number(config.payAmountMultiplier || 0);
-    if (mult > 0) hints.push(String(Math.round(n * mult)));
-    return [...new Set(hints.filter(Boolean).map((h) => h.toLowerCase()))];
-}
-
-function amountInMessage(text, order) {
-    const lower = text.toLowerCase();
-    return amountHints(order).some((h) => lower.includes(h));
-}
-
 function isLikelyPlayerChat(text) {
     const t = stripMcFormatting(text).trim();
     // Типовые форматы пользовательского чата: "<nick> ...", "nick: ...", "nick » ..."
@@ -148,9 +129,6 @@ function messageMatchesOrder(text, order, kind) {
         return false;
     }
     const hasNick = nickInMessage(text, order.nick);
-    const hasAmount = amountInMessage(text, order);
-
-    if (kind === 'fail') return hasNick || hasAmount;
     return hasNick;
 }
 
@@ -179,7 +157,6 @@ function shutdownBot(reason) {
     delivering = false;
     currentOrder = null;
     payOutcome = null;
-    payFailReason = null;
     try {
         bot?.quit();
     } catch {
@@ -398,7 +375,6 @@ async function ensureBot() {
 
 function resetPayOutcome() {
     payOutcome = null;
-    payFailReason = null;
 }
 
 /** Цикл /pay как safeAH в 4NAREK: antiAfk → команда → пауза → проверка успеха */
@@ -424,10 +400,6 @@ async function payDeliveryLoop() {
         }
         if (payOutcome === 'player_offline') {
             abortDeliveryPlayerOffline();
-            return;
-        }
-        if (payOutcome === 'fail') {
-            finishDelivery(payFailReason || 'fail');
             return;
         }
 
@@ -480,10 +452,6 @@ async function payDeliveryLoop() {
             abortDeliveryPlayerOffline();
             return;
         }
-        if (payOutcome === 'fail') {
-            finishDelivery(payFailReason || 'fail');
-            return;
-        }
     }
 
     if (delivering && currentOrder) {
@@ -506,11 +474,6 @@ function trySetPayOutcomeFromChat(text) {
     }
     if (matchesAny(text, config.invalidNickMarkers) && messageMatchesOrder(text, currentOrder, 'invalid')) {
         payOutcome = 'invalid';
-        return;
-    }
-    if (matchesAny(text, config.failMarkers) && messageMatchesOrder(text, currentOrder, 'fail')) {
-        payOutcome = 'fail';
-        payFailReason = text.slice(0, 120);
     }
 }
 

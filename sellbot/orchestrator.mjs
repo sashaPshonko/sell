@@ -160,7 +160,6 @@ function workerDataPayload() {
         payAmountMultiplier: cfg.payAmountMultiplier,
         playerOfflineMarker: cfg.playerOfflineMarker,
         invalidNickMarkers: cfg.invalidNickMarkers,
-        failMarkers: cfg.failMarkers,
         idleQuitMs: cfg.idleQuitMs,
         deliverTimeoutMs: cfg.deliverTimeoutMs,
         payLoopWaitMs: cfg.payLoopWaitMs,

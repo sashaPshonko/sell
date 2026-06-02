@@ -29,7 +29,6 @@ export const DEFAULTS = {
     /** Единственная строка: покупатель не на анархии / не в сети на сервере */
     playerOfflineMarker: '[✘] Ошибка! Указанный игрок не найден!',
     invalidNickMarkers: ['ник не найден'],
-    failMarkers: ['недостаточно', 'ошибка', 'отказано'],
     telegramToken: '',
     telegramChatId: '',
     telegramSkip: false,
@@ -100,7 +99,6 @@ export async function loadSettings(path = BOT_JSON) {
             pick(entry, 'playerOfflineMarker', DEFAULTS.playerOfflineMarker),
         ).trim(),
         invalidNickMarkers: parseMarkers(entry.invalidNickMarkers, DEFAULTS.invalidNickMarkers),
-        failMarkers: parseMarkers(entry.failMarkers, DEFAULTS.failMarkers),
         telegramToken: String(pick(entry, 'telegramToken', DEFAULTS.telegramToken)).trim(),
         telegramChatId: String(pick(entry, 'telegramChatId', DEFAULTS.telegramChatId)).trim(),
         telegramSkip: pick(entry, 'telegramSkip', DEFAULTS.telegramSkip) === true,
