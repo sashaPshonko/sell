@@ -49,6 +49,10 @@ if (chat?.buyers?.[order.buyerId]) {
 }
 if (chat) {
     chat.processedNickMessageIds = [];
+    if (order.buyerId) {
+        if (chat.processedNickByBuyer) delete chat.processedNickByBuyer[order.buyerId];
+        if (chat.processedSellerNickByBuyer) delete chat.processedSellerNickByBuyer[order.buyerId];
+    }
 }
 
 await writeFile(statePath, JSON.stringify(state, null, 2));

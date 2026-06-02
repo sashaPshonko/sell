@@ -59,6 +59,35 @@ function buildCurrencyDeal(msg) {
 
 const MC_NICK = /^[a-zA-Z0-9_]{3,16}$/;
 
+export function sameUserId(a, b) {
+    if (a == null || b == null) return false;
+    return String(a) === String(b);
+}
+
+function sellerNickCommandText(text) {
+    return /^\/nick\s+[a-zA-Z0-9_]{3,16}\s*$/i.test(String(text || '').trim());
+}
+
+function isSellerNickCommand(msg, sellerUserId, sellerUsername) {
+    if (!msg?.text || !sellerNickCommandText(msg.text)) return false;
+    const uid = msg.user?.id;
+    if (sellerUserId && sameUserId(uid, sellerUserId)) return true;
+    if (
+        sellerUsername
+        && msg.user?.username
+        && String(msg.user.username).toLowerCase() === String(sellerUsername).toLowerCase()
+    ) {
+        return true;
+    }
+    return false;
+}
+
+/** processedNick: только сообщения покупателя; /nick продавца не «съедается» на весь чат */
+export function nickIntakeAlreadyKnown(msg, buyerUserId, knownMessageIds) {
+    if (!knownMessageIds?.has?.(msg?.id)) return false;
+    return sameUserId(msg.user?.id, buyerUserId);
+}
+
 function textTokens(text) {
     return String(text)
         .trim()
@@ -128,22 +157,20 @@ export function parseNickFromText(text, opts = {}) {
 }
 
 /** Покупатель или продавец (/nick) задаёт ник для выдачи. */
-export function isNickMessageForBuyer(msg, buyerUserId, sellerUserId = null) {
+export function isNickMessageForBuyer(msg, buyerUserId, sellerUserId = null, opts = {}) {
     if (!msg?.text || msg.deal) return false;
-    const uid = msg.user?.id;
-    if (uid === buyerUserId) return true;
-    if (sellerUserId && uid === sellerUserId) {
-        return /^\/nick\s+[a-zA-Z0-9_]{3,16}\s*$/i.test(String(msg.text).trim());
-    }
-    return false;
+    if (sameUserId(msg.user?.id, buyerUserId)) return true;
+    const sellerUsername = opts.sellerUsername ?? null;
+    return isSellerNickCommand(msg, sellerUserId, sellerUsername);
 }
 
 /**
  * @param {{ allowNikPhrase?: boolean }} [opts]
  */
 export function parseNickFromMessage(msg, buyerUserId, sellerUserId = null, opts = {}) {
-    if (!isNickMessageForBuyer(msg, buyerUserId, sellerUserId)) return null;
-    const fromSeller = sellerUserId && msg.user?.id === sellerUserId;
+    if (!isNickMessageForBuyer(msg, buyerUserId, sellerUserId, opts)) return null;
+    const sellerUsername = opts.sellerUsername ?? null;
+    const fromSeller = isSellerNickCommand(msg, sellerUserId, sellerUsername);
     const parseOpts = fromSeller ? { ...opts, allowNikPhrase: false } : opts;
     const parsed = parseNickFromText(msg.text, parseOpts);
     if (!parsed) return null;
@@ -175,12 +202,13 @@ export function findGreetingAnchorInChat(messages, sellerUserId) {
 /** Последний валидный ник покупателя после afterIso (/nick важнее при выборе с first) */
 export function findLatestBuyerNick(messages, buyerUserId, afterIso, opts = {}) {
     const sellerUserId = opts.sellerUserId ?? null;
+    const parseOpts = { ...opts, sellerUserId };
     const after = afterIso ? Date.parse(afterIso) : 0;
     let latest = null;
     for (const msg of messages) {
-        if (!isNickMessageForBuyer(msg, buyerUserId, sellerUserId)) continue;
+        if (!isNickMessageForBuyer(msg, buyerUserId, sellerUserId, parseOpts)) continue;
         if (after && Date.parse(msg.createdAt) < after) continue;
-        const parsed = parseNickFromMessage(msg, buyerUserId, sellerUserId, opts);
+        const parsed = parseNickFromMessage(msg, buyerUserId, sellerUserId, parseOpts);
         if (parsed) {
             latest = { ...parsed, messageId: msg.id, at: msg.createdAt, raw: msg.text.trim() };
         }
@@ -191,12 +219,13 @@ export function findLatestBuyerNick(messages, buyerUserId, afterIso, opts = {}) 
 /** Первый валидный ник покупателя после приветствия */
 export function parseBuyerNick(messages, buyerUserId, afterIso, opts = {}) {
     const sellerUserId = opts.sellerUserId ?? null;
+    const parseOpts = { ...opts, sellerUserId };
     const after = afterIso ? Date.parse(afterIso) : 0;
     for (const msg of messages) {
-        if (!isNickMessageForBuyer(msg, buyerUserId, sellerUserId)) continue;
+        if (!isNickMessageForBuyer(msg, buyerUserId, sellerUserId, parseOpts)) continue;
         if (after && Date.parse(msg.createdAt) < after) continue;
 
-        const parsed = parseNickFromMessage(msg, buyerUserId, sellerUserId, opts);
+        const parsed = parseNickFromMessage(msg, buyerUserId, sellerUserId, parseOpts);
         if (parsed) {
             return { ...parsed, messageId: msg.id, at: msg.createdAt, raw: msg.text.trim() };
         }
@@ -213,13 +242,22 @@ export function findBuyerNickAttemptsAfter(
     opts = {},
 ) {
     const sellerUserId = opts.sellerUserId ?? null;
+    const sellerUsername = opts.sellerUsername ?? null;
+    const sellerKnownIds = opts.sellerKnownIds ?? null;
+    const parseOpts = { ...opts, sellerUserId, sellerUsername };
     const after = afterIso ? Date.parse(afterIso) : 0;
     const out = [];
     for (const msg of messages) {
-        if (!isNickMessageForBuyer(msg, buyerUserId, sellerUserId)) continue;
+        if (!isNickMessageForBuyer(msg, buyerUserId, sellerUserId, parseOpts)) continue;
         if (after && Date.parse(msg.createdAt) < after) continue;
-        if (knownMessageIds.has(msg.id)) continue;
-        const parsed = parseNickFromMessage(msg, buyerUserId, sellerUserId, opts);
+        if (
+            sellerKnownIds?.has?.(msg.id)
+            && isSellerNickCommand(msg, sellerUserId, sellerUsername)
+        ) {
+            continue;
+        }
+        if (nickIntakeAlreadyKnown(msg, buyerUserId, knownMessageIds)) continue;
+        const parsed = parseNickFromMessage(msg, buyerUserId, sellerUserId, parseOpts);
         if (parsed) out.push({ ...parsed, messageId: msg.id, at: msg.createdAt });
     }
     return out;
@@ -232,16 +270,18 @@ export function parseBuyerNickUpdates(
     afterIso,
     knownMessageIds = new Set(),
     sellerUserId = null,
+    sellerUsername = null,
 ) {
+    const parseOpts = { sellerUserId, sellerUsername };
     const after = afterIso ? Date.parse(afterIso) : 0;
     const updates = [];
     for (const msg of messages) {
-        if (!isNickMessageForBuyer(msg, buyerUserId, sellerUserId)) continue;
+        if (!isNickMessageForBuyer(msg, buyerUserId, sellerUserId, parseOpts)) continue;
         if (after && Date.parse(msg.createdAt) < after) continue;
-        if (knownMessageIds.has(msg.id)) continue;
-        const parsed = parseNickFromMessage(msg, buyerUserId, sellerUserId);
+        if (nickIntakeAlreadyKnown(msg, buyerUserId, knownMessageIds)) continue;
+        const parsed = parseNickFromMessage(msg, buyerUserId, sellerUserId, parseOpts);
         if (!parsed) continue;
-        const fromSeller = sellerUserId && msg.user?.id === sellerUserId;
+        const fromSeller = isSellerNickCommand(msg, sellerUserId, sellerUsername);
         if (!fromSeller && parsed.via !== 'command') continue;
         updates.push({ ...parsed, messageId: msg.id, at: msg.createdAt });
     }

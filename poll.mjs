@@ -455,10 +455,18 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
 
     const buyerIds = [...new Set(openDeals.map((d) => d.buyerId))];
     const chatKnown = ensureChat(state, chatId);
-    let knownIds = new Set(chatKnown.processedNickMessageIds || []);
+    if (!chatKnown.processedNickByBuyer) {
+        chatKnown.processedNickByBuyer = {};
+    }
+    if (!chatKnown.processedSellerNickByBuyer) {
+        chatKnown.processedSellerNickByBuyer = {};
+    }
+    const sellerUsername = state.sellerUsername ?? null;
     let cancelIds = new Set(chatKnown.processedCancelMessageIds || []);
 
     for (const buyerId of buyerIds) {
+        let knownIds = new Set(chatKnown.processedNickByBuyer[buyerId] || []);
+        const sellerKnownIds = new Set(chatKnown.processedSellerNickByBuyer[buyerId] || []);
         cancelIds = await applyCancelCommands(
             client,
             state,
@@ -468,8 +476,16 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
             greetingAt,
             cancelIds,
         );
-        syncChatNick(state, chatId, messages, buyerId, greetingAt, sellerUserId);
-        knownIds = await applyNickCommandUpdates(
+        syncChatNick(
+            state,
+            chatId,
+            messages,
+            buyerId,
+            greetingAt,
+            sellerUserId,
+            sellerUsername,
+        );
+        const nickHandled = await applyNickCommandUpdates(
             state,
             chatId,
             messages,
@@ -478,9 +494,12 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
             knownIds,
             client,
             sellerUserId,
+            sellerUsername,
+            sellerKnownIds,
         );
+        chatKnown.processedNickByBuyer[buyerId] = [...nickHandled.known];
+        chatKnown.processedSellerNickByBuyer[buyerId] = [...nickHandled.sellerKnown];
     }
-    chatKnown.processedNickMessageIds = [...knownIds];
     chatKnown.processedCancelMessageIds = [...cancelIds];
     chatKnown.processedBanMessageIds = chatForBan.processedBanMessageIds;
 

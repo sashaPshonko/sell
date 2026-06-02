@@ -49,26 +49,37 @@ function nickMessagesAfter(session, greetingAtIso) {
     return greetingAtIso || null;
 }
 
-export function syncChatNick(state, chatId, messages, buyerId, greetingAtIso, sellerUserId = null) {
+export function syncChatNick(
+    state,
+    chatId,
+    messages,
+    buyerId,
+    greetingAtIso,
+    sellerUserId = null,
+    sellerUsername = null,
+) {
     const session = getBuyerSession(state, chatId, buyerId);
     const after = nickMessagesAfter(session, greetingAtIso);
 
-    const nickParseOpts = { allowNikPhrase: true, sellerUserId };
+    const nickParseOpts = { allowNikPhrase: true, sellerUserId, sellerUsername };
     const latest = findLatestBuyerNick(messages, buyerId, after, nickParseOpts);
     const first = parseBuyerNick(messages, buyerId, after, nickParseOpts);
     const pick = latest?.via === 'command' ? latest : first || latest;
 
     if (pick?.nick) {
-        const changed = session.nick !== pick.nick || session.messageId !== pick.messageId;
         session.nick = pick.nick;
         session.via = pick.via;
         session.messageId = pick.messageId;
         session.nickAt = pick.at;
-        if (changed) {
-            for (const order of ordersInChat(state, chatId)) {
-                if (order.buyerId === buyerId && order.phase !== 'completed' && order.phase !== 'cancelled') {
-                    order.nick = pick.nick;
-                }
+        for (const order of ordersInChat(state, chatId)) {
+            if (order.buyerId !== buyerId) continue;
+            if (order.phase === 'completed' || order.phase === 'cancelled') continue;
+            order.nick = pick.nick;
+            if (order.pausedUntilNick) {
+                order.pausedUntilNick = false;
+            }
+            if (isActionableOrder(order) && order.phase === 'new') {
+                setOrderPhase(state, order.orderId, 'awaiting_nick', { nick: pick.nick });
             }
         }
         return pick.nick;
@@ -158,7 +169,7 @@ export async function sendTwinRemindersForNewOrders(client, state, chatId, newOr
 }
 
 /**
- * /cancel — отменить все незавершённые заказы покупателя в этом чате.
+ * /cancel — отменить незавершённые заказы покупателя, оплаченные не позже этого /cancel.
  */
 export async function applyCancelCommands(
     client,
@@ -170,13 +181,19 @@ export async function applyCancelCommands(
     knownIds,
 ) {
     const known = knownIds instanceof Set ? knownIds : new Set(knownIds || []);
-    const after = greetingAtIso ? Date.parse(greetingAtIso) : 0;
+    const session = getBuyerSession(state, chatId, buyerId);
+    const afterIso = nickMessagesAfter(session, greetingAtIso);
+    const after = afterIso ? Date.parse(afterIso) : 0;
     let replied = false;
 
     for (const msg of messages) {
         if (!msg?.text || msg.deal) continue;
         if (msg.user?.id !== buyerId) continue;
-        if (after && Date.parse(msg.createdAt) < after) continue;
+        const msgAt = Date.parse(msg.createdAt);
+        if (isCancelCommand(msg.text) && after && msgAt < after) {
+            known.add(msg.id);
+            continue;
+        }
         if (known.has(msg.id)) continue;
         if (!isCancelCommand(msg.text)) continue;
 
@@ -187,6 +204,8 @@ export async function applyCancelCommands(
         for (const order of ordersInChat(state, chatId)) {
             if (order.buyerId !== buyerId) continue;
             if (order.phase === 'completed' || order.phase === 'cancelled') continue;
+            const paidAtMs = order.paidAt ? Date.parse(order.paidAt) : 0;
+            if (paidAtMs > msgAt) continue;
 
             const wasDispatched = order.phase === 'dispatched';
             setOrderPhase(state, order.orderId, 'cancelled', {
@@ -214,7 +233,7 @@ export async function applyCancelCommands(
             console.log(`[sell] ${order.orderId.slice(0, 8)}…: отменён покупателем`);
         }
 
-        if (!replied) {
+        if (cancelled > 0 && !replied) {
             try {
                 await sendChatMessage(
                     client,
@@ -225,9 +244,7 @@ export async function applyCancelCommands(
                 console.warn(`[sell] отмена, ответ в чат: ${e.message}`);
             }
             replied = true;
-        }
-
-        if (!cancelled) {
+        } else if (!cancelled) {
             console.log(`[sell] /cancel: нечего отменять (чат ${chatId.slice(0, 8)}…)`);
         }
     }
@@ -246,33 +263,49 @@ export async function applyNickCommandUpdates(
     knownIds,
     client = null,
     sellerUserId = null,
+    sellerUsername = null,
+    sellerKnownIds = null,
 ) {
     const session = getBuyerSession(state, chatId, buyerId);
     const known = knownIds instanceof Set ? knownIds : new Set(knownIds || []);
+    const sellerKnown = sellerKnownIds instanceof Set
+        ? sellerKnownIds
+        : new Set(sellerKnownIds || []);
     const after = nickMessagesAfter(session, greetingAtIso);
-    let updates = parseBuyerNickIntakes(messages, buyerId, after, known, {
+    const nickParseOpts = {
         allowNikPhrase: true,
         sellerUserId,
-    });
+        sellerUsername,
+        sellerKnownIds: sellerKnown,
+    };
+    let updates = parseBuyerNickIntakes(messages, buyerId, after, known, nickParseOpts);
 
-    // Fallback: если /nick уже был в чате, но "залип" в processedNickMessageIds,
-    // а у покупателя есть незавершённые заказы без выданного статуса — подхватываем повторно.
+    // Fallback: ник в чате есть, а заказ всё ещё ждёт (pausedUntilNick, залипший known, /nick продавца).
     if (!updates.length) {
         const buyerOrders = ordersInChat(state, chatId).filter((o) => o.buyerId === buyerId);
-        const hasOpen = buyerOrders.some((o) => isActionableOrder(o) && canDispatchToSellbot(o));
-        if (hasOpen) {
-            const latest = findLatestBuyerNick(messages, buyerId, after, {
-                allowNikPhrase: true,
-                sellerUserId,
+        const latest = findLatestBuyerNick(messages, buyerId, after, nickParseOpts);
+        if (latest?.nick) {
+            const needsNick = buyerOrders.some((o) => {
+                if (isOrderFulfilled(o)) return false;
+                if (o.pausedUntilNick) return true;
+                if (!isActionableOrder(o)) return false;
+                return o.nick !== latest.nick;
             });
-            if (latest?.nick && latest.messageId && latest.messageId !== session.messageId) {
+            const needsDispatch = buyerOrders.some(
+                (o) => isActionableOrder(o) && canDispatchToSellbot(o) && !o.nick,
+            );
+            if (needsNick || needsDispatch) {
                 updates = [latest];
             }
         }
     }
 
     for (const u of updates) {
-        known.add(u.messageId);
+        if (u.fromSeller) {
+            sellerKnown.add(u.messageId);
+        } else {
+            known.add(u.messageId);
+        }
         const changed = session.nick !== u.nick;
         session.nick = u.nick;
         session.via = u.via;
@@ -356,7 +389,7 @@ export async function applyNickCommandUpdates(
             }
         }
     }
-    return known;
+    return { known, sellerKnown };
 }
 
 /** Одно сообщение — только для этого заказа (не для всех открытых в чате). */
