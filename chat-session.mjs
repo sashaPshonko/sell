@@ -4,6 +4,8 @@ import {
     findLatestBuyerNick,
     findGreetingAnchorInChat,
     isCancelCommand,
+    sameUserId,
+    isBuyerUser,
 } from './parse.mjs';
 import {
     ensureChat,
@@ -49,6 +51,15 @@ function nickMessagesAfter(session, greetingAtIso, state, chatId, buyerId) {
     return greetingAtIso || null;
 }
 
+function resolveBuyerUsername(state, chatId, buyerId) {
+    for (const order of ordersInChat(state, chatId)) {
+        if (sameUserId(order.buyerId, buyerId) && order.buyer) {
+            return order.buyer;
+        }
+    }
+    return null;
+}
+
 /** /cancel — по-прежнему не трогаем старые команды до nickResetAt / приветствия. */
 function cancelMessagesAfter(session, greetingAtIso) {
     if (session.nickResetAt) return session.nickResetAt;
@@ -66,8 +77,14 @@ export function syncChatNick(
 ) {
     const session = getBuyerSession(state, chatId, buyerId);
     const after = nickMessagesAfter(session, greetingAtIso, state, chatId, buyerId);
+    const buyerUsername = resolveBuyerUsername(state, chatId, buyerId);
 
-    const nickParseOpts = { allowNikPhrase: true, sellerUserId, sellerUsername };
+    const nickParseOpts = {
+        allowNikPhrase: true,
+        sellerUserId,
+        sellerUsername,
+        buyerUsername,
+    };
     const latest = findLatestBuyerNick(messages, buyerId, after, nickParseOpts);
     const first = parseBuyerNick(messages, buyerId, after, nickParseOpts);
     const pick = latest?.via === 'command' ? latest : first || latest;
@@ -188,13 +205,14 @@ export async function applyCancelCommands(
 ) {
     const known = knownIds instanceof Set ? knownIds : new Set(knownIds || []);
     const session = getBuyerSession(state, chatId, buyerId);
+    const buyerUsername = resolveBuyerUsername(state, chatId, buyerId);
     const afterIso = cancelMessagesAfter(session, greetingAtIso);
     const after = afterIso ? Date.parse(afterIso) : 0;
     let replied = false;
 
     for (const msg of messages) {
         if (!msg?.text || msg.deal) continue;
-        if (msg.user?.id !== buyerId) continue;
+        if (!isBuyerUser(msg, buyerId, buyerUsername)) continue;
         const msgAt = Date.parse(msg.createdAt);
         if (isCancelCommand(msg.text) && after && msgAt < after) {
             known.add(msg.id);
@@ -278,10 +296,12 @@ export async function applyNickCommandUpdates(
         ? sellerKnownIds
         : new Set(sellerKnownIds || []);
     const after = nickMessagesAfter(session, greetingAtIso, state, chatId, buyerId);
+    const buyerUsername = resolveBuyerUsername(state, chatId, buyerId);
     const nickParseOpts = {
         allowNikPhrase: true,
         sellerUserId,
         sellerUsername,
+        buyerUsername,
         sellerKnownIds: sellerKnown,
     };
     let updates = parseBuyerNickIntakes(messages, buyerId, after, known, nickParseOpts);
@@ -315,8 +335,10 @@ export async function applyNickCommandUpdates(
         } else {
             known.add(u.messageId);
         }
-        session.appliedNickMessageId = u.messageId;
+        const priorMessageId = session.messageId;
+        const isNewNickMessage = Boolean(u.messageId && u.messageId !== priorMessageId);
         const changed = session.nick !== u.nick;
+        session.appliedNickMessageId = u.messageId;
         session.nick = u.nick;
         session.via = u.via;
         session.messageId = u.messageId;
@@ -342,6 +364,12 @@ export async function applyNickCommandUpdates(
             if (order.phase === 'dispatched') {
                 if (changed) {
                     await dispatchNickUpdate(order.orderId, u.nick);
+                } else if (isNewNickMessage) {
+                    setOrderPhase(state, order.orderId, 'awaiting_nick', {
+                        nick: u.nick,
+                        lastError: null,
+                    });
+                    queuedForDelivery = true;
                 }
                 continue;
             }

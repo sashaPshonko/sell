@@ -9,6 +9,7 @@ import {
     parseBuyerNickUpdates,
     looksLikeInvalidNickAttempt,
     findGreetingAnchorInChat,
+    isBuyerUser,
 } from './parse.mjs';
 import { loadState, saveState, getOrder, setOrderPhase, ordersInChat } from './state.mjs';
 import { recordBuyerDelivery } from './lib/pay-bonus.mjs';
@@ -352,7 +353,7 @@ function warnInvalidNickOnce(client, state, chatId, messages, deals, greetingAt)
         const invalidNickOpts = { allowNikPhrase: true };
 
         for (const msg of messages) {
-            if (msg.user?.id !== paid.buyerId || !msg.text) continue;
+            if (!isBuyerUser(msg, paid.buyerId, paid.buyer || order.buyer) || !msg.text) continue;
             if (greetingAt && Date.parse(msg.createdAt) < Date.parse(greetingAt)) continue;
             if (!looksLikeInvalidNickAttempt(msg.text, invalidNickOpts)) continue;
 
