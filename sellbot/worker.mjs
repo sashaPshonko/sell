@@ -400,7 +400,7 @@ async function payDeliveryLoop() {
             return;
         }
         if (payOutcome === 'invalid') {
-            finishDelivery('invalid');
+            finishDelivery('invalid_nick');
             return;
         }
         if (payOutcome === 'fail') {
@@ -450,7 +450,7 @@ async function payDeliveryLoop() {
             return;
         }
         if (payOutcome === 'invalid') {
-            finishDelivery('invalid');
+            finishDelivery('invalid_nick');
             return;
         }
         if (payOutcome === 'fail') {

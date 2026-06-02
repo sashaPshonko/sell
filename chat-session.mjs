@@ -268,6 +268,8 @@ export async function applyNickCommandUpdates(
 
         for (const order of buyerOrders) {
             order.nick = u.nick;
+            order.pausedUntilNick = false;
+            order.deliveryHintSentAt = undefined;
 
             if (!canDispatchToSellbot(order)) {
                 continue;

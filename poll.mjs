@@ -97,6 +97,27 @@ function shouldProcessBotRetryEvent(order) {
     return !isOrderFulfilled(order);
 }
 
+/** После сбоя — не крутить /pay и не дублировать подсказку, пока покупатель не пришлёт /nick снова */
+function markDeliveryPaused(state, orderId, phase, extra = {}) {
+    setOrderPhase(state, orderId, phase, {
+        pausedUntilNick: true,
+        ...extra,
+    });
+}
+
+async function sendDeliveryHintOnce(client, state, chatId, orderId, order, buildHint) {
+    if (order.deliveryHintSentAt) {
+        console.log(
+            `[sell] ${orderId.slice(0, 8)}…: подсказка уже отправлена, пропуск`,
+        );
+        return;
+    }
+    await sendChatMessage(client, chatId, buildHint());
+    setOrderPhase(state, orderId, order.phase, {
+        deliveryHintSentAt: new Date().toISOString(),
+    });
+}
+
 async function handleBotEvents(client, state) {
     for (const ev of await drainBotEvents()) {
         const order = getOrder(state, ev.orderId);
@@ -154,11 +175,18 @@ async function handleBotEvents(client, state) {
                 }
                 const nick =
                     getBuyerSession(state, chatId, buyerId).nick || order.nick;
-                setOrderPhase(state, ev.orderId, 'awaiting_nick', {
+                markDeliveryPaused(state, ev.orderId, 'awaiting_nick', {
                     lastError: 'stall_queue',
                     nick,
                 });
-                await sendChatMessage(client, chatId, buildQueueStallHint());
+                await sendDeliveryHintOnce(
+                    client,
+                    state,
+                    chatId,
+                    ev.orderId,
+                    getOrder(state, ev.orderId) || order,
+                    buildQueueStallHint,
+                );
                 console.warn(`[sell] stall ${ev.orderId} (очередь ${ev.queued ?? '?'})`);
             } else if (ev.type === 'delivery_failed') {
                 if (!shouldProcessBotRetryEvent(order)) {
@@ -167,14 +195,40 @@ async function handleBotEvents(client, state) {
                     );
                     continue;
                 }
+                const reason = ev.reason || 'failed';
+                if (reason === 'invalid' || reason === 'invalid_nick') {
+                    const session = getBuyerSession(state, chatId, buyerId);
+                    delete session.nick;
+                    markDeliveryPaused(state, ev.orderId, 'awaiting_nick', {
+                        lastError: 'invalid_nick',
+                        nick: null,
+                    });
+                    await sendDeliveryHintOnce(
+                        client,
+                        state,
+                        chatId,
+                        ev.orderId,
+                        getOrder(state, ev.orderId) || order,
+                        buildWrongNickHint,
+                    );
+                    console.warn(`[sell] invalid_nick ${ev.orderId} (via delivery_failed)`);
+                    continue;
+                }
                 const nick =
                     getBuyerSession(state, chatId, buyerId).nick || order.nick;
-                setOrderPhase(state, ev.orderId, 'awaiting_nick', {
-                    lastError: ev.reason || 'failed',
+                markDeliveryPaused(state, ev.orderId, 'awaiting_nick', {
+                    lastError: reason,
                     nick,
                 });
-                await sendChatMessage(client, chatId, buildRetryNickHint());
-                console.warn(`[sell] fail ${ev.orderId}: ${ev.reason || '?'}`);
+                await sendDeliveryHintOnce(
+                    client,
+                    state,
+                    chatId,
+                    ev.orderId,
+                    getOrder(state, ev.orderId) || order,
+                    buildRetryNickHint,
+                );
+                console.warn(`[sell] fail ${ev.orderId}: ${reason}`);
             } else if (ev.type === 'invalid_nick') {
                 if (!shouldProcessBotRetryEvent(order)) {
                     console.log(
@@ -184,11 +238,18 @@ async function handleBotEvents(client, state) {
                 }
                 const session = getBuyerSession(state, chatId, buyerId);
                 delete session.nick;
-                setOrderPhase(state, ev.orderId, 'awaiting_nick', {
+                markDeliveryPaused(state, ev.orderId, 'awaiting_nick', {
                     lastError: 'invalid_nick',
                     nick: null,
                 });
-                await sendChatMessage(client, chatId, buildWrongNickHint());
+                await sendDeliveryHintOnce(
+                    client,
+                    state,
+                    chatId,
+                    ev.orderId,
+                    getOrder(state, ev.orderId) || order,
+                    buildWrongNickHint,
+                );
             } else if (ev.type === 'player_offline') {
                 if (!shouldProcessBotRetryEvent(order)) {
                     console.log(
@@ -196,11 +257,18 @@ async function handleBotEvents(client, state) {
                     );
                     continue;
                 }
-                setOrderPhase(state, ev.orderId, 'awaiting_nick', {
+                markDeliveryPaused(state, ev.orderId, 'awaiting_nick', {
                     lastError: 'player_offline',
                     nick: getBuyerSession(state, chatId, buyerId).nick || order.nick,
                 });
-                await sendChatMessage(client, chatId, buildRetryNickHint());
+                await sendDeliveryHintOnce(
+                    client,
+                    state,
+                    chatId,
+                    ev.orderId,
+                    getOrder(state, ev.orderId) || order,
+                    buildRetryNickHint,
+                );
             }
         } catch (e) {
             console.warn(`[sell] ответ в чат: ${e.message}`);
