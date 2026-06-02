@@ -17,7 +17,8 @@ const config = {
     payTemplate: workerData.payTemplate || '/pay {nick} {amount}',
     paySuffix: workerData.paySuffix ?? '',
     payAmountMultiplier: workerData.payAmountMultiplier ?? 0,
-    offlineMarkers: workerData.offlineMarkers || [],
+    playerOfflineMarker:
+        workerData.playerOfflineMarker || '[✘] Ошибка! Указанный игрок не найден!',
     invalidNickMarkers: workerData.invalidNickMarkers || [],
     failMarkers: workerData.failMarkers || [],
     idleQuitMs: workerData.idleQuitMs ?? 25_000,
@@ -126,6 +127,14 @@ function isPaySuccessLine(text) {
     return PAY_SUCCESS_MARKERS.some((m) => lower.includes(m.toLowerCase()));
 }
 
+/** Единственный признак: не на анархии / не в сети */
+function isPlayerOfflineLine(text) {
+    const plain = stripMcFormatting(text);
+    if (!plain || isLikelyPlayerChat(plain.trim())) return false;
+    const marker = config.playerOfflineMarker;
+    return Boolean(marker) && plain.includes(marker);
+}
+
 function messageMatchesOrder(text, order, kind) {
     if (
         text.includes('⚡ Наша группа ВК vk.com/funtime') ||
@@ -143,6 +152,16 @@ function messageMatchesOrder(text, order, kind) {
 
     if (kind === 'fail') return hasNick || hasAmount;
     return hasNick;
+}
+
+/** Не на анархии — один /pay, стоп воркера */
+function abortDeliveryPlayerOffline() {
+    if (!delivering || !currentOrder) return;
+    const nick = currentOrder.nick;
+    log(`покупатель не в сети на сервере (${nick}) — стоп выдачи, отключение`);
+    deliverQueue.length = 0;
+    finishDelivery('offline', { skipQueue: true });
+    shutdownBot('player_not_found');
 }
 
 function scheduleIdleQuit() {
@@ -403,6 +422,10 @@ async function payDeliveryLoop() {
             finishDelivery('invalid_nick');
             return;
         }
+        if (payOutcome === 'player_offline') {
+            abortDeliveryPlayerOffline();
+            return;
+        }
         if (payOutcome === 'fail') {
             finishDelivery(payFailReason || 'fail');
             return;
@@ -453,6 +476,10 @@ async function payDeliveryLoop() {
             finishDelivery('invalid_nick');
             return;
         }
+        if (payOutcome === 'player_offline') {
+            abortDeliveryPlayerOffline();
+            return;
+        }
         if (payOutcome === 'fail') {
             finishDelivery(payFailReason || 'fail');
             return;
@@ -473,8 +500,8 @@ function trySetPayOutcomeFromChat(text) {
         logOk(`pay успех: ${text.slice(0, 80)}`);
         return;
     }
-    if (matchesAny(text, config.offlineMarkers) && messageMatchesOrder(text, currentOrder, 'offline')) {
-        payOutcome = 'offline';
+    if (isPlayerOfflineLine(text)) {
+        payOutcome = 'player_offline';
         return;
     }
     if (matchesAny(text, config.invalidNickMarkers) && messageMatchesOrder(text, currentOrder, 'invalid')) {
@@ -523,12 +550,17 @@ async function onServerChat(rawText) {
         botState.balance = balance;
     }
 
+    if (delivering && currentOrder && isPlayerOfflineLine(text)) {
+        abortDeliveryPlayerOffline();
+        return;
+    }
+
     trySetPayOutcomeFromChat(text);
 }
 
 const FATAL_DELIVERY = new Set(['banned', 'captcha']);
 
-function finishDelivery(result) {
+function finishDelivery(result, { skipQueue = false } = {}) {
     if (!currentOrder) return;
     const orderId = currentOrder.orderId;
     const nick = currentOrder.nick;
@@ -550,8 +582,8 @@ function finishDelivery(result) {
         postEvent('delivery_stalled', { orderId, reason: 'queue_timeout', queued });
     } else postEvent('delivery_failed', { orderId, reason: result || 'unknown' });
 
-    if (FATAL_DELIVERY.has(result)) {
-        deliverQueue.length = 0;
+    if (skipQueue || FATAL_DELIVERY.has(result)) {
+        if (!skipQueue) deliverQueue.length = 0;
         return;
     }
     processNextDeliver();

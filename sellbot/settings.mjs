@@ -26,8 +26,9 @@ export const DEFAULTS = {
     balanceMin: 1_000_000_000,
     balanceWaitMs: 15_000,
     balanceCmdWaitMs: 2000,
-    offlineMarkers: ['не в сети', 'оффлайн', 'не онлайн'],
-    invalidNickMarkers: ['не найден', 'ник не найден', 'игрок не найден'],
+    /** Единственная строка: покупатель не на анархии / не в сети на сервере */
+    playerOfflineMarker: '[✘] Ошибка! Указанный игрок не найден!',
+    invalidNickMarkers: ['ник не найден'],
     failMarkers: ['недостаточно', 'ошибка', 'отказано'],
     telegramToken: '',
     telegramChatId: '',
@@ -95,7 +96,9 @@ export async function loadSettings(path = BOT_JSON) {
         balanceMin: Number(pick(entry, 'balanceMin', DEFAULTS.balanceMin)),
         balanceWaitMs: Number(pick(entry, 'balanceWaitMs', DEFAULTS.balanceWaitMs)),
         balanceCmdWaitMs: Number(pick(entry, 'balanceCmdWaitMs', DEFAULTS.balanceCmdWaitMs)),
-        offlineMarkers: parseMarkers(entry.offlineMarkers, DEFAULTS.offlineMarkers),
+        playerOfflineMarker: String(
+            pick(entry, 'playerOfflineMarker', DEFAULTS.playerOfflineMarker),
+        ).trim(),
         invalidNickMarkers: parseMarkers(entry.invalidNickMarkers, DEFAULTS.invalidNickMarkers),
         failMarkers: parseMarkers(entry.failMarkers, DEFAULTS.failMarkers),
         telegramToken: String(pick(entry, 'telegramToken', DEFAULTS.telegramToken)).trim(),

@@ -158,7 +158,7 @@ function workerDataPayload() {
         payTemplate: cfg.payTemplate,
         paySuffix: cfg.paySuffix,
         payAmountMultiplier: cfg.payAmountMultiplier,
-        offlineMarkers: cfg.offlineMarkers,
+        playerOfflineMarker: cfg.playerOfflineMarker,
         invalidNickMarkers: cfg.invalidNickMarkers,
         failMarkers: cfg.failMarkers,
         idleQuitMs: cfg.idleQuitMs,
