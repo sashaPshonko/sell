@@ -1,7 +1,9 @@
-import { readFile, writeFile } from 'fs/promises';
+import { readFile, writeFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 
 const PATH = process.env.STATE_FILE || './state.json';
+const TMP_PATH = `${PATH}.tmp`;
+const BAK_PATH = `${PATH}.bak`;
 
 const EMPTY = {
     orders: {},
@@ -14,8 +16,7 @@ const EMPTY = {
 
 export async function loadState() {
     if (!existsSync(PATH)) return structuredClone(EMPTY);
-    const raw = await readFile(PATH, 'utf8');
-    const state = JSON.parse(raw);
+    const state = await readJsonWithFallback();
     if (!state.orders) state.orders = {};
     if (!state.confirmedDeals) state.confirmedDeals = {};
     if (!state.chats) state.chats = {};
@@ -26,7 +27,13 @@ export async function loadState() {
 }
 
 export async function saveState(state) {
-    await writeFile(PATH, JSON.stringify(state, null, 2));
+    const payload = JSON.stringify(state, null, 2);
+    // Atomic replace: write temp, keep backup of last good, then swap.
+    await writeFile(TMP_PATH, payload);
+    if (existsSync(PATH)) {
+        await rename(PATH, BAK_PATH);
+    }
+    await rename(TMP_PATH, PATH);
 }
 
 export function getOrder(state, dealId) {
@@ -68,4 +75,30 @@ export function getBuyerSession(state, chatId, buyerId) {
 
 export function ordersInChat(state, chatId) {
     return Object.values(state.orders).filter((o) => o.chatId === chatId);
+}
+
+async function readJsonWithFallback() {
+    const tryRead = async (path) => {
+        const raw = await readFile(path, 'utf8');
+        return JSON.parse(raw);
+    };
+
+    try {
+        return await tryRead(PATH);
+    } catch (e) {
+        const msg = String(e?.message || e);
+        console.warn(`[sell] state.json повреждён (${msg})`);
+        if (existsSync(BAK_PATH)) {
+            try {
+                const recovered = await tryRead(BAK_PATH);
+                console.warn('[sell] восстановление state из backup');
+                await writeFile(PATH, JSON.stringify(recovered, null, 2));
+                return recovered;
+            } catch (be) {
+                console.warn(`[sell] backup тоже повреждён: ${be?.message || be}`);
+            }
+        }
+        console.warn('[sell] state reset → EMPTY');
+        return structuredClone(EMPTY);
+    }
 }
