@@ -293,11 +293,7 @@ export function buildRepeatPurchaseHint() {
 /** Нет конкретного лота-аналога — подсказка про 🎁 на профиле (без ссылки). */
 export function buildProfileBrowseHint(opts = {}) {
     const marker = opts.emoji || '🎁';
-    return [
-        '💡 На профиле есть предложения выгоднее',
-        '',
-        `Пролистай профиль вниз — лоты с ${marker} в названии (больше кк за те же ₽).`,
-    ].join('\n');
+    return `💡 На профиле выгоднее — лоты с ${marker} в названии (пролистай вниз).`;
 }
 
 /**
@@ -310,26 +306,17 @@ export function buildProfileUpsellHint(opts) {
     const priceRub = opts.priceRub != null ? Math.round(Number(opts.priceRub)) : null;
     const url = String(opts.url || '').trim();
 
-    const priceLine =
-        priceRub != null && priceRub > 0
-            ? `за те же ${priceRub} ₽`
-            : 'за ту же цену';
+    const priceBit =
+        priceRub != null && priceRub > 0 ? `за ${priceRub} ₽` : 'за ту же цену';
 
-    const compareLine =
-        baseKk != null && baseKk > 0 && upsellKk > baseKk
-            ? `больше, чем ${baseKk}кк в этом заказе`
-            : 'больше валюты за те же деньги';
+    const compareBit =
+        baseKk != null && baseKk > 0 && upsellKk > baseKk ? ` (сейчас ${baseKk}кк)` : '';
 
-    const titleExample = `${upsellKk}КК ${marker} МОМЕНТАЛЬНО ${marker} БОНУС`;
-
-    return [
-        '💡 На профиле выгоднее',
-        '',
-        `Следующий раз: «${titleExample}» ${priceLine} — ${compareLine}.`,
-        '',
-        `👇 Пролистай профиль вниз — в названии ${marker} (больше кк за те же ₽).`,
-        url,
-    ].join('\n');
+    const lines = [
+        `💡 На профиле: ${upsellKk}кк ${priceBit}${compareBit} — пролистай вниз, в названии лота ${marker}`,
+    ];
+    if (url) lines.push(url);
+    return lines.join('\n');
 }
 
 export function buildOrderAlreadyDoneHint() {
