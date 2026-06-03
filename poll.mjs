@@ -272,6 +272,20 @@ async function handleBotEvents(client, state) {
                     getOrder(state, ev.orderId) || order,
                     buildRetryNickHint,
                 );
+            } else if (ev.type === 'insufficient_funds') {
+                if (!shouldProcessBotRetryEvent(order)) {
+                    console.log(
+                        `[sell] insufficient_funds ${ev.orderId.slice(0, 8)}… игнор (заказ уже закрыт)`,
+                    );
+                    continue;
+                }
+                markDeliveryPaused(state, ev.orderId, 'awaiting_nick', {
+                    lastError: 'insufficient_funds',
+                    nick: getBuyerSession(state, chatId, buyerId).nick || order.nick,
+                });
+                console.warn(
+                    `[sell] insufficient_funds ${ev.orderId} — пополни баланс бота, покупателю не пишем`,
+                );
             }
         } catch (e) {
             console.warn(`[sell] ответ в чат: ${e.message}`);

@@ -28,6 +28,8 @@ export const DEFAULTS = {
     balanceCmdWaitMs: 2000,
     /** Единственная строка: покупатель не на анархии / не в сети на сервере */
     playerOfflineMarker: '[✘] Ошибка! Указанный игрок не найден!',
+    /** Не хватает монет на балансе бота для /pay */
+    insufficientFundsMarker: '[✘] Ошибка! У вас недостаточно денег.',
     invalidNickMarkers: ['ник не найден'],
     telegramToken: '',
     telegramChatId: '',
@@ -97,6 +99,9 @@ export async function loadSettings(path = BOT_JSON) {
         balanceCmdWaitMs: Number(pick(entry, 'balanceCmdWaitMs', DEFAULTS.balanceCmdWaitMs)),
         playerOfflineMarker: String(
             pick(entry, 'playerOfflineMarker', DEFAULTS.playerOfflineMarker),
+        ).trim(),
+        insufficientFundsMarker: String(
+            pick(entry, 'insufficientFundsMarker', DEFAULTS.insufficientFundsMarker),
         ).trim(),
         invalidNickMarkers: parseMarkers(entry.invalidNickMarkers, DEFAULTS.invalidNickMarkers),
         telegramToken: String(pick(entry, 'telegramToken', DEFAULTS.telegramToken)).trim(),

@@ -19,6 +19,8 @@ const config = {
     payAmountMultiplier: workerData.payAmountMultiplier ?? 0,
     playerOfflineMarker:
         workerData.playerOfflineMarker || '[✘] Ошибка! Указанный игрок не найден!',
+    insufficientFundsMarker:
+        workerData.insufficientFundsMarker || '[✘] Ошибка! У вас недостаточно денег.',
     invalidNickMarkers: workerData.invalidNickMarkers || [],
     idleQuitMs: workerData.idleQuitMs ?? 25_000,
     deliverTimeoutMs: workerData.deliverTimeoutMs ?? 60_000,
@@ -116,6 +118,14 @@ function isPlayerOfflineLine(text) {
     return Boolean(marker) && plain.includes(marker);
 }
 
+/** Баланс бота не хватает на /pay */
+function isInsufficientFundsLine(text) {
+    const plain = stripMcFormatting(text);
+    if (!plain || isLikelyPlayerChat(plain.trim())) return false;
+    const marker = config.insufficientFundsMarker;
+    return Boolean(marker) && plain.includes(marker);
+}
+
 function messageMatchesOrder(text, order, kind) {
     if (
         text.includes('⚡ Наша группа ВК vk.com/funtime') ||
@@ -140,6 +150,15 @@ function abortDeliveryPlayerOffline() {
     deliverQueue.length = 0;
     finishDelivery('offline', { skipQueue: true });
     shutdownBot('player_not_found');
+}
+
+/** Нет монет на балансе — не спамим /pay */
+function abortDeliveryInsufficientFunds() {
+    if (!delivering || !currentOrder) return;
+    log('недостаточно денег на балансе — стоп выдачи, отключение');
+    deliverQueue.length = 0;
+    finishDelivery('insufficient_funds', { skipQueue: true });
+    shutdownBot('insufficient_funds');
 }
 
 function scheduleIdleQuit() {
@@ -402,6 +421,10 @@ async function payDeliveryLoop() {
             abortDeliveryPlayerOffline();
             return;
         }
+        if (payOutcome === 'insufficient_funds') {
+            abortDeliveryInsufficientFunds();
+            return;
+        }
 
         if (!bot?.chat) {
             finishDelivery('disconnected');
@@ -452,6 +475,10 @@ async function payDeliveryLoop() {
             abortDeliveryPlayerOffline();
             return;
         }
+        if (payOutcome === 'insufficient_funds') {
+            abortDeliveryInsufficientFunds();
+            return;
+        }
     }
 
     if (delivering && currentOrder) {
@@ -470,6 +497,11 @@ function trySetPayOutcomeFromChat(text) {
     }
     if (isPlayerOfflineLine(text)) {
         payOutcome = 'player_offline';
+        return;
+    }
+    if (isInsufficientFundsLine(text)) {
+        payOutcome = 'insufficient_funds';
+        log('сервер: недостаточно денег на балансе');
         return;
     }
     if (matchesAny(text, config.invalidNickMarkers) && messageMatchesOrder(text, currentOrder, 'invalid')) {
@@ -518,6 +550,11 @@ async function onServerChat(rawText) {
         return;
     }
 
+    if (delivering && currentOrder && isInsufficientFundsLine(text)) {
+        abortDeliveryInsufficientFunds();
+        return;
+    }
+
     trySetPayOutcomeFromChat(text);
 }
 
@@ -538,6 +575,7 @@ function finishDelivery(result, { skipQueue = false } = {}) {
         postEvent('delivery_ok', { orderId });
     }
     else if (result === 'offline') postEvent('player_offline', { orderId });
+    else if (result === 'insufficient_funds') postEvent('insufficient_funds', { orderId });
     else if (result === 'invalid_nick') postEvent('invalid_nick', { orderId });
     else if (result === 'banned') postEvent('delivery_failed', { orderId, reason: 'banned' });
     else if (result === 'captcha') postEvent('delivery_failed', { orderId, reason: 'captcha' });

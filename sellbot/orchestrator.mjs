@@ -159,6 +159,7 @@ function workerDataPayload() {
         paySuffix: cfg.paySuffix,
         payAmountMultiplier: cfg.payAmountMultiplier,
         playerOfflineMarker: cfg.playerOfflineMarker,
+        insufficientFundsMarker: cfg.insufficientFundsMarker,
         invalidNickMarkers: cfg.invalidNickMarkers,
         idleQuitMs: cfg.idleQuitMs,
         deliverTimeoutMs: cfg.deliverTimeoutMs,
@@ -328,6 +329,7 @@ async function startWorker(reason = 'order') {
                 delivery_stalled: 'delivery_stalled',
                 invalid_nick: 'invalid_nick',
                 player_offline: 'player_offline',
+                insufficient_funds: 'insufficient_funds',
             }[message.name];
 
             if (evType) {
@@ -353,6 +355,11 @@ async function startWorker(reason = 'order') {
                     );
                 } else if (evType === 'player_offline') {
                     await sendAlert(`⚠️ Оффлайн: ${short}… — пусть шлёт /nick на анархии`);
+                } else if (evType === 'insufficient_funds') {
+                    await sendAlert(
+                        `💸 ${botConfig.username}: недостаточно денег для /pay (заказ ${short}…)\n` +
+                            `Пополни баланс бота — покупателю ник не при чём`,
+                    );
                 } else if (evType === 'invalid_nick') {
                     await sendAlert(`⚠️ Неверный ник: ${short}…`);
                 } else {
