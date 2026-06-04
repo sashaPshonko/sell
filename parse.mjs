@@ -65,7 +65,7 @@ export function sameUserId(a, b) {
 }
 
 function sellerNickCommandText(text) {
-    return /^\/nick\s+[a-zA-Z0-9_]{3,16}\s*$/i.test(String(text || '').trim());
+    return /^\/nick\s+[a-zA-Z0-9_]{3,16}\b/i.test(String(text || '').trim());
 }
 
 export function isSellerNickCommand(msg, sellerUserId, sellerUsername) {
@@ -159,7 +159,7 @@ export function parseNickFromText(text, opts = {}) {
     const t = text.trim();
     if (!t || t.startsWith('{{')) return null;
 
-    const cmd = t.match(/^\/nick\s+([a-zA-Z0-9_]{3,16})\s*$/i);
+    const cmd = t.match(/^\/nick\s+([a-zA-Z0-9_]{3,16})\b/i);
     if (cmd) return { nick: cmd[1], via: 'command' };
 
     if (opts.allowNikPhrase !== false) {

@@ -320,11 +320,27 @@ export async function applyNickCommandUpdates(
             const needsWork = buyerOrders.some((o) => {
                 if (isOrderFulfilled(o)) return false;
                 if (o.pausedUntilNick) return true;
+                if (o.phase === 'dispatched' || o.phase === 'ws_pending') return true;
                 if (isActionableOrder(o) && canDispatchToSellbot(o)) return true;
-                return o.phase === 'dispatched' && o.nick !== latest.nick;
+                return false;
             });
             if (needsWork) {
                 updates = [{ ...latest }];
+            }
+        } else if (
+            latest?.nick
+            && latest.messageId
+            && latest.messageId === session.appliedNickMessageId
+            && session.nick === latest.nick
+        ) {
+            const stuckDispatched = buyerOrders.some(
+                (o) =>
+                    !isOrderFulfilled(o)
+                    && o.phase === 'dispatched'
+                    && o.nickRecoveryForMessageId !== latest.messageId,
+            );
+            if (stuckDispatched) {
+                updates = [{ ...latest, recovery: true }];
             }
         }
     }
@@ -355,24 +371,29 @@ export async function applyNickCommandUpdates(
             order.pausedUntilNick = false;
             order.deliveryHintSentAt = undefined;
 
-            if (!canDispatchToSellbot(order)) {
-                continue;
-            }
-
-            order.wrongNickWarned = false;
-
             if (order.phase === 'dispatched') {
+                order.wrongNickWarned = false;
                 if (changed) {
                     await dispatchNickUpdate(order.orderId, u.nick);
-                } else if (isNewNickMessage) {
+                } else if (isNewNickMessage || u.recovery) {
                     setOrderPhase(state, order.orderId, 'awaiting_nick', {
                         nick: u.nick,
                         lastError: null,
+                        dispatchAckSentAt: undefined,
+                        ...(u.recovery
+                            ? { nickRecoveryForMessageId: u.messageId }
+                            : {}),
                     });
                     queuedForDelivery = true;
                 }
                 continue;
             }
+
+            if (!canDispatchToSellbot(order)) {
+                continue;
+            }
+
+            order.wrongNickWarned = false;
 
             if (!isActionableOrder(order)) {
                 continue;
