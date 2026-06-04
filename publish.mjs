@@ -1,15 +1,19 @@
 /**
  * Перевыставление лота на PlayerOK после оплаты (publishItem).
+ * Только лоты с 🎁 в названии — бесплатная премка priorityStatuses.
  */
 import { setOrderPhase, getOrder, saveState } from './state.mjs';
+import { isMarkedProfileLot } from './lib/profile-upsell.mjs';
 
 const pending = new Map();
 
-/** Временно выкл — ждём отдельный запрос для бесплатного перевыставления 🎁-лотов */
-const REPUBLISH_ENABLED = false;
-
 function publishEnabled() {
-    return REPUBLISH_ENABLED && process.env.AUTO_PUBLISH_ITEM !== '0';
+    return process.env.AUTO_PUBLISH_ITEM !== '0';
+}
+
+/** Перевыставляем только профильные лоты (🎁 в названии). */
+export function shouldRepublishOrder(order) {
+    return Boolean(order?.itemId && isMarkedProfileLot(order.itemName));
 }
 
 function publishDelayMs() {
@@ -36,9 +40,8 @@ function buildPublishVariables(itemId) {
 
     return {
         input: {
-            priorityStatuses,
             transactionProviderId: process.env.PUBLISH_TRANSACTION_PROVIDER || 'LOCAL',
-            transactionProviderData: { paymentMethodId: null },
+            priorityStatuses,
             itemId,
         },
     };
@@ -63,6 +66,7 @@ export async function publishItemOnPlayerok(client, itemId) {
 /** Через N мс после оплаты — один раз на заказ */
 export function scheduleRepublishItem(client, state, order) {
     if (!publishEnabled()) return;
+    if (!shouldRepublishOrder(order)) return;
     if (!order?.itemId) {
         console.warn(
             `[sell] перевыставление: нет itemId (deal ${order?.dealId?.slice(0, 8) || '?'})`,
