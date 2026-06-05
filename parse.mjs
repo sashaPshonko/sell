@@ -127,7 +127,7 @@ export function isUnbanCommand(text) {
     return /^\/unban\s*$/i.test(String(text || '').trim());
 }
 
-/** «ник Steve», «ник: steve123» — только латиница 3–16 */
+/** «ник Steve», «Steve ник», «ник: steve123» — только латиница 3–16 */
 export function parseNickFromNikPhrase(text) {
     if (!text) return null;
     const t = text.trim();
@@ -137,14 +137,20 @@ export function parseNickFromNikPhrase(text) {
 
     const tokens = textTokens(t);
     let afterNik = false;
+    let beforeNik = null;
     for (const word of tokens) {
         if (/^ник$/iu.test(word)) {
+            if (beforeNik && MC_NICK.test(beforeNik)) {
+                return { nick: beforeNik, via: 'nik_phrase' };
+            }
             afterNik = true;
+            beforeNik = null;
             continue;
         }
         if (afterNik && MC_NICK.test(word)) {
             return { nick: word, via: 'nik_phrase' };
         }
+        beforeNik = word;
     }
     return null;
 }

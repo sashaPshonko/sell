@@ -23,7 +23,7 @@ import { isOrderFulfilled } from './lib/playerok-deal-sync.mjs';
 import { sendChatMessage } from './chat.mjs';
 import {
     buildWrongNickHint,
-    buildRetryNickHint,
+    buildDeliveryFailHint,
     buildQueueStallHint,
     buildDeliveryOkHint,
     buildOrderAlreadyDoneHint,
@@ -223,13 +223,14 @@ async function handleBotEvents(client, state) {
                     lastError: reason,
                     nick,
                 });
+                const failReason = reason;
                 await sendDeliveryHintOnce(
                     client,
                     state,
                     chatId,
                     ev.orderId,
                     getOrder(state, ev.orderId) || order,
-                    buildRetryNickHint,
+                    () => buildDeliveryFailHint(failReason),
                 );
                 console.warn(`[sell] fail ${ev.orderId}: ${reason}`);
             } else if (ev.type === 'invalid_nick') {
@@ -270,7 +271,7 @@ async function handleBotEvents(client, state) {
                     chatId,
                     ev.orderId,
                     getOrder(state, ev.orderId) || order,
-                    buildRetryNickHint,
+                    () => buildDeliveryFailHint('player_offline'),
                 );
             } else if (ev.type === 'insufficient_funds') {
                 if (!shouldProcessBotRetryEvent(order)) {
@@ -283,8 +284,16 @@ async function handleBotEvents(client, state) {
                     lastError: 'insufficient_funds',
                     nick: getBuyerSession(state, chatId, buyerId).nick || order.nick,
                 });
+                await sendDeliveryHintOnce(
+                    client,
+                    state,
+                    chatId,
+                    ev.orderId,
+                    getOrder(state, ev.orderId) || order,
+                    () => buildDeliveryFailHint('insufficient_funds'),
+                );
                 console.warn(
-                    `[sell] insufficient_funds ${ev.orderId} — пополни баланс бота, покупателю не пишем`,
+                    `[sell] insufficient_funds ${ev.orderId} — пополни баланс бота`,
                 );
             }
         } catch (e) {

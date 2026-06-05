@@ -157,11 +157,21 @@ export function buildWrongNickHint() {
     return [
         '⚠️ Ник не подошёл.',
         '',
-        '👤 Нужен ник Minecraft: 3–16 символов, a-z, 0-9, _',
+        '👤 Нужен ник Minecraft: 3–16 символов, a-z, A-Z, 0-9, _',
         'Напиши в ЭТОМ чате PlayerOK:',
         'ник твой-ник',
+        'твой-ник ник',
         'или /nick твой-ник',
     ].join('\n');
+}
+
+function retryNickAfterFailLines() {
+    return [
+        '💬 В ЭТОМ чате PlayerOK (не в Minecraft!) напиши снова:',
+        '/nick твой-ник',
+        'или: ник твой-ник',
+        'или: твой-ник ник',
+    ];
 }
 
 export function buildRetryNickHint() {
@@ -170,10 +180,51 @@ export function buildRetryNickHint() {
         '⏳ Сейчас не удалось выдать (сервер занят или ты не в сети в игре).',
         '',
         `🎮 Зайди на анархию ${anka} и будь в сети.`,
-        '💬 В ЭТОМ чате PlayerOK (не в игровой чат!) отправь снова:',
-        '/nick твой-ник',
-        'или: ник твой-ник',
+        ...retryNickAfterFailLines(),
     ].join('\n');
+}
+
+/**
+ * Покупателю — почему не выдали (капча / бан бота / нет монет / офлайн).
+ * @param {string} [reason]
+ */
+export function buildDeliveryFailHint(reason) {
+    const anka = DELIVERY_ANARCHY;
+    const lines = ['❌ Не удалось выдать.', ''];
+
+    switch (reason) {
+        case 'captcha':
+            lines.push(
+                '📋 Причина: капча на сервере (бот не смог зайти).',
+                '⏳ Это не твоя ошибка — попробуем снова чуть позже.',
+            );
+            break;
+        case 'banned':
+            lines.push(
+                '📋 Причина: аккаунт бота заблокирован на сервере.',
+                '⏳ Это не твоя ошибка — попробуем снова чуть позже.',
+            );
+            break;
+        case 'insufficient_funds':
+            lines.push(
+                '📋 Причина: на балансе бота не хватило монет для /pay.',
+                '⏳ Пополним баланс и выдадим — напиши /nick чуть позже.',
+            );
+            break;
+        case 'player_offline':
+        case 'offline':
+            lines.push(
+                '📋 Причина: тебя нет на сервере (или не на нужной анархии).',
+                '',
+                `🎮 Зайди на анархию ${anka} и будь в сети.`,
+            );
+            break;
+        default:
+            return buildRetryNickHint();
+    }
+
+    lines.push('', ...retryNickAfterFailLines());
+    return lines.join('\n');
 }
 
 /** Таймаут выдачи при очереди — заказ сброшен, нужен повторный /nick */
