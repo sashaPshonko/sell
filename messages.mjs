@@ -1,4 +1,4 @@
-import { REPEAT_EXTRA_PCT } from './lib/pay-bonus.mjs';
+import { REPEAT_EXTRA_PCT, formatWheelBonusTiersText } from './lib/pay-bonus.mjs';
 import { DELIVERY_ANARCHY } from './config.mjs';
 
 export { DELIVERY_ANARCHY };
@@ -28,7 +28,7 @@ export function buildGreetingText(ctx = null) {
     const bonusLines = [
         '',
         '🎁 БОНУС к выдаче:',
-        'После ника к лоту добавим случайный бонус: +5%, +8%, +12% или +15%.',
+        `После ника к лоту добавим случайный бонус: ${formatWheelBonusTiersText(lotKk)}.`,
     ];
     if (repeatEligible) {
         bonusLines.push(
