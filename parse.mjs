@@ -198,14 +198,13 @@ export function parseNickFromMessage(msg, buyerUserId, sellerUserId = null, opts
     return parsed;
 }
 
-/** Покупатель пытался написать ник, но формат неверный */
+/** Покупатель явно пытался указать ник, но формат неверный (не любой короткий текст в чате). */
 export function looksLikeInvalidNickAttempt(text, opts = {}) {
     const t = text?.trim();
     if (!t || t.startsWith('{{')) return false;
     if (parseNickFromText(t, opts)) return false;
     if (/^\/nick\b/i.test(t)) return true;
     if (textHasNikWord(t)) return true;
-    if (t.length >= 2 && t.length <= 32) return true;
     return false;
 }
 
