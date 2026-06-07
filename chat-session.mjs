@@ -28,7 +28,7 @@ import { dispatchOrder, dispatchNickUpdate, dispatchCancelOrder } from './dispat
 import { applyOrderPayBonus, buyerEligibleForRepeatBonus } from './lib/pay-bonus.mjs';
 import { cancelDealOnPlayerok } from './cancel.mjs';
 import { DELIVERY_ANARCHY } from './messages.mjs';
-const DISPATCH_RECOVERY_MS = 90_000;
+import { isStaleDeal, isActionableOrder } from './lib/deal-cutoff.mjs';
 import {
     playerokNeedsDelivery,
     playerokIsCancelled,
@@ -37,6 +37,8 @@ import {
     buyerHasPendingOrder,
     isOrderFulfilled,
 } from './lib/playerok-deal-sync.mjs';
+
+const DISPATCH_RECOVERY_MS = 90_000;
 
 /**
  * Синхронизирует ник покупателя на весь чат (все его заказы).
