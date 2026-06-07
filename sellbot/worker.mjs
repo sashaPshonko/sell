@@ -31,6 +31,7 @@ const config = {
 };
 
 const MAX_PAY_ATTEMPTS_WHEN_QUEUED = 8;
+const anarchyCmd = `/an${config.anarchy}`;
 const AFK_MARKER = 'Данная команда недоступна в режиме AFK';
 const CAPTCHA_MARKER = 'BotFilter >> Введите номер с картинки в чат';
 
