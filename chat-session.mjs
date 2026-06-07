@@ -28,7 +28,7 @@ import { dispatchOrder, dispatchNickUpdate, dispatchCancelOrder } from './dispat
 import { applyOrderPayBonus, buyerEligibleForRepeatBonus } from './lib/pay-bonus.mjs';
 import { cancelDealOnPlayerok } from './cancel.mjs';
 import { DELIVERY_ANARCHY } from './messages.mjs';
-import { isStaleDeal, isActionableOrder } from './lib/deal-cutoff.mjs';
+const DISPATCH_RECOVERY_MS = 90_000;
 import {
     playerokNeedsDelivery,
     playerokIsCancelled,
@@ -319,10 +319,11 @@ export async function applyNickCommandUpdates(
         ) {
             const needsWork = buyerOrders.some((o) => {
                 if (isOrderFulfilled(o)) return false;
-                if (o.pausedUntilNick) return true;
-                if (o.phase === 'dispatched' || o.phase === 'ws_pending') return true;
-                if (isActionableOrder(o) && canDispatchToSellbot(o)) return true;
-                return false;
+                // После сбоя ждём новый /nick — не крутим тот же ник на каждом poll
+                if (o.pausedUntilNick) return false;
+                // dispatched / ws_pending — отдельные пути (recovery / retryWsPendingOrders)
+                if (o.phase === 'dispatched' || o.phase === 'ws_pending') return false;
+                return isActionableOrder(o) && canDispatchToSellbot(o);
             });
             if (needsWork) {
                 updates = [{ ...latest }];
@@ -333,12 +334,15 @@ export async function applyNickCommandUpdates(
             && latest.messageId === session.appliedNickMessageId
             && session.nick === latest.nick
         ) {
-            const stuckDispatched = buyerOrders.some(
-                (o) =>
-                    !isOrderFulfilled(o)
-                    && o.phase === 'dispatched'
-                    && o.nickRecoveryForMessageId !== latest.messageId,
-            );
+            const stuckDispatched = buyerOrders.some((o) => {
+                if (isOrderFulfilled(o) || o.phase !== 'dispatched') return false;
+                if (o.nickRecoveryForMessageId === latest.messageId) return false;
+                const dispatchedAt = o.dispatchedAt ? Date.parse(o.dispatchedAt) : 0;
+                if (dispatchedAt && Date.now() - dispatchedAt < DISPATCH_RECOVERY_MS) {
+                    return false;
+                }
+                return true;
+            });
             if (stuckDispatched) {
                 updates = [{ ...latest, recovery: true }];
             }

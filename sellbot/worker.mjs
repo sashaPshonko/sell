@@ -30,7 +30,7 @@ const config = {
     healthCheckObserveMs: workerData.healthCheckObserveMs ?? 8000,
 };
 
-const anarchyCmd = `/an${config.anarchy}`;
+const MAX_PAY_ATTEMPTS_WHEN_QUEUED = 8;
 const AFK_MARKER = 'Данная команда недоступна в режиме AFK';
 const CAPTCHA_MARKER = 'BotFilter >> Введите номер с картинки в чат';
 
@@ -142,14 +142,20 @@ function messageMatchesOrder(text, order, kind) {
     return hasNick;
 }
 
-/** Не на анархии — один /pay, стоп воркера */
+/** Не на анархии — стоп текущей выдачи; очередь других покупателей не трогаем */
 function abortDeliveryPlayerOffline() {
     if (!delivering || !currentOrder) return;
     const nick = currentOrder.nick;
-    log(`покупатель не в сети на сервере (${nick}) — стоп выдачи, отключение`);
-    deliverQueue.length = 0;
-    finishDelivery('offline', { skipQueue: true });
-    shutdownBot('player_not_found');
+    const hasMore = deliverQueue.length > 0;
+    log(
+        `покупатель не в сети на сервере (${nick})${
+            hasMore ? ` — в очереди ещё ${deliverQueue.length}` : ''
+        }`,
+    );
+    finishDelivery('offline');
+    if (!hasMore) {
+        shutdownBot('player_not_found');
+    }
 }
 
 /** Нет монет на балансе — не спамим /pay */
@@ -444,6 +450,14 @@ async function payDeliveryLoop() {
         if (botState.afk) {
             await sleep(loopWait);
             continue;
+        }
+
+        if (deliverQueue.length > 0 && attempt >= MAX_PAY_ATTEMPTS_WHEN_QUEUED) {
+            log(
+                `в очереди ещё ${deliverQueue.length} — стоп /pay после ${attempt} попыток`,
+            );
+            finishDelivery('timeout');
+            return;
         }
 
         resetPayOutcome();
