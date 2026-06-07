@@ -395,6 +395,7 @@ async function ensureBot() {
 
         b.on('error', (err) => {
             fail(err);
+            process.exit(1);
         });
     });
 }
