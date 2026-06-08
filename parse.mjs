@@ -156,9 +156,8 @@ export function parseNickFromNikPhrase(text) {
 }
 
 /**
- * Ник из «/nick Steve» или «ник Steve» (слово «ник» обязательно, кроме /nick).
- * Одно слово «Steve» без «ник» — не ник.
- * @param {{ allowNikPhrase?: boolean }} [opts]
+ * Ник из «/nick Steve», «ник Steve» или одного слова «Steve» (валидный MC-ник).
+ * @param {{ allowNikPhrase?: boolean, allowBareNick?: boolean }} [opts]
  */
 export function parseNickFromText(text, opts = {}) {
     if (!text) return null;
@@ -171,6 +170,13 @@ export function parseNickFromText(text, opts = {}) {
     if (opts.allowNikPhrase !== false) {
         const fromPhrase = parseNickFromNikPhrase(t);
         if (fromPhrase) return fromPhrase;
+    }
+
+    if (opts.allowBareNick !== false && !t.startsWith('/')) {
+        const tokens = textTokens(t);
+        if (tokens.length === 1 && MC_NICK.test(tokens[0])) {
+            return { nick: tokens[0], via: 'bare' };
+        }
     }
     return null;
 }

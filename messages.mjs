@@ -50,8 +50,9 @@ export function buildGreetingText(ctx = null) {
         `ЗАХОДИ НА АНАРХИЮ ${anka}`,
         ...twinAccountWarningLines(),
         'ПОСЛЕ ЭТОГО НАПИШИ НИК В ЭТОМ ЧАТЕ PlayerOK (не в игре):',
-        'ник твой-ник  ← ник ТВИНКА в игре',
-        'или /nick твой-ник',
+        'твой-ник  ← ник ТВИНКА одним словом',
+        'или: ник твой-ник',
+        'или: /nick твой-ник',
         ...bonusLines,
         '',
         '✅ выдача автоматическая - бот выдаст сам',
@@ -159,6 +160,7 @@ export function buildWrongNickHint() {
         '',
         '👤 Нужен ник Minecraft: 3–16 символов, a-z, A-Z, 0-9, _',
         'Напиши в ЭТОМ чате PlayerOK:',
+        'твой-ник',
         'ник твой-ник',
         'твой-ник ник',
         'или /nick твой-ник',
@@ -168,6 +170,7 @@ export function buildWrongNickHint() {
 function retryNickAfterFailLines() {
     return [
         '💬 В ЭТОМ чате PlayerOK (не в Minecraft!) напиши снова:',
+        'твой-ник',
         '/nick твой-ник',
         'или: ник твой-ник',
         'или: твой-ник ник',
