@@ -5,9 +5,7 @@ import {
     safeClanChatLoop,
 } from './clan-delivery.mjs';
 
-/** Название окна — задаётся вручную перед действием, которое его откроет */
 export const CLAN_WINDOW = {
-    NONE: '',
     CLAN_MENU: 'clan_menu',
     CLAN_MEMBERS: 'clan_members',
     CLAN_PERMS: 'clan_perms',
@@ -23,17 +21,14 @@ function sleep(ms) {
 
 export function createClanGuiState() {
     return {
-        /** Текущее открытое окно (из expectMenu в windowOpen) */
-        menu: CLAN_WINDOW.NONE,
-        /** Какое окно ждём от следующего windowOpen */
-        expectMenu: CLAN_WINDOW.NONE,
+        expectMenu: null,
         windowKey: 0,
         flow: null,
     };
 }
 
-/** Перед /clan menu, кликом и т.д. — как config.menu = … перед safeClickBuy в 4NAREK */
-export function expectClanWindow(guiState, menu) {
+/** Перед chat-командой или кликом, который откроет окно */
+export function setExpectMenu(guiState, menu) {
     guiState.expectMenu = menu;
 }
 
@@ -50,7 +45,7 @@ function finishFlow(guiState, ok, reason = null) {
 
 /**
  * windowOpen — единственное место кликов.
- * menu берётся из expectMenu (установлено до команды/клика).
+ * expectMenu задаётся перед chat/кликом и не сбрасывается.
  */
 export async function handleClanWindowOpen(bot, guiState, config, log) {
     if (!bot?.currentWindow) return;
@@ -59,35 +54,30 @@ export async function handleClanWindowOpen(bot, guiState, config, log) {
     if (!flow || flow.done) return;
 
     const expected = guiState.expectMenu;
-    if (!expected || expected === CLAN_WINDOW.NONE) {
-        log('windowOpen: flow активен, но expectMenu пуст — игнор');
-        return;
-    }
+    if (!expected) return;
 
     const key = ++guiState.windowKey;
-    guiState.menu = expected;
-    guiState.expectMenu = CLAN_WINDOW.NONE;
-    log(`windowOpen → ${guiState.menu} (key …${String(key).slice(-4)})`);
+    log(`windowOpen → ${expected} (key …${String(key).slice(-4)})`);
 
     const stale = () => key !== guiState.windowKey;
 
     try {
-        switch (guiState.menu) {
+        switch (expected) {
             case CLAN_WINDOW.CLAN_MENU:
-                if (flow.kind !== 'grant' || flow.step !== 'need_menu') break;
+                if (flow.kind !== 'grant' || flow.step !== 'need_menu') return;
 
                 await rndClickDelay(config);
                 if (stale() || !bot.currentWindow) return;
 
                 const membersSlot = Number(config.clanMembersMenuSlot) || 11;
-                expectClanWindow(guiState, CLAN_WINDOW.CLAN_MEMBERS);
+                setExpectMenu(guiState, CLAN_WINDOW.CLAN_MEMBERS);
                 log(`clan_menu → клик слот ${membersSlot}`);
                 await bot.clickWindow(membersSlot, LEFT_MOUSE, 0);
                 flow.step = 'need_members_list';
                 break;
 
             case CLAN_WINDOW.CLAN_MEMBERS:
-                if (flow.kind !== 'grant') break;
+                if (flow.kind !== 'grant') return;
 
                 if (flow.step === 'need_members_list') {
                     await rndClickDelay(config);
@@ -102,7 +92,7 @@ export async function handleClanWindowOpen(bot, guiState, config, log) {
                     }
 
                     flow.nickSlot = slot;
-                    expectClanWindow(guiState, CLAN_WINDOW.CLAN_PERMS);
+                    setExpectMenu(guiState, CLAN_WINDOW.CLAN_PERMS);
                     log(`clan_members: ${flow.nick} → слот ${slot}, shift×1`);
                     await bot.clickWindow(slot, LEFT_MOUSE, SHIFT_CLICK);
                     flow.step = 'need_second_shift';
@@ -120,8 +110,8 @@ export async function handleClanWindowOpen(bot, guiState, config, log) {
                 break;
 
             case CLAN_WINDOW.CLAN_PERMS:
-                if (flow.kind !== 'grant' || flow.step !== 'need_second_shift') break;
-                if (flow.nickSlot < 0) break;
+                if (flow.kind !== 'grant' || flow.step !== 'need_second_shift') return;
+                if (flow.nickSlot < 0) return;
 
                 await rndClickDelay(config);
                 if (stale() || !bot.currentWindow) return;
@@ -132,7 +122,7 @@ export async function handleClanWindowOpen(bot, guiState, config, log) {
                 break;
 
             case CLAN_WINDOW.CLAN_KICK_CONFIRM:
-                if (flow.kind !== 'kick' || flow.step !== 'need_confirm') break;
+                if (flow.kind !== 'kick' || flow.step !== 'need_confirm') return;
 
                 await rndClickDelay(config);
                 if (stale() || !bot.currentWindow) return;
@@ -146,7 +136,7 @@ export async function handleClanWindowOpen(bot, guiState, config, log) {
                 break;
 
             default:
-                log(`windowOpen: неизвестное menu «${guiState.menu}»`);
+                log(`windowOpen: неизвестное expectMenu «${expected}»`);
                 break;
         }
     } catch (e) {
@@ -163,13 +153,8 @@ export function attachClanGuiHandler(bot, guiState, config, log) {
     });
 }
 
-/**
- * grant: снаружи /clan menu; клики — только в windowOpen.
- */
 export async function runGrantWithdrawPerms(bot, botState, guiState, config, log, nick, deadline) {
     clearFlow(guiState);
-    guiState.expectMenu = CLAN_WINDOW.NONE;
-    guiState.menu = CLAN_WINDOW.NONE;
 
     guiState.flow = {
         kind: 'grant',
@@ -184,7 +169,7 @@ export async function runGrantWithdrawPerms(bot, botState, guiState, config, log
     while (Date.now() < deadline && guiState.flow && !guiState.flow.done) {
         if (guiState.flow.step === 'need_menu') {
             await safeClanChatLoop(bot, botState, log, '/clan menu', {
-                onBeforeChat: () => expectClanWindow(guiState, CLAN_WINDOW.CLAN_MENU),
+                onBeforeChat: () => setExpectMenu(guiState, CLAN_WINDOW.CLAN_MENU),
                 untilOk: () =>
                     guiState.flow?.done ||
                     guiState.flow?.step !== 'need_menu',
@@ -197,15 +182,11 @@ export async function runGrantWithdrawPerms(bot, botState, guiState, config, log
 
     const ok = Boolean(guiState.flow?.ok);
     clearFlow(guiState);
-    guiState.expectMenu = CLAN_WINDOW.NONE;
-    guiState.menu = CLAN_WINDOW.NONE;
     return ok;
 }
 
 export async function runKickFromClan(bot, botState, guiState, config, log, nick, deadline) {
     clearFlow(guiState);
-    guiState.expectMenu = CLAN_WINDOW.NONE;
-    guiState.menu = CLAN_WINDOW.NONE;
 
     guiState.flow = {
         kind: 'kick',
@@ -222,7 +203,7 @@ export async function runKickFromClan(bot, botState, guiState, config, log, nick
     while (Date.now() < deadline && guiState.flow && !guiState.flow.done) {
         if (guiState.flow.step === 'need_confirm') {
             await safeClanChatLoop(bot, botState, log, cmd, {
-                onBeforeChat: () => expectClanWindow(guiState, CLAN_WINDOW.CLAN_KICK_CONFIRM),
+                onBeforeChat: () => setExpectMenu(guiState, CLAN_WINDOW.CLAN_KICK_CONFIRM),
                 untilOk: () =>
                     guiState.flow?.done ||
                     guiState.flow?.step !== 'need_confirm',
@@ -235,14 +216,10 @@ export async function runKickFromClan(bot, botState, guiState, config, log, nick
 
     const ok = Boolean(guiState.flow?.ok);
     clearFlow(guiState);
-    guiState.expectMenu = CLAN_WINDOW.NONE;
-    guiState.menu = CLAN_WINDOW.NONE;
     return ok;
 }
 
 export function resetClanGuiState(guiState) {
     if (!guiState) return;
-    guiState.menu = CLAN_WINDOW.NONE;
-    guiState.expectMenu = CLAN_WINDOW.NONE;
     clearFlow(guiState);
 }
