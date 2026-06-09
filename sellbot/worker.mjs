@@ -69,6 +69,8 @@ let playerOffline = false;
 let guiBusy = false;
 let permsDone = false;
 let kickDone = false;
+/** после shift×1 окно прав часто без windowOpen — когда делать shift×2 */
+let shift2FallbackAt = 0;
 
 const { logInfo, logOk, logServerMessage } = createChatLogger(config.username);
 
@@ -115,6 +117,7 @@ function resetGui() {
     guiBusy = false;
     permsDone = false;
     kickDone = false;
+    shift2FallbackAt = 0;
 }
 
 async function closeWindow() {
@@ -184,7 +187,7 @@ function handleChatMessage(raw) {
     }
 
     // [X] Кланы: <бот> пополнил баланс казны
-    if (text.includes('Кланы:') && text.includes(CLAN_INVEST_LINE) && nickIn(text, config.username)) {
+    if (text.includes(CLAN_INVEST_LINE) && nickIn(text, config.username)) {
         moneyInvested = true;
         logOk(`invest: ${config.username}`);
         return;
@@ -204,6 +207,16 @@ function handleChatMessage(raw) {
 }
 
 // ========== GUI (windowOpen) ==========
+
+async function doShift2(slot) {
+    if (permsDone || config.menu !== 'clan_shift2' || !bot?.currentWindow) return false;
+    shift2FallbackAt = 0;
+    logInfo(`shift×2 слот ${slot}`);
+    config.menu = null;
+    permsDone = true;
+    await bot.clickWindow(slot, LMB, SHIFT);
+    return true;
+}
 
 async function onWindowOpen() {
     if (!bot?.currentWindow || config.menu == null || guiBusy) return;
@@ -230,18 +243,17 @@ async function onWindowOpen() {
                 if (!bot.currentWindow) break;
                 logInfo(`shift×1 слот ${slot}`);
                 config.menu = 'clan_shift2';
+                shift2FallbackAt = Date.now() + 600;
                 guiBusy = false; // окно прав откроется само — не блокировать windowOpen
                 await bot.clickWindow(slot, LMB, SHIFT);
                 break;
 
             // окно 3: права → shift×2 → готово
             case 'clan_shift2':
+                shift2FallbackAt = 0;
                 await rndClick();
                 if (!bot.currentWindow) break;
-                logInfo(`shift×2 слот ${slot}`);
-                config.menu = null;
-                permsDone = true;
-                await bot.clickWindow(slot, LMB, SHIFT);
+                await doShift2(slot);
                 break;
 
             // kick confirm → один клик
@@ -267,8 +279,20 @@ async function grantWithdrawPerms(_nick, deadline) {
     bot.chat('/clan menu');
     let lastMenuRetry = Date.now();
 
+    const slot = config.clanMembersMenuSlot;
     while (Date.now() < deadline && !permsDone) {
         await sleep(400);
+        // после shift×1 окно прав часто без windowOpen — shift×2 вручную
+        if (!permsDone && config.menu === 'clan_shift2' && bot?.currentWindow
+            && shift2FallbackAt > 0 && Date.now() >= shift2FallbackAt && !guiBusy) {
+            guiBusy = true;
+            try {
+                await doShift2(slot);
+            } finally {
+                guiBusy = false;
+            }
+            continue;
+        }
         // после shift×1 окно прав открывается само — не дёргать /clan menu снова
         if (!permsDone && config.menu === 'clan_menu' && !bot?.currentWindow && Date.now() - lastMenuRetry > 12_000) {
             logInfo('права — повтор');
@@ -526,6 +550,10 @@ async function deliverClan() {
     }
 
     // 4. invest — ждём строку в чате, как invite / withdraw
+    config.menu = null;
+    guiBusy = false;
+    await closeWindow();
+    await rnd(500, 1000);
     logInfo(`invest ${invest}`);
     moneyInvested = false;
     end = phaseEnd();
@@ -536,10 +564,12 @@ async function deliverClan() {
             lastAfkCheck = Date.now();
         }
         if (config.afk) {
+            await antiAfkIfNeeded(bot, config, logInfo);
             await sleep(CHAT_POLL_MS);
             continue;
         }
         await closeWindow();
+        logInfo(`/clan invest ${invest}`);
         bot.chat(`/clan invest ${invest}`);
         const attemptEnd = Date.now() + config.clanLoopWaitMs;
         while (Date.now() < attemptEnd && !moneyInvested) {
