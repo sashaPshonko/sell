@@ -4,29 +4,24 @@ import { antiAfkIfNeeded } from './lib/afk-look.mjs';
 import { parseBalanceFromChat } from './lib/balance.mjs';
 import { createChatLogger } from './lib/chat-log.mjs';
 import { audit } from '../lib/audit.mjs';
-import {
-    closeWindowSafe,
-    formatClanInvestAmount,
-    isClanInviteSentLine,
-    isClanJoinedLine,
-    isClanPlayerOfflineLine,
-    isClanWithdrawLine,
-    safeClanChatLoop,
-    stripMcFormatting,
-} from './lib/clan-delivery.mjs';
-import {
-    attachClanGuiHandler,
-    createClanGuiState,
-    resetClanGuiState,
-    runGrantWithdrawPerms,
-    runKickFromClan,
-} from './lib/clan-gui.mjs';
+
+// --- маркеры чата ---
+const CLAN_INVITE_OK = '[⚔] Вы отправили приглашение в клан игроку';
+const CLAN_JOIN_TAIL = ' присоединился к клану!';
+const CLAN_WITHDRAW_MID = ' снял $';
+const CLAN_WITHDRAW_TAIL = ' из казны клана!';
+const CLAN_OFFLINE_HEAD = '[⚔] Ошибка: Игрок';
+const CLAN_OFFLINE_TAIL = ' не в сети!';
+const AFK_MARKER = 'Данная команда недоступна в режиме AFK';
+const CAPTCHA_MARKER = 'BotFilter >> Введите номер с картинки в чат';
+
+const LMB = 0;
+const SHIFT = 1;
 
 const config = {
     username: workerData.username,
     password: workerData.password,
     anarchy: workerData.anarchy,
-    deliveryMode: workerData.deliveryMode || 'clan',
     clanInvestMultiplier: workerData.clanInvestMultiplier ?? 1_000_000,
     clanPhaseTimeoutMs: workerData.clanPhaseTimeoutMs ?? 60_000,
     clanLoopWaitMs: workerData.clanLoopWaitMs ?? 2000,
@@ -34,46 +29,45 @@ const config = {
     clanClickDelayMaxMs: workerData.clanClickDelayMaxMs ?? 4500,
     clanMembersMenuSlot: workerData.clanMembersMenuSlot ?? 11,
     clanKickConfirmSlot: workerData.clanKickConfirmSlot ?? 0,
-    /** Пауза после /an перед выдачей (мс) */
     anarchyRejoinWaitMs: workerData.anarchyRejoinWaitMs ?? 5000,
     idleQuitMs: workerData.idleQuitMs ?? 25_000,
     deliverTimeoutMs: workerData.deliverTimeoutMs ?? 600_000,
     balanceWaitMs: workerData.balanceWaitMs ?? 15_000,
     balanceCmdWaitMs: workerData.balanceCmdWaitMs ?? 2000,
     healthCheckObserveMs: workerData.healthCheckObserveMs ?? 8000,
+    afk: false,
+    balance: null,
+    /** как botMenu в 4narek: что ждём от следующего windowOpen */
+    menu: null,
 };
 
 const anarchyCmd = `/an${config.anarchy}`;
-const AFK_MARKER = 'Данная команда недоступна в режиме AFK';
-const CAPTCHA_MARKER = 'BotFilter >> Введите номер с картинки в чат';
 
-const botState = { afk: false, balance: null };
-const clanGuiState = createClanGuiState();
-const deliverQueue = [];
-
-/** Флаги текущей выдачи — выставляются из чата */
-const clanChatFlags = {
-    inviteSent: false,
-    joined: false,
-    withdrew: false,
-    offline: false,
-};
-
-let bot = null;
+var bot = null;
 let connecting = false;
 let ready = false;
 let delivering = false;
 let currentOrder = null;
 let idleQuitTimer = null;
 let healthCheckActive = false;
-/** После join — игнорировать смену ника */
 let clanJoinedForCurrent = false;
 
-const chatLog = createChatLogger(config.username);
-const log = (msg) => chatLog.logInfo(msg);
-const logOk = (msg) => chatLog.logOk(msg);
+const deliverQueue = [];
 
-function postEvent(name, extra = {}) {
+// флаги выдачи (из чата)
+let inviteSent = false;
+let playerJoined = false;
+let playerWithdrew = false;
+let playerOffline = false;
+
+// GUI: права / kick
+let guiNick = '';
+let guiNickSlot = 11;
+let guiOk = false;
+
+const { logInfo, logOk, logServerMessage } = createChatLogger(config.username);
+
+function post(name, extra = {}) {
     parentPort.postMessage({ name, ...extra });
 }
 
@@ -81,145 +75,272 @@ function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
 }
 
-function resetClanChatFlags() {
-    clanChatFlags.inviteSent = false;
-    clanChatFlags.joined = false;
-    clanChatFlags.withdrew = false;
-    clanChatFlags.offline = false;
+async function rnd(min, max) {
+    await sleep(min + Math.floor(Math.random() * (max - min + 1)));
+}
+
+async function rndClick() {
+    await rnd(config.clanClickDelayMinMs, config.clanClickDelayMaxMs);
+}
+
+function plain(text) {
+    return String(text).replace(/§./g, '').replace(/&[0-9a-fk-or]/gi, '');
+}
+
+function nickIn(text, nick) {
+    const esc = String(nick).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`\\b${esc}\\b`, 'i').test(text);
+}
+
+function investSum(kk) {
+    return String(Math.round(Number(kk) * config.clanInvestMultiplier));
+}
+
+function resetDeliveryFlags() {
+    inviteSent = false;
+    playerJoined = false;
+    playerWithdrew = false;
+    playerOffline = false;
     clanJoinedForCurrent = false;
 }
 
-function phaseDeadlineMs() {
-    return Date.now() + config.clanPhaseTimeoutMs;
+function resetGui() {
+    config.menu = null;
+    guiNick = '';
+    guiNickSlot = -1;
+    guiOk = false;
 }
 
-function investAmountForOrder(order) {
-    return formatClanInvestAmount(order.amount, config.clanInvestMultiplier);
-}
-
-function scheduleIdleQuit() {
-    clearTimeout(idleQuitTimer);
-    idleQuitTimer = setTimeout(() => {
-        if (delivering || currentOrder || deliverQueue.length > 0) return;
-        shutdownBot('idle');
-    }, config.idleQuitMs);
-}
-
-function shutdownBot(reason) {
-    clearTimeout(idleQuitTimer);
-    healthCheckActive = false;
-    ready = false;
-    delivering = false;
-    currentOrder = null;
-    resetClanChatFlags();
-    resetClanGuiState(clanGuiState);
+async function closeWindow() {
+    if (!bot?.currentWindow) return;
     try {
-        bot?.quit();
-    } catch {
-        /* ignore */
-    }
-    bot = null;
-    log(`отключение (${reason})`);
-    postEvent('shutdown', { reason });
-    if (reason === 'banned' || reason === 'captcha') {
-        setTimeout(() => process.exit(reason === 'banned' ? 2 : 3), 500);
-    }
+        await bot.closeWindow(bot.currentWindow);
+    } catch { /* */ }
+    await rnd(300, 500);
 }
 
-async function fetchBalance(deadlineMs = config.balanceWaitMs) {
-    if (!bot?.chat) return null;
-
-    botState.balance = null;
-    const deadline = Date.now() + deadlineMs;
-    const cmdWait = config.balanceCmdWaitMs;
-
-    log('проверка баланса: /balance…');
-
-    while (botState.balance === null && Date.now() < deadline) {
-        if (!bot) return null;
-        await antiAfkIfNeeded(bot, botState, log);
-        bot.chat('/balance');
-        await sleep(cmdWait);
+function findNickSlot(nick) {
+    const w = bot?.currentWindow;
+    if (!w?.slots) return -1;
+    const low = nick.toLowerCase();
+    for (let i = 0; i < w.slots.length; i++) {
+        const s = w.slots[i];
+        if (s && JSON.stringify(s).toLowerCase().includes(low)) return i;
     }
-
-    if (botState.balance != null) {
-        log(`баланс: ${botState.balance}`);
-    } else {
-        log('баланс: не ответил сервер');
-    }
-    return botState.balance;
+    return -1;
 }
 
-async function fetchBalanceLike4Narek() {
-    if (!healthCheckActive || !bot) return null;
-    return fetchBalance(config.balanceWaitMs);
-}
+// ========== чат ==========
 
-function finishHealthCheck(status) {
-    if (!healthCheckActive) return;
-    healthCheckActive = false;
-    clearTimeout(idleQuitTimer);
-    log(`проверка завершена: ${status}`);
-    postEvent('health_check', {
-        status,
-        balance: botState.balance ?? null,
-    });
-    if (status === 'banned') {
-        parentPort.postMessage({ name: 'banned' });
-    }
-    if (status === 'captcha') {
-        parentPort.postMessage(`${config.username} - ввести капчу (проверка)`);
-    }
-    if (status === 'interrupted') {
-        processNextDeliver();
-        return;
-    }
-    shutdownBot(status === 'ok' ? 'health_ok' : status);
-}
+function handleChatMessage(raw) {
+    const text = plain(raw);
 
-function abortHealthCheckForOrder() {
-    if (!healthCheckActive) return false;
-    log('проверка прервана — пришёл заказ');
-    finishHealthCheck('interrupted');
-    return true;
-}
-
-async function runHealthCheck() {
-    if (delivering || deliverQueue.length > 0 || currentOrder) {
-        postEvent('health_skipped', { reason: 'busy' });
+    if (text.includes('вы забанены')) {
+        if (healthCheckActive) return finishHealth('banned');
+        parentPort.postMessage(`${config.username} - забанен`);
+        endDelivery('banned');
+        shutdown('banned');
         return;
     }
 
-    healthCheckActive = true;
-    log('проверка анархии: бан / капча…');
+    if (text.includes(CAPTCHA_MARKER)) {
+        if (healthCheckActive) return finishHealth('captcha');
+        parentPort.postMessage(`${config.username} - ввести капчу`);
+        endDelivery('captcha');
+        shutdown('captcha');
+        return;
+    }
 
-    try {
-        if (bot && ready) {
-            await fetchBalanceLike4Narek();
-            if (botState.balance != null) {
-                postEvent('health_balance', { balance: botState.balance });
+    if (text.includes(AFK_MARKER)) {
+        config.afk = true;
+        logInfo('сервер: режим AFK');
+        return;
+    }
+
+    const bal = parseBalanceFromChat(text);
+    if (bal != null) config.balance = bal;
+
+    if (!delivering || !currentOrder?.nick) return;
+    const nick = currentOrder.nick;
+
+    if (text.includes(CLAN_INVITE_OK)) {
+        inviteSent = true;
+        logOk('invite отправлен');
+        return;
+    }
+
+    if (text.includes('[⚔] Игрок') && text.includes(CLAN_JOIN_TAIL) && nickIn(text, nick)) {
+        playerJoined = true;
+        clanJoinedForCurrent = true;
+        logOk(`join: ${nick}`);
+        post('clan_joined', { orderId: currentOrder.orderId, nick });
+        return;
+    }
+
+    if (text.includes('[⚔] Игрок') && text.includes(CLAN_WITHDRAW_MID) && text.includes(CLAN_WITHDRAW_TAIL) && nickIn(text, nick)) {
+        playerWithdrew = true;
+        logOk(`withdraw: ${nick}`);
+        return;
+    }
+
+    if (text.includes(CLAN_OFFLINE_HEAD) && text.includes(CLAN_OFFLINE_TAIL) && nickIn(text, nick)) {
+        playerOffline = true;
+        logInfo(`offline: ${nick}`);
+    }
+}
+
+// ========== GUI (windowOpen) ==========
+
+async function onWindowOpen() {
+    if (!bot?.currentWindow || config.menu == null) return;
+
+    logInfo(`windowOpen → ${config.menu}`);
+
+    switch (config.menu) {
+        // /clan menu → клик «участники»
+        case 'clan_menu':
+            await rndClick();
+            if (!bot.currentWindow) break;
+            logInfo(`клик слот ${config.clanMembersMenuSlot}`);
+            config.menu = 'clan_members';
+            await bot.clickWindow(config.clanMembersMenuSlot, LMB, 0);
+            break;
+
+        // список участников → shift по нику
+        case 'clan_members':
+            await rndClick();
+            if (!bot.currentWindow) break;
+            guiNickSlot = findNickSlot(guiNick);
+            if (guiNickSlot < 0) {
+                logInfo(`ник ${guiNick} не найден в окне`);
+                guiOk = false;
+                config.menu = null;
+                break;
             }
-            await sleep(config.healthCheckObserveMs);
-            if (healthCheckActive) finishHealthCheck('ok');
-            return;
-        }
-        await ensureBot();
-    } catch (e) {
-        healthCheckActive = false;
-        log(`проверка: ошибка подключения — ${e.message}`);
-        postEvent('health_check_failed', { reason: e.message });
-        shutdownBot('health_fail');
+            logInfo(`shift×1 слот ${guiNickSlot}`);
+            config.menu = 'clan_shift2';
+            await bot.clickWindow(guiNickSlot, LMB, SHIFT);
+            break;
+
+        // второй shift (окно участников или прав)
+        case 'clan_shift2':
+            if (guiNickSlot < 0) break;
+            await rndClick();
+            if (!bot.currentWindow) break;
+            logInfo(`shift×2 слот ${guiNickSlot}`);
+            await bot.clickWindow(guiNickSlot, LMB, SHIFT);
+            await closeWindow();
+            guiOk = true;
+            break;
+
+        // /clan kick → подтвердить
+        case 'clan_kick':
+            await rndClick();
+            if (!bot.currentWindow) break;
+            logInfo(`kick confirm слот ${config.clanKickConfirmSlot}`);
+            await bot.clickWindow(config.clanKickConfirmSlot, LMB, 0);
+            await sleep(800);
+            await closeWindow();
+            guiOk = true;
+            break;
     }
 }
 
-async function ensureBot() {
-    if (bot || connecting) {
+/** Шлём chat-команду, ждём пока GUI отработает (guiOk) или 12с */
+async function doGuiCmd(cmd, menu, deadline) {
+    while (Date.now() < deadline && !guiOk) {
+        config.menu = menu;
+        guiOk = false;
+        await closeWindow();
+        logInfo(cmd);
+        bot.chat(cmd);
+
+        const roundEnd = Math.min(deadline, Date.now() + 12_000);
+        while (Date.now() < roundEnd && !guiOk && config.menu != null) {
+            await sleep(400);
+            if (!bot?.currentWindow) await antiAfkIfNeeded(bot, config, logInfo);
+        }
+
+        if (!guiOk) {
+            logInfo('GUI не прошёл — повтор');
+            await sleep(config.clanLoopWaitMs);
+        }
+    }
+    config.menu = null;
+    return guiOk;
+}
+
+async function grantWithdrawPerms(nick, deadline) {
+    guiNick = nick;
+    guiNickSlot = -1;
+    guiOk = false;
+    return doGuiCmd('/clan menu', 'clan_menu', deadline);
+}
+
+async function kickFromClan(nick, deadline) {
+    guiNick = nick;
+    guiOk = false;
+    return doGuiCmd(`/clan kick ${nick}`, 'clan_kick', deadline);
+}
+
+// ========== баланс ==========
+
+async function safeBalance(waitMs = config.balanceWaitMs) {
+    if (!bot?.chat) return null;
+    config.balance = null;
+    const deadline = Date.now() + waitMs;
+    logInfo('/balance…');
+    while (config.balance == null && Date.now() < deadline) {
+        if (!bot) return null;
+        await antiAfkIfNeeded(bot, config, logInfo);
+        bot.chat('/balance');
+        await sleep(config.balanceCmdWaitMs);
+    }
+    if (config.balance != null) logInfo(`баланс: ${config.balance}`);
+    return config.balance;
+}
+
+// ========== бот ==========
+
+function wireBot(b) {
+    b.on('message', (msg) => {
+        const t = msg.toString();
+        logServerMessage(t);
+        handleChatMessage(t);
+    });
+
+    b.on('resourcePack', (_u, hash) => {
+        b._client?.write('resource_pack_receive', { uuid: hash.ascii, result: 0 });
+    });
+
+    b.on('windowOpen', () => void onWindowOpen());
+
+    b.on('kicked', (reason) => {
+        post('kicked', { reason: JSON.stringify(reason) });
+        shutdown('kicked');
+        process.exit(1);
+    });
+
+    b.on('end', () => {
+        if (bot === b) {
+            bot = null;
+            ready = false;
+        }
+        process.exit(1);
+    });
+
+    b.on('error', () => process.exit(1));
+}
+
+async function connectBot() {
+    if (bot) return bot;
+    if (connecting) {
         while (connecting) await sleep(200);
         return bot;
     }
 
     connecting = true;
-    log('подключение к серверу…');
+    logInfo('подключение…');
 
     return new Promise((resolve, reject) => {
         const b = mineflayer.createBot({
@@ -231,527 +352,338 @@ async function ensureBot() {
             chatLengthLimit: 256,
         });
 
-        let done = false;
-        const connectTimeout = setTimeout(() => {
-            if (done) return;
-            done = true;
+        let settled = false;
+        const timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
             connecting = false;
-            try {
-                b.quit();
-            } catch {
-                /* ignore */
-            }
-            reject(new Error('таймаут подключения до spawn'));
+            try { b.quit(); } catch { /* */ }
+            reject(new Error('таймаут spawn'));
         }, 45_000);
 
-        function fail(err) {
-            if (done) return;
-            done = true;
-            clearTimeout(connectTimeout);
+        const done = (err, result) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
             connecting = false;
-            reject(err instanceof Error ? err : new Error(String(err)));
-        }
+            if (err) reject(err);
+            else resolve(result);
+        };
 
-        function ok() {
-            if (done) return;
-            done = true;
-            clearTimeout(connectTimeout);
-            connecting = false;
-            resolve(b);
-        }
-
-        b.on('scoreboardCreated', (scoreboard) => {
-            if (JSON.stringify(scoreboard).includes(`${config.anarchy}`)) {
-                log('scoreboard: на анархии');
-            }
-        });
-
-        b.on('message', (message) => {
-            const text = message.toString();
-            chatLog.logServerMessage(text);
-            void onServerChat(text);
-        });
-
-        b.on('resourcePack', (_url, hash) => {
-            if (b._client) {
-                b._client.write('resource_pack_receive', { uuid: hash.ascii, result: 0 });
-            }
-        });
-
-        b.on('kicked', (reason) => {
-            postEvent('kicked', { reason: JSON.stringify(reason) });
-            fail(new Error(`kicked: ${JSON.stringify(reason)}`));
-            shutdownBot('kicked');
-            process.exit(1);
-        });
-
-        b.on('end', () => {
-            if (!done) {
-                fail(new Error('соединение закрыто до spawn'));
-            }
-            if (bot === b) {
-                bot = null;
-                ready = false;
-            }
-            process.exit(1);
-        });
+        wireBot(b);
 
         b.once('spawn', async () => {
             try {
-                log('spawn → /l → анархия');
+                logInfo('spawn → /l → /an');
                 await sleep(1500);
                 b.chat(`/l ${config.password}`);
                 await sleep(2000);
                 b.chat(anarchyCmd);
                 await sleep(11_000);
+
                 bot = b;
                 ready = true;
-                attachClanGuiHandler(bot, clanGuiState, config, log);
-                postEvent('ready');
+                post('ready');
+
                 if (healthCheckActive) {
-                    log('на анархии — бан/капча/баланс');
-                    await fetchBalanceLike4Narek();
-                    if (botState.balance != null) {
-                        postEvent('health_balance', { balance: botState.balance });
-                    }
+                    await safeBalance();
+                    if (config.balance != null) post('health_balance', { balance: config.balance });
                     await sleep(config.healthCheckObserveMs);
-                    if (healthCheckActive) finishHealthCheck('ok');
-                    ok();
+                    if (healthCheckActive) finishHealth('ok');
+                    done(null, b);
                     return;
                 }
-                log('на анархии, готов к выдаче через клан');
-                processNextDeliver();
-                ok();
-            } catch (e) {
-                fail(e);
-            }
-        });
 
-        b.on('error', (err) => {
-            fail(err);
-            process.exit(1);
+                logOk('готов к выдаче');
+                nextOrder();
+                done(null, b);
+            } catch (e) {
+                done(e);
+            }
         });
     });
 }
 
-function handleClanChatDuringDelivery(text, nick) {
-    if (isClanInviteSentLine(text)) {
-        clanChatFlags.inviteSent = true;
-        logOk(`clan invite отправлен`);
-        return;
-    }
-    if (isClanJoinedLine(text, nick)) {
-        clanChatFlags.joined = true;
-        clanJoinedForCurrent = true;
-        logOk(`clan join: ${nick}`);
-        postEvent('clan_joined', { orderId: currentOrder.orderId, nick });
-        return;
-    }
-    if (isClanWithdrawLine(text, nick)) {
-        clanChatFlags.withdrew = true;
-        logOk(`clan withdraw: ${nick}`);
-        return;
-    }
-    if (isClanPlayerOfflineLine(text, nick)) {
-        clanChatFlags.offline = true;
-        log(`clan offline: ${nick}`);
+function shutdown(reason) {
+    clearTimeout(idleQuitTimer);
+    healthCheckActive = false;
+    ready = false;
+    delivering = false;
+    currentOrder = null;
+    resetDeliveryFlags();
+    resetGui();
+    try { bot?.quit(); } catch { /* */ }
+    bot = null;
+    logInfo(`отключение (${reason})`);
+    post('shutdown', { reason });
+    if (reason === 'banned' || reason === 'captcha') {
+        setTimeout(() => process.exit(reason === 'banned' ? 2 : 3), 500);
     }
 }
 
-async function onServerChat(rawText) {
-    const text = stripMcFormatting(rawText);
+// ========== выдача ==========
 
-    if (text.includes('вы забанены')) {
-        if (healthCheckActive) {
-            finishHealthCheck('banned');
-            return;
-        }
-        parentPort.postMessage(`${config.username} - забанен`);
-        finishDelivery('banned');
-        shutdownBot('banned');
-        return;
-    }
-
-    if (text.includes(CAPTCHA_MARKER)) {
-        if (healthCheckActive) {
-            finishHealthCheck('captcha');
-            return;
-        }
-        parentPort.postMessage(`${config.username} - ввести капчу`);
-        finishDelivery('captcha');
-        shutdownBot('captcha');
-        return;
-    }
-
-    if (text.includes(AFK_MARKER)) {
-        botState.afk = true;
-        log('сервер: режим AFK');
-        return;
-    }
-
-    const balance = parseBalanceFromChat(text);
-    if (balance != null) {
-        botState.balance = balance;
-    }
-
-    if (delivering && currentOrder?.nick) {
-        handleClanChatDuringDelivery(text, currentOrder.nick);
-    }
-}
-
-async function waitUntilFlag(flagName, deadline) {
-    while (delivering && currentOrder && Date.now() < deadline) {
-        if (clanChatFlags[flagName]) return true;
-        if (flagName !== 'offline' && clanChatFlags.offline) return false;
-        await antiAfkIfNeeded(bot, botState, log);
-        await sleep(400);
-    }
-    return clanChatFlags[flagName];
-}
-
-async function tryKickCurrent(nick, deadline) {
-    if (!nick || !bot) return;
-    log(`clan kick: ${nick}`);
-    await runKickFromClan(bot, botState, clanGuiState, config, log, nick, deadline);
-}
-
-/**
- * Выдача через клан: invite → join → perms → invest → withdraw → kick.
- */
-async function clanDeliveryLoop() {
+async function deliverClan() {
     const order = currentOrder;
     const nick = order.nick;
-    const investRaw = investAmountForOrder(order);
-    const orderDeadline = Date.now() + config.deliverTimeoutMs;
-    let inviteSentEvent = false;
-    let investEvent = false;
+    const invest = investSum(order.amount);
+    const orderEnd = Date.now() + config.deliverTimeoutMs;
+    const active = () => delivering && currentOrder?.orderId === order.orderId;
+    const phaseEnd = () => Date.now() + config.clanPhaseTimeoutMs;
 
-    const ensureOrderActive = () => delivering && currentOrder?.orderId === order.orderId;
-
-    // [0] Баланс перед invite
-    const balance = await fetchBalance();
-    if (!ensureOrderActive()) return;
-    const need = Number(investRaw);
-    if (balance == null || balance < need) {
-        log(`недостаточно баланса: ${balance ?? '?'} < ${need}`);
-        finishDelivery('insufficient_funds');
+    // 0. баланс
+    const balance = await safeBalance();
+    if (!active()) return;
+    if (balance == null || balance < Number(invest)) {
+        logInfo(`мало денег: ${balance ?? '?'} < ${invest}`);
+        endDelivery('insufficient_funds');
         return;
     }
 
-    // [1] /clan invite
-    log(`clan invite → ${nick}, invest ${investRaw}`);
-    resetClanChatFlags();
-    let phaseEnd = phaseDeadlineMs();
-
-    while (ensureOrderActive() && Date.now() < orderDeadline && Date.now() < phaseEnd) {
-        if (clanChatFlags.inviteSent) break;
-        if (clanChatFlags.offline) {
-            finishDelivery('offline');
-            return;
-        }
-
-        const r = await safeClanChatLoop(bot, botState, log, `/clan invite ${nick}`, {
-            untilOk: () => clanChatFlags.inviteSent,
-            untilOffline: () => clanChatFlags.offline,
-            deadline: phaseEnd,
-            loopWaitMs: config.clanLoopWaitMs,
-        });
-
-        if (clanChatFlags.offline || r === 'offline') {
-            finishDelivery('offline');
-            return;
-        }
-        if (clanChatFlags.inviteSent) break;
+    // 1. invite
+    logInfo(`invite ${nick}, invest ${invest}`);
+    resetDeliveryFlags();
+    let end = phaseEnd();
+    while (active() && Date.now() < orderEnd && Date.now() < end && !inviteSent) {
+        if (playerOffline) { endDelivery('offline'); return; }
+        await antiAfkIfNeeded(bot, config, logInfo);
+        if (config.afk) { await sleep(config.clanLoopWaitMs); continue; }
+        await closeWindow();
+        bot.chat(`/clan invite ${nick}`);
+        await sleep(config.clanLoopWaitMs);
     }
+    if (!active()) return;
+    if (!inviteSent) { endDelivery('timeout'); return; }
+    post('clan_invite_sent', { orderId: order.orderId, nick });
 
-    if (!ensureOrderActive()) return;
-    if (!clanChatFlags.inviteSent) {
-        log('clan invite: таймаут');
-        finishDelivery('timeout');
+    // 2. join
+    logInfo(`ждём join ${nick}`);
+    end = Math.min(phaseEnd(), orderEnd);
+    while (active() && Date.now() < end && !playerJoined) {
+        if (playerOffline) { endDelivery('offline'); return; }
+        await antiAfkIfNeeded(bot, config, logInfo);
+        await sleep(400);
+    }
+    if (!active()) return;
+    if (!playerJoined) {
+        await kickFromClan(nick, phaseEnd());
+        endDelivery('timeout');
         return;
     }
 
-    if (!inviteSentEvent) {
-        inviteSentEvent = true;
-        postEvent('clan_invite_sent', { orderId: order.orderId, nick });
+    // 3. права withdraw (GUI)
+    logInfo('права withdraw…');
+    end = phaseEnd();
+    let perms = false;
+    while (active() && Date.now() < end && !perms) {
+        perms = await grantWithdrawPerms(nick, end);
+        if (!perms) await sleep(config.clanLoopWaitMs);
     }
-
-    // [2] Ждём join
-    phaseEnd = phaseDeadlineMs();
-    log(`clan join: ждём ${nick}…`);
-    const joined = await waitUntilFlag('joined', Math.min(phaseEnd, orderDeadline));
-    if (!ensureOrderActive()) return;
-    if (!joined) {
-        log('clan join: таймаут');
-        await tryKickCurrent(nick, phaseDeadlineMs());
-        finishDelivery('timeout');
+    if (!active()) return;
+    if (!perms) {
+        await kickFromClan(nick, phaseEnd());
+        endDelivery('timeout');
         return;
     }
 
-    // [3] Права withdraw через GUI
-    phaseEnd = phaseDeadlineMs();
-    log('clan menu: выдача прав…');
-    let permsOk = false;
-    while (ensureOrderActive() && Date.now() < phaseEnd && !permsOk) {
-        permsOk = await runGrantWithdrawPerms(
-            bot,
-            botState,
-            clanGuiState,
-            config,
-            log,
-            nick,
-            phaseEnd,
-        );
-        if (!permsOk) {
-            await antiAfkIfNeeded(bot, botState, log);
-            await sleep(config.clanLoopWaitMs);
-        }
+    // 4. invest
+    logInfo(`invest ${invest}`);
+    end = phaseEnd();
+    let sent = false;
+    while (active() && Date.now() < end && !sent) {
+        await antiAfkIfNeeded(bot, config, logInfo);
+        if (config.afk) { await sleep(config.clanLoopWaitMs); continue; }
+        await closeWindow();
+        bot.chat(`/clan invest ${invest}`);
+        sent = true;
     }
-    if (!ensureOrderActive()) return;
-    if (!permsOk) {
-        log('clan menu: таймаут прав');
-        await tryKickCurrent(nick, phaseDeadlineMs());
-        finishDelivery('timeout');
-        return;
-    }
-
-    // [4] /clan invest (без маркера в чате — шлём из цикла с anti-AFK)
-    phaseEnd = phaseDeadlineMs();
-    log(`clan invest ${investRaw}`);
-    let investSent = false;
-    while (ensureOrderActive() && Date.now() < phaseEnd && !investSent) {
-        await antiAfkIfNeeded(bot, botState, log);
-        if (botState.afk) {
-            await sleep(config.clanLoopWaitMs);
-            continue;
-        }
-        try {
-            await closeWindowSafe(bot);
-            bot.chat(`/clan invest ${investRaw}`);
-            investSent = true;
-        } catch (e) {
-            log(`clan invest fail: ${e.message}`);
-            await sleep(config.clanLoopWaitMs);
-        }
-    }
-    if (!ensureOrderActive()) return;
-    if (!investSent) {
-        log('clan invest: таймаут');
-        await tryKickCurrent(nick, phaseDeadlineMs());
-        finishDelivery('timeout');
+    if (!active()) return;
+    if (!sent) {
+        await kickFromClan(nick, phaseEnd());
+        endDelivery('timeout');
         return;
     }
     await sleep(config.clanLoopWaitMs);
+    post('clan_invested', { orderId: order.orderId, nick, investAmount: invest, amountKk: order.amount });
 
-    if (!investEvent) {
-        investEvent = true;
-        postEvent('clan_invested', {
-            orderId: order.orderId,
-            nick,
-            investAmount: investRaw,
-            amountKk: order.amount,
-        });
-    }
-
-    // [5] Ждём withdraw (сумму не проверяем — только ник в строке)
-    phaseEnd = phaseDeadlineMs();
-    log(`clan withdraw: ждём ${nick}…`);
-    while (ensureOrderActive() && Date.now() < phaseEnd && !clanChatFlags.withdrew) {
-        await antiAfkIfNeeded(bot, botState, log);
+    // 5. withdraw
+    logInfo(`ждём withdraw ${nick}`);
+    end = phaseEnd();
+    while (active() && Date.now() < end && !playerWithdrew) {
+        await antiAfkIfNeeded(bot, config, logInfo);
         await sleep(400);
     }
-
-    if (!ensureOrderActive()) return;
-    if (!clanChatFlags.withdrew) {
-        log('clan withdraw: таймаут');
-        await tryKickCurrent(nick, phaseDeadlineMs());
-        const queued = deliverQueue.length;
-        if (queued > 0) {
-            finishDelivery('timeout', { queued });
-        } else {
-            finishDelivery('timeout');
-        }
+    if (!active()) return;
+    if (!playerWithdrew) {
+        await kickFromClan(nick, phaseEnd());
+        endDelivery('timeout', deliverQueue.length);
         return;
     }
 
-    // [6] Kick после успешного withdraw
-    phaseEnd = phaseDeadlineMs();
-    await tryKickCurrent(nick, phaseEnd);
-
-    if (!ensureOrderActive()) return;
-    finishDelivery('ok');
+    // 6. kick
+    await kickFromClan(nick, phaseEnd());
+    if (!active()) return;
+    endDelivery('ok');
 }
 
-const FATAL_DELIVERY = new Set(['banned', 'captcha']);
+const FATAL = new Set(['banned', 'captcha']);
 
-function finishDelivery(result, { skipQueue = false, queued } = {}) {
+function endDelivery(result, queued) {
     if (!currentOrder) return;
-    const orderId = currentOrder.orderId;
-    const nick = currentOrder.nick;
-    const amountKk = currentOrder.amount;
-    const queueLen = queued ?? deliverQueue.length;
+    const { orderId, nick, amount: amountKk } = currentOrder;
+    const q = queued ?? deliverQueue.length;
     delivering = false;
     currentOrder = null;
-    resetClanChatFlags();
-    resetClanGuiState(clanGuiState);
+    resetDeliveryFlags();
+    resetGui();
 
     if (result === 'ok') {
         void audit('game_clan_ok', { orderId, nick, amountKk });
-        postEvent('delivery_ok', { orderId });
+        post('delivery_ok', { orderId });
     } else if (result === 'offline') {
-        postEvent('player_offline', { orderId });
+        post('player_offline', { orderId });
     } else if (result === 'insufficient_funds') {
-        postEvent('insufficient_funds', { orderId });
+        post('insufficient_funds', { orderId });
     } else if (result === 'banned') {
-        postEvent('delivery_failed', { orderId, reason: 'banned' });
+        post('delivery_failed', { orderId, reason: 'banned' });
     } else if (result === 'captcha') {
-        postEvent('delivery_failed', { orderId, reason: 'captcha' });
-    } else if (result === 'timeout' && queueLen > 0) {
-        postEvent('delivery_stalled', { orderId, reason: 'clan_withdraw_timeout', queued: queueLen });
+        post('delivery_failed', { orderId, reason: 'captcha' });
+    } else if (result === 'timeout' && q > 0) {
+        post('delivery_stalled', { orderId, reason: 'clan_withdraw_timeout', queued: q });
     } else if (result === 'timeout') {
-        postEvent('delivery_stalled', { orderId, reason: 'clan_timeout', queued: queueLen });
+        post('delivery_stalled', { orderId, reason: 'clan_timeout', queued: q });
     } else {
-        postEvent('delivery_failed', { orderId, reason: result || 'unknown' });
+        post('delivery_failed', { orderId, reason: result || 'unknown' });
     }
 
-    if (skipQueue || FATAL_DELIVERY.has(result)) {
-        if (!skipQueue) deliverQueue.length = 0;
+    if (FATAL.has(result)) {
+        deliverQueue.length = 0;
         return;
     }
-    processNextDeliver();
-}
-
-function processNextDeliver() {
-    clearTimeout(idleQuitTimer);
-    if (healthCheckActive || delivering || !ready) return;
-    const order = deliverQueue.shift();
-    if (!order) {
-        scheduleIdleQuit();
-        return;
-    }
-    startDeliver(order);
-}
-
-async function ensureOnAnarchyBeforeOrder() {
-    if (!bot?.chat) return false;
-
-    await closeWindowSafe(bot);
-    await antiAfkIfNeeded(bot, botState, log);
-
-    if (botState.afk) {
-        log('AFK перед заказом — повтор после осмотра');
-        await sleep(config.clanLoopWaitMs);
-    }
-
-    log(`${anarchyCmd} (перед заказом)`);
-    try {
-        bot.chat(anarchyCmd);
-    } catch (e) {
-        log(`anarchy cmd fail: ${e.message}`);
-        return false;
-    }
-
-    const waitMs = Number(config.anarchyRejoinWaitMs) || 5000;
-    await sleep(waitMs);
-    return true;
+    nextOrder();
 }
 
 async function startDeliver(order) {
     delivering = true;
     currentOrder = order;
-    botState.afk = false;
-    resetClanChatFlags();
-    log(`выдача ${order.orderId.slice(0, 8)}…: ${order.nick} ${order.amount}kk (клан)`);
+    config.afk = false;
+    resetDeliveryFlags();
+    logInfo(`выдача ${order.orderId.slice(0, 8)}… ${order.nick} ${order.amount}kk`);
 
     try {
-        if (!(await ensureOnAnarchyBeforeOrder())) {
-            finishDelivery('disconnected');
+        await closeWindow();
+        await antiAfkIfNeeded(bot, config, logInfo);
+        bot.chat(anarchyCmd);
+        await sleep(config.anarchyRejoinWaitMs);
+
+        await deliverClan();
+    } catch (e) {
+        logInfo(`crash: ${e.message}`);
+        await kickFromClan(order.nick, Date.now() + config.clanPhaseTimeoutMs);
+        endDelivery('delivery_loop_crash');
+    }
+}
+
+function nextOrder() {
+    clearTimeout(idleQuitTimer);
+    if (healthCheckActive || delivering || !ready) return;
+
+    const order = deliverQueue.shift();
+    if (!order) {
+        idleQuitTimer = setTimeout(() => {
+            if (!delivering && !currentOrder && deliverQueue.length === 0) shutdown('idle');
+        }, config.idleQuitMs);
+        return;
+    }
+    void startDeliver(order);
+}
+
+// ========== health ==========
+
+function finishHealth(status) {
+    if (!healthCheckActive) return;
+    healthCheckActive = false;
+    logInfo(`health: ${status}`);
+    post('health_check', { status, balance: config.balance ?? null });
+    if (status === 'banned') parentPort.postMessage({ name: 'banned' });
+    if (status === 'captcha') parentPort.postMessage(`${config.username} - ввести капчу (проверка)`);
+    if (status === 'interrupted') return nextOrder();
+    shutdown(status === 'ok' ? 'health_ok' : status);
+}
+
+async function runHealthCheck() {
+    if (delivering || deliverQueue.length || currentOrder) {
+        post('health_skipped', { reason: 'busy' });
+        return;
+    }
+    healthCheckActive = true;
+    try {
+        if (bot && ready) {
+            await safeBalance();
+            if (config.balance != null) post('health_balance', { balance: config.balance });
+            await sleep(config.healthCheckObserveMs);
+            if (healthCheckActive) finishHealth('ok');
             return;
         }
-        await clanDeliveryLoop();
+        await connectBot();
     } catch (e) {
-        log(`clan delivery crash: ${e.message}`);
-        const nick = order.nick;
-        await tryKickCurrent(nick, phaseDeadlineMs());
-        finishDelivery('delivery_loop_crash');
+        healthCheckActive = false;
+        post('health_check_failed', { reason: e.message });
+        shutdown('health_fail');
     }
 }
 
-function isValidNick(nick) {
-    return typeof nick === 'string' && /^[a-zA-Z0-9_]{3,16}$/.test(nick);
-}
+// ========== очередь ==========
 
-function orderSortKey(order) {
-    return Number(order.paidAtMs) || 0;
-}
-
-function cancelOrderInWorker(orderId) {
-    for (let i = deliverQueue.length - 1; i >= 0; i--) {
-        if (deliverQueue[i].orderId === orderId) {
-            deliverQueue.splice(i, 1);
-            log(`очередь −1: отмена ${orderId.slice(0, 8)}…`);
-        }
-    }
-    if (currentOrder?.orderId === orderId) {
-        log(`прерывание выдачи: отмена ${orderId.slice(0, 8)}…`);
-        const nick = currentOrder.nick;
-        void tryKickCurrent(nick, phaseDeadlineMs()).finally(() => {
-            delivering = false;
-            currentOrder = null;
-            resetClanChatFlags();
-            processNextDeliver();
-        });
-    }
-}
-
-async function enqueueOrder(order) {
-    if (!isValidNick(order?.nick)) {
-        log(`пропуск ${order?.orderId}: нет ника`);
+async function addOrder(order) {
+    if (!/^[a-zA-Z0-9_]{3,16}$/.test(order?.nick || '')) {
+        logInfo(`пропуск — плохой ник`);
         return;
     }
-
-    if (currentOrder?.orderId === order.orderId) {
-        if (clanJoinedForCurrent) {
-            log(`ник игнор — ${order.nick} уже в клане`);
-        }
-        return;
-    }
-
+    if (currentOrder?.orderId === order.orderId) return;
     if (deliverQueue.some((o) => o.orderId === order.orderId)) return;
 
-    abortHealthCheckForOrder();
+    if (healthCheckActive) {
+        logInfo('health прерван — заказ');
+        finishHealth('interrupted');
+    }
 
-    const key = orderSortKey(order);
+    const t = Number(order.paidAtMs) || 0;
     let i = 0;
-    while (i < deliverQueue.length && orderSortKey(deliverQueue[i]) <= key) i++;
+    while (i < deliverQueue.length && (Number(deliverQueue[i].paidAtMs) || 0) <= t) i++;
     deliverQueue.splice(i, 0, order);
-    log(`очередь ${deliverQueue.length}: ${order.orderId.slice(0, 8)}… ${order.nick} ${order.amount}kk`);
+    logInfo(`очередь ${deliverQueue.length}: ${order.nick} ${order.amount}kk`);
 
     clearTimeout(idleQuitTimer);
     try {
-        await ensureBot();
-        processNextDeliver();
+        await connectBot();
+        nextOrder();
     } catch (e) {
-        log(`ошибка подключения: ${e.message}`);
-        postEvent('connect_failed', { reason: e.message });
+        post('connect_failed', { reason: e.message });
     }
 }
 
-log('воркер запущен (режим: клан)');
+function cancelOrder(orderId) {
+    for (let i = deliverQueue.length - 1; i >= 0; i--) {
+        if (deliverQueue[i].orderId === orderId) deliverQueue.splice(i, 1);
+    }
+    if (currentOrder?.orderId !== orderId) return;
+    const nick = currentOrder.nick;
+    void kickFromClan(nick, Date.now() + config.clanPhaseTimeoutMs).finally(() => {
+        delivering = false;
+        currentOrder = null;
+        resetDeliveryFlags();
+        nextOrder();
+    });
+}
+
+// ========== старт ==========
+
+logInfo('воркер (клан)');
 
 parentPort.on('message', (data) => {
-    if (data?.type === 'health_check') {
-        void runHealthCheck();
-        return;
-    }
-    if (data?.type === 'deliver' && data.order) {
-        void enqueueOrder(data.order);
-    }
-    if (data?.type === 'cancel_order' && data.orderId) {
-        cancelOrderInWorker(data.orderId);
-    }
-    if (data?.type === 'stop') {
-        shutdownBot('stop');
-        process.exit(0);
-    }
+    if (data?.type === 'health_check') void runHealthCheck();
+    if (data?.type === 'deliver' && data.order) void addOrder(data.order);
+    if (data?.type === 'cancel_order' && data.orderId) cancelOrder(data.orderId);
+    if (data?.type === 'stop') { shutdown('stop'); process.exit(0); }
 });
