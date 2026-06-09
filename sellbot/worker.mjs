@@ -8,8 +8,9 @@ import { audit } from '../lib/audit.mjs';
 // --- маркеры чата ---
 const CLAN_INVITE_OK = '[⚔] Вы отправили приглашение в клан игроку';
 const CLAN_JOIN_TAIL = ' присоединился к клану!';
+const CLAN_INVEST_LINE = 'пополнил баланс казны';
 const CLAN_WITHDRAW_MID = ' снял $';
-const CLAN_WITHDRAW_TAIL = ' из казны клана!';
+const CLAN_WITHDRAW_TAIL = ' из казны';
 const CLAN_OFFLINE_HEAD = '[⚔] Ошибка: Игрок';
 const CLAN_OFFLINE_TAIL = ' не в сети!';
 const AFK_MARKER = 'Данная команда недоступна в режиме AFK';
@@ -57,6 +58,7 @@ const deliverQueue = [];
 // флаги выдачи (из чата)
 let inviteSent = false;
 let playerJoined = false;
+let moneyInvested = false;
 let playerWithdrew = false;
 let playerOffline = false;
 
@@ -99,6 +101,7 @@ function investSum(kk) {
 function resetDeliveryFlags() {
     inviteSent = false;
     playerJoined = false;
+    moneyInvested = false;
     playerWithdrew = false;
     playerOffline = false;
     clanJoinedForCurrent = false;
@@ -166,7 +169,15 @@ function handleChatMessage(raw) {
         return;
     }
 
-    if (text.includes('[⚔] Игрок') && text.includes(CLAN_WITHDRAW_MID) && text.includes(CLAN_WITHDRAW_TAIL) && nickIn(text, nick)) {
+    // [X] Кланы: <бот> пополнил баланс казны
+    if (text.includes('Кланы:') && text.includes(CLAN_INVEST_LINE) && nickIn(text, config.username)) {
+        moneyInvested = true;
+        logOk(`invest: ${config.username}`);
+        return;
+    }
+
+    // [X] Игрок <ник> снял $... из казны
+    if (text.includes('Игрок') && text.includes(CLAN_WITHDRAW_MID) && text.includes(CLAN_WITHDRAW_TAIL) && nickIn(text, nick)) {
         playerWithdrew = true;
         logOk(`withdraw: ${nick}`);
         return;
@@ -489,27 +500,26 @@ async function deliverClan() {
         return;
     }
 
-    // 4. invest
+    // 4. invest — ждём строку в чате, как invite / withdraw
     logInfo(`invest ${invest}`);
+    moneyInvested = false;
     end = phaseEnd();
-    let sent = false;
-    while (active() && Date.now() < end && !sent) {
+    while (active() && Date.now() < end && !moneyInvested) {
         await antiAfkIfNeeded(bot, config, logInfo);
         if (config.afk) { await sleep(config.clanLoopWaitMs); continue; }
         await closeWindow();
         bot.chat(`/clan invest ${invest}`);
-        sent = true;
+        await sleep(config.clanLoopWaitMs);
     }
     if (!active()) return;
-    if (!sent) {
+    if (!moneyInvested) {
         await kickFromClan(nick, phaseEnd());
         endDelivery('timeout');
         return;
     }
-    await sleep(config.clanLoopWaitMs);
     post('clan_invested', { orderId: order.orderId, nick, investAmount: invest, amountKk: order.amount });
 
-    // 5. withdraw
+    // 5. withdraw — игрок один раз /clan withdraw
     logInfo(`ждём withdraw ${nick}`);
     end = phaseEnd();
     while (active() && Date.now() < end && !playerWithdrew) {
