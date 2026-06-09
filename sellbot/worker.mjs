@@ -1,6 +1,6 @@
 import mineflayer from 'mineflayer';
 import { parentPort, workerData } from 'worker_threads';
-import { antiAfkIfNeeded } from './lib/afk-look.mjs';
+import { antiAfkIfNeeded, lookAroundSpin } from './lib/afk-look.mjs';
 import { parseBalanceFromChat } from './lib/balance.mjs';
 import { createChatLogger } from './lib/chat-log.mjs';
 import { audit } from '../lib/audit.mjs';
@@ -18,6 +18,9 @@ const CAPTCHA_MARKER = 'BotFilter >> Введите номер с картинк
 
 const LMB = 0;
 const SHIFT = 1;
+/** Осмотр / сход с AFK в долгих ожиданиях (join, withdraw) */
+const AFK_WAIT_MS = 10_000;
+const CHAT_POLL_MS = 400;
 
 const config = {
     username: workerData.username,
@@ -120,6 +123,17 @@ async function closeWindow() {
         await bot.closeWindow(bot.currentWindow);
     } catch { /* */ }
     await rnd(300, 500);
+}
+
+/** Реактивно с AFK-флагом или профилактический осмотр (только без GUI) */
+async function afkTick() {
+    if (!bot) return;
+    if (config.afk) {
+        await antiAfkIfNeeded(bot, config, logInfo);
+        return;
+    }
+    if (bot.currentWindow || config.menu != null || guiBusy) return;
+    await lookAroundSpin(bot, logInfo);
 }
 
 // ========== чат ==========
@@ -473,10 +487,14 @@ async function deliverClan() {
     // 2. join
     logInfo(`ждём join ${nick}`);
     end = Math.min(phaseEnd(), orderEnd);
+    let lastAfkCheck = 0;
     while (active() && Date.now() < end && !playerJoined) {
         if (playerOffline) { endDelivery('offline'); return; }
-        await antiAfkIfNeeded(bot, config, logInfo);
-        await sleep(400);
+        if (Date.now() - lastAfkCheck >= AFK_WAIT_MS) {
+            await afkTick();
+            lastAfkCheck = Date.now();
+        }
+        await sleep(CHAT_POLL_MS);
     }
     if (!active()) return;
     if (!playerJoined) {
@@ -504,12 +522,26 @@ async function deliverClan() {
     logInfo(`invest ${invest}`);
     moneyInvested = false;
     end = phaseEnd();
+    lastAfkCheck = 0;
     while (active() && Date.now() < end && !moneyInvested) {
-        await antiAfkIfNeeded(bot, config, logInfo);
-        if (config.afk) { await sleep(config.clanLoopWaitMs); continue; }
+        if (Date.now() - lastAfkCheck >= AFK_WAIT_MS) {
+            await afkTick();
+            lastAfkCheck = Date.now();
+        }
+        if (config.afk) {
+            await sleep(CHAT_POLL_MS);
+            continue;
+        }
         await closeWindow();
         bot.chat(`/clan invest ${invest}`);
-        await sleep(config.clanLoopWaitMs);
+        const attemptEnd = Date.now() + config.clanLoopWaitMs;
+        while (Date.now() < attemptEnd && !moneyInvested) {
+            if (Date.now() - lastAfkCheck >= AFK_WAIT_MS) {
+                await afkTick();
+                lastAfkCheck = Date.now();
+            }
+            await sleep(CHAT_POLL_MS);
+        }
     }
     if (!active()) return;
     if (!moneyInvested) {
@@ -522,9 +554,13 @@ async function deliverClan() {
     // 5. withdraw — игрок один раз /clan withdraw
     logInfo(`ждём withdraw ${nick}`);
     end = phaseEnd();
+    lastAfkCheck = 0;
     while (active() && Date.now() < end && !playerWithdrew) {
-        await antiAfkIfNeeded(bot, config, logInfo);
-        await sleep(400);
+        if (Date.now() - lastAfkCheck >= AFK_WAIT_MS) {
+            await afkTick();
+            lastAfkCheck = Date.now();
+        }
+        await sleep(CHAT_POLL_MS);
     }
     if (!active()) return;
     if (!playerWithdrew) {
