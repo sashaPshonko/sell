@@ -34,6 +34,7 @@ import {
     playerokIsCancelled,
     playerokIsClosed,
     canDispatchToSellbot,
+    shouldIgnoreNickRedispatch,
     buyerHasPendingOrder,
     isOrderFulfilled,
 } from './lib/playerok-deal-sync.mjs';
@@ -373,6 +374,23 @@ export async function applyNickCommandUpdates(
         const buyerOrders = ordersInChat(state, chatId).filter((o) => o.buyerId === buyerId);
 
         for (const order of buyerOrders) {
+            if (shouldIgnoreNickRedispatch(order)) {
+                console.log(
+                    `[sell] повторный ник игнор: ${order.orderId?.slice(0, 8)}… (выдача уже была)`,
+                );
+                if (client && !order.lateNickHandled) {
+                    try {
+                        await sendChatMessage(client, chatId, buildOrderAlreadyDoneHint());
+                        setOrderPhase(state, order.orderId, order.phase, {
+                            lateNickHandled: true,
+                        });
+                    } catch (e) {
+                        console.warn(`[sell] ответ в чат: ${e.message}`);
+                    }
+                }
+                continue;
+            }
+
             if (order.clanJoinedAt && order.nick && order.nick !== u.nick) {
                 console.log(
                     `[sell] чат ${chatId.slice(0, 8)}…: новый ник игнор — ${order.nick} уже в клане`,

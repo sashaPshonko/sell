@@ -3,6 +3,10 @@ import { DELIVERY_ANARCHY } from './config.mjs';
 
 export { DELIVERY_ANARCHY };
 
+function askNickInChatLine() {
+    return '💬 Напиши в этом чате PlayerOK свой ник (не в Minecraft).';
+}
+
 /** Предупреждение: выдача через клан — риск бана, только твинк. */
 export function twinAccountWarningLines() {
     return [
@@ -49,18 +53,14 @@ export function buildGreetingText(ctx = null) {
     return [
         `ЗАХОДИ НА АНАРХИЮ ${anka}`,
         ...twinAccountWarningLines(),
-        'ПОСЛЕ ЭТОГО НАПИШИ НИК В ЭТОМ ЧАТЕ PlayerOK (не в игре):',
-        'твой-ник  ← ник ТВИНКА одним словом',
-        'или: ник твой-ник',
-        'или: /nick твой-ник',
+        askNickInChatLine(),
         ...bonusLines,
         '',
         '✅ выдача автоматическая - бот выдаст сам',
         '❗ Валюта только на Minecraft 1.21 (FunTime).',
         'На 1.16 не выдаём — отмена: /cancel',
         '💸 Выдача через клан: приглашение → казна → ты снимешь /clan withdraw',
-        '🔁 Ошибся в нике — напиши в ЭТОМ чате: /nick твой-ник',
-        '⏳ Бот не выдал — повтори в ЭТОМ чате: /nick твой-ник',
+        '🔁 Ошибся в нике или бот не выдал — напиши ник в этом чате снова',
         '❌ Отмена: /cancel',
     ].join('\n');
 }
@@ -82,8 +82,7 @@ export function buildNewOrderTwinHint(ctx = null) {
         '💸 Выдача теперь через клан (не /pay):',
         'приглашение → казна → ты снимешь /clan withdraw',
         '',
-        'В ЭТОМ чате PlayerOK напиши ник твинка:',
-        'твой-ник  или  /nick твой-ник',
+        askNickInChatLine(),
     ];
     if (lotKk > 0) {
         lines.push('', `📦 Лот: ${lotKk}кк`);
@@ -163,22 +162,12 @@ export function buildWrongNickHint() {
         '⚠️ Ник не подошёл.',
         '',
         '👤 Нужен ник Minecraft: 3–16 символов, a-z, A-Z, 0-9, _',
-        'Напиши в ЭТОМ чате PlayerOK:',
-        'твой-ник',
-        'ник твой-ник',
-        'твой-ник ник',
-        'или /nick твой-ник',
+        askNickInChatLine(),
     ].join('\n');
 }
 
 function retryNickAfterFailLines() {
-    return [
-        '💬 В ЭТОМ чате PlayerOK (не в Minecraft!) напиши снова:',
-        'твой-ник',
-        '/nick твой-ник',
-        'или: ник твой-ник',
-        'или: твой-ник ник',
-    ];
+    return [askNickInChatLine()];
 }
 
 export function buildRetryNickHint() {
@@ -245,10 +234,9 @@ export function buildQueueStallHint() {
         '⏱ Не успели завершить выдачу через клан (таймаут 1 мин на шаг).',
         '',
         `🎮 Будь на анархии ${anka} и в сети.`,
-        '💬 В ЭТОМ чате PlayerOK (не в Minecraft!) напиши снова:',
-        '/nick твой-ник',
+        askNickInChatLine(),
         '',
-        '💰 Валюта придёт после повторной команды в этом чате.',
+        '💰 Валюта придёт после того, как напишешь ник.',
     ].join('\n');
 }
 
@@ -417,7 +405,7 @@ export function buildDispatchingHint(nick, amountKk, bonus = null) {
         '',
         `🎮 Будь на анархии ${anka} и в сети (FunTime 1.21).`,
         '⛔ Ник должен быть твинка — на основном высокий риск бана.',
-        'Если не пришло за минуту — в ЭТОМ чате: /nick твой-ник',
+        'Если не пришло за минуту — напиши ник в этом чате.',
     );
     return lines.join('\n');
 }

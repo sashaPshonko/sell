@@ -59,6 +59,8 @@ let healthCheckActive = false;
 let clanJoinedForCurrent = false;
 
 const deliverQueue = [];
+/** orderId уже успешно выдан — не принимать повторно */
+const deliveredOrderIds = new Set();
 
 // флаги выдачи (из чата)
 let inviteSent = false;
@@ -626,6 +628,7 @@ function endDelivery(result, queued) {
     resetGui();
 
     if (result === 'ok') {
+        deliveredOrderIds.add(orderId);
         void audit('game_clan_ok', { orderId, nick, amountKk });
         post('delivery_ok', { orderId });
     } else if (result === 'offline') {
@@ -726,6 +729,10 @@ async function runHealthCheck() {
 async function addOrder(order) {
     if (!/^[a-zA-Z0-9_]{3,16}$/.test(order?.nick || '')) {
         logInfo(`пропуск — плохой ник`);
+        return;
+    }
+    if (deliveredOrderIds.has(order.orderId)) {
+        logInfo(`пропуск — заказ ${order.orderId.slice(0, 8)}… уже выдан`);
         return;
     }
     if (currentOrder?.orderId === order.orderId) return;

@@ -150,6 +150,26 @@ export function createClient() {
         },
 
         /** Лоты продавца (профиль → products). Hash из DevTools: operationName=items */
+        /** Премки для перевыставления (перед publishItem). */
+        async itemPriorityStatuses(itemId, price, referer = null) {
+            const hash =
+                process.env.ITEM_PRIORITY_STATUSES_HASH ||
+                'b922220c6f979537e1b99de6af8f5c13727daeff66727f679f07f986ce1c025a';
+            return request({
+                gqlOp: 'itemPriorityStatuses',
+                gqlPath: '/products/[slug]',
+                referer: referer || 'https://playerok.com/profile/products',
+                persisted: {
+                    operationName: 'itemPriorityStatuses',
+                    hash,
+                    variables: {
+                        itemId,
+                        price: Math.max(0, Math.round(Number(price) || 0)),
+                    },
+                },
+            });
+        },
+
         async sellerItems(userId, { first = 16, after = null, username = null } = {}) {
             const hash =
                 process.env.ITEMS_HASH ||

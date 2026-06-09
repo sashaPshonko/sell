@@ -467,6 +467,10 @@ function handleCancelOrder(orderId) {
 }
 
 function handleNickUpdate(orderId, nick) {
+    if (closedOrderIds.has(orderId)) {
+        console.log(`[sellbot] nick_update игнор — заказ ${orderId.slice(0, 8)}… закрыт`);
+        return;
+    }
     const prev = activeOrders.get(orderId);
     if (!prev) {
         console.warn(`[sellbot] nick_update без заказа ${orderId}`);
