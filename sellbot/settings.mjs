@@ -15,6 +15,8 @@ export const DEFAULTS = {
     clanInvestMultiplier: 1_000_000,
     clanPhaseTimeoutMs: 60_000,
     clanLoopWaitMs: 2000,
+    /** после /clan invest — ждём строку в чате, не шлём повтор раньше */
+    clanInvestWaitMs: 15_000,
     clanClickDelayMinMs: 1500,
     clanClickDelayMaxMs: 4500,
     clanMembersMenuSlot: 11,
@@ -89,6 +91,7 @@ export async function loadSettings(path = BOT_JSON) {
         ),
         clanPhaseTimeoutMs: Number(pick(entry, 'clanPhaseTimeoutMs', DEFAULTS.clanPhaseTimeoutMs)),
         clanLoopWaitMs: Number(pick(entry, 'clanLoopWaitMs', pick(entry, 'payLoopWaitMs', DEFAULTS.clanLoopWaitMs))),
+        clanInvestWaitMs: Number(pick(entry, 'clanInvestWaitMs', DEFAULTS.clanInvestWaitMs)),
         clanClickDelayMinMs: Number(pick(entry, 'clanClickDelayMinMs', DEFAULTS.clanClickDelayMinMs)),
         clanClickDelayMaxMs: Number(pick(entry, 'clanClickDelayMaxMs', DEFAULTS.clanClickDelayMaxMs)),
         clanMembersMenuSlot: Number(pick(entry, 'clanMembersMenuSlot', DEFAULTS.clanMembersMenuSlot)),

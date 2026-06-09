@@ -159,6 +159,7 @@ function workerDataPayload() {
         clanInvestMultiplier: cfg.clanInvestMultiplier,
         clanPhaseTimeoutMs: cfg.clanPhaseTimeoutMs,
         clanLoopWaitMs: cfg.clanLoopWaitMs,
+        clanInvestWaitMs: cfg.clanInvestWaitMs,
         clanClickDelayMinMs: cfg.clanClickDelayMinMs,
         clanClickDelayMaxMs: cfg.clanClickDelayMaxMs,
         clanMembersMenuSlot: cfg.clanMembersMenuSlot,

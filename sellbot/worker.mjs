@@ -29,6 +29,8 @@ const config = {
     clanInvestMultiplier: workerData.clanInvestMultiplier ?? 1_000_000,
     clanPhaseTimeoutMs: workerData.clanPhaseTimeoutMs ?? 60_000,
     clanLoopWaitMs: workerData.clanLoopWaitMs ?? 2000,
+    /** пауза после /clan invest до повтора — ждём «пополнил баланс казны» */
+    clanInvestWaitMs: workerData.clanInvestWaitMs ?? 15_000,
     clanClickDelayMinMs: workerData.clanClickDelayMinMs ?? 1500,
     clanClickDelayMaxMs: workerData.clanClickDelayMaxMs ?? 4500,
     clanMembersMenuSlot: workerData.clanMembersMenuSlot ?? 11,
@@ -571,7 +573,7 @@ async function deliverClan() {
         await closeWindow();
         logInfo(`/clan invest ${invest}`);
         bot.chat(`/clan invest ${invest}`);
-        const attemptEnd = Date.now() + config.clanLoopWaitMs;
+        const attemptEnd = Date.now() + config.clanInvestWaitMs;
         while (Date.now() < attemptEnd && !moneyInvested) {
             if (Date.now() - lastAfkCheck >= AFK_WAIT_MS) {
                 await afkTick();

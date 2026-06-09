@@ -8,6 +8,7 @@
     "clanInvestMultiplier": 1000000,
     "clanPhaseTimeoutMs": 60000,
     "clanLoopWaitMs": 2000,
+    "clanInvestWaitMs": 15000,
     "clanClickDelayMinMs": 1500,
     "clanClickDelayMaxMs": 4500,
     "clanMembersMenuSlot": 11,
