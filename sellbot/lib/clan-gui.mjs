@@ -55,20 +55,19 @@ function finishFlow(guiState, ok, reason = null) {
 export async function handleClanWindowOpen(bot, guiState, config, log) {
     if (!bot?.currentWindow) return;
 
-    const key = ++guiState.windowKey;
+    const flow = guiState.flow;
+    if (!flow || flow.done) return;
 
     const expected = guiState.expectMenu;
     if (!expected || expected === CLAN_WINDOW.NONE) {
-        log('windowOpen: expectMenu не задан — игнор');
+        log('windowOpen: flow активен, но expectMenu пуст — игнор');
         return;
     }
 
+    const key = ++guiState.windowKey;
     guiState.menu = expected;
     guiState.expectMenu = CLAN_WINDOW.NONE;
     log(`windowOpen → ${guiState.menu} (key …${String(key).slice(-4)})`);
-
-    const flow = guiState.flow;
-    if (!flow || flow.done) return;
 
     const stale = () => key !== guiState.windowKey;
 
@@ -184,8 +183,8 @@ export async function runGrantWithdrawPerms(bot, botState, guiState, config, log
 
     while (Date.now() < deadline && guiState.flow && !guiState.flow.done) {
         if (guiState.flow.step === 'need_menu') {
-            expectClanWindow(guiState, CLAN_WINDOW.CLAN_MENU);
             await safeClanChatLoop(bot, botState, log, '/clan menu', {
+                onBeforeChat: () => expectClanWindow(guiState, CLAN_WINDOW.CLAN_MENU),
                 untilOk: () =>
                     guiState.flow?.done ||
                     guiState.flow?.step !== 'need_menu',
@@ -222,8 +221,8 @@ export async function runKickFromClan(bot, botState, guiState, config, log, nick
 
     while (Date.now() < deadline && guiState.flow && !guiState.flow.done) {
         if (guiState.flow.step === 'need_confirm') {
-            expectClanWindow(guiState, CLAN_WINDOW.CLAN_KICK_CONFIRM);
             await safeClanChatLoop(bot, botState, log, cmd, {
+                onBeforeChat: () => expectClanWindow(guiState, CLAN_WINDOW.CLAN_KICK_CONFIRM),
                 untilOk: () =>
                     guiState.flow?.done ||
                     guiState.flow?.step !== 'need_confirm',

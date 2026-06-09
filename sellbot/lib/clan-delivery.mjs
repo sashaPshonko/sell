@@ -105,6 +105,8 @@ export async function safeClanChatLoop(bot, botState, log, cmd, {
     untilOffline,
     deadline,
     loopWaitMs = 2000,
+    /** Вызывается синхронно прямо перед bot.chat — сюда ставить expectMenu */
+    onBeforeChat,
 }) {
     let attempt = 0;
     while (Date.now() < deadline) {
@@ -121,6 +123,7 @@ export async function safeClanChatLoop(bot, botState, log, cmd, {
         if (!bot?.chat) return 'timeout';
 
         await closeWindowSafe(bot);
+        if (onBeforeChat) onBeforeChat();
         log(`clan cmd #${attempt}: ${cmd}`);
         try {
             bot.chat(cmd);
