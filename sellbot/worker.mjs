@@ -214,7 +214,6 @@ async function onWindowOpen() {
             if (guiNickSlot < 0) {
                 logInfo(`ник ${guiNick} не найден в окне`);
                 guiOk = false;
-                config.menu = null;
                 break;
             }
             logInfo(`shift×1 слот ${guiNickSlot}`);
@@ -228,9 +227,10 @@ async function onWindowOpen() {
             await rndClick();
             if (!bot.currentWindow) break;
             logInfo(`shift×2 слот ${guiNickSlot}`);
-            await bot.clickWindow(guiNickSlot, LMB, SHIFT);
-            await closeWindow();
             guiOk = true;
+            await bot.clickWindow(guiNickSlot, LMB, SHIFT);
+            await rnd(1500, 3500)
+            await closeWindow();
             break;
 
         // /clan kick → подтвердить
@@ -238,10 +238,8 @@ async function onWindowOpen() {
             await rndClick();
             if (!bot.currentWindow) break;
             logInfo(`kick confirm слот ${config.clanKickConfirmSlot}`);
-            await bot.clickWindow(config.clanKickConfirmSlot, LMB, 0);
-            await sleep(800);
-            await closeWindow();
             guiOk = true;
+            await bot.clickWindow(config.clanKickConfirmSlot, LMB, 0);
             break;
     }
 }
