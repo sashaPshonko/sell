@@ -1,8 +1,8 @@
+import { antiAfkIfNeeded } from './afk-look.mjs';
 import {
     closeWindowSafe,
     findNickSlot,
     rndClickDelay,
-    safeClanChatLoop,
 } from './clan-delivery.mjs';
 
 export const CLAN_WINDOW = {
@@ -22,7 +22,7 @@ function sleep(ms) {
 export function createClanGuiState() {
     return {
         expectMenu: null,
-        windowKey: 0,
+        windowBusy: false,
         flow: null,
     };
 }
@@ -43,12 +43,25 @@ function finishFlow(guiState, ok, reason = null) {
     guiState.flow.reason = reason;
 }
 
+async function waitForFlow(bot, botState, guiState, log, deadline, untilDone) {
+    while (Date.now() < deadline && guiState.flow && !guiState.flow.done) {
+        if (untilDone?.()) return true;
+        // Не крутить голову и не слать chat пока ждём клик по GUI
+        if (!guiState.windowBusy && !bot?.currentWindow) {
+            await antiAfkIfNeeded(bot, botState, log);
+        }
+        await sleep(400);
+    }
+    return Boolean(guiState.flow?.done) || Boolean(untilDone?.());
+}
+
 /**
  * windowOpen — единственное место кликов.
  * expectMenu задаётся перед chat/кликом и не сбрасывается.
  */
 export async function handleClanWindowOpen(bot, guiState, config, log) {
     if (!bot?.currentWindow) return;
+    if (guiState.windowBusy) return;
 
     const flow = guiState.flow;
     if (!flow || flow.done) return;
@@ -56,18 +69,16 @@ export async function handleClanWindowOpen(bot, guiState, config, log) {
     const expected = guiState.expectMenu;
     if (!expected) return;
 
-    const key = ++guiState.windowKey;
-    log(`windowOpen → ${expected} (key …${String(key).slice(-4)})`);
-
-    const stale = () => key !== guiState.windowKey;
+    guiState.windowBusy = true;
+    log(`windowOpen → ${expected}`);
 
     try {
         switch (expected) {
             case CLAN_WINDOW.CLAN_MENU:
-                if (flow.kind !== 'grant' || flow.step !== 'need_menu') return;
+                if (flow.kind !== 'grant' || flow.step !== 'need_menu') break;
 
                 await rndClickDelay(config);
-                if (stale() || !bot.currentWindow) return;
+                if (!bot.currentWindow) break;
 
                 const membersSlot = Number(config.clanMembersMenuSlot) || 11;
                 setExpectMenu(guiState, CLAN_WINDOW.CLAN_MEMBERS);
@@ -77,18 +88,18 @@ export async function handleClanWindowOpen(bot, guiState, config, log) {
                 break;
 
             case CLAN_WINDOW.CLAN_MEMBERS:
-                if (flow.kind !== 'grant') return;
+                if (flow.kind !== 'grant') break;
 
                 if (flow.step === 'need_members_list') {
                     await rndClickDelay(config);
-                    if (stale() || !bot.currentWindow) return;
+                    if (!bot.currentWindow) break;
 
                     const slot = findNickSlot(bot.currentWindow, flow.nick);
                     if (slot < 0) {
                         log(`clan_members: ник ${flow.nick} не найден`);
                         finishFlow(guiState, false, 'nick_not_found');
                         await closeWindowSafe(bot);
-                        return;
+                        break;
                     }
 
                     flow.nickSlot = slot;
@@ -101,7 +112,7 @@ export async function handleClanWindowOpen(bot, guiState, config, log) {
 
                 if (flow.step === 'need_second_shift' && flow.nickSlot >= 0) {
                     await rndClickDelay(config);
-                    if (stale() || !bot.currentWindow) return;
+                    if (!bot.currentWindow) break;
                     log(`clan_members: слот ${flow.nickSlot}, shift×2`);
                     await bot.clickWindow(flow.nickSlot, LEFT_MOUSE, SHIFT_CLICK);
                     await closeWindowSafe(bot);
@@ -110,11 +121,11 @@ export async function handleClanWindowOpen(bot, guiState, config, log) {
                 break;
 
             case CLAN_WINDOW.CLAN_PERMS:
-                if (flow.kind !== 'grant' || flow.step !== 'need_second_shift') return;
-                if (flow.nickSlot < 0) return;
+                if (flow.kind !== 'grant' || flow.step !== 'need_second_shift') break;
+                if (flow.nickSlot < 0) break;
 
                 await rndClickDelay(config);
-                if (stale() || !bot.currentWindow) return;
+                if (!bot.currentWindow) break;
                 log(`clan_perms: слот ${flow.nickSlot}, shift×2`);
                 await bot.clickWindow(flow.nickSlot, LEFT_MOUSE, SHIFT_CLICK);
                 await closeWindowSafe(bot);
@@ -122,10 +133,10 @@ export async function handleClanWindowOpen(bot, guiState, config, log) {
                 break;
 
             case CLAN_WINDOW.CLAN_KICK_CONFIRM:
-                if (flow.kind !== 'kick' || flow.step !== 'need_confirm') return;
+                if (flow.kind !== 'kick' || flow.step !== 'need_confirm') break;
 
                 await rndClickDelay(config);
-                if (stale() || !bot.currentWindow) return;
+                if (!bot.currentWindow) break;
 
                 const confirmSlot = Number(config.clanKickConfirmSlot) || 0;
                 log(`clan_kick_confirm → слот ${confirmSlot}`);
@@ -142,6 +153,8 @@ export async function handleClanWindowOpen(bot, guiState, config, log) {
     } catch (e) {
         log(`windowOpen ошибка: ${e.message}`);
         finishFlow(guiState, false, e.message);
+    } finally {
+        guiState.windowBusy = false;
     }
 }
 
@@ -168,16 +181,33 @@ export async function runGrantWithdrawPerms(bot, botState, guiState, config, log
 
     while (Date.now() < deadline && guiState.flow && !guiState.flow.done) {
         if (guiState.flow.step === 'need_menu') {
-            await safeClanChatLoop(bot, botState, log, '/clan menu', {
-                onBeforeChat: () => setExpectMenu(guiState, CLAN_WINDOW.CLAN_MENU),
-                untilOk: () =>
-                    guiState.flow?.done ||
-                    guiState.flow?.step !== 'need_menu',
-                deadline: Math.min(deadline, Date.now() + 10_000),
-                loopWaitMs: config.clanLoopWaitMs ?? 2000,
-            });
+            setExpectMenu(guiState, CLAN_WINDOW.CLAN_MENU);
+            await closeWindowSafe(bot);
+            log('clan cmd: /clan menu');
+            try {
+                bot.chat('/clan menu');
+            } catch (e) {
+                log(`chat fail: ${e.message}`);
+                break;
+            }
+
+            const roundEnd = Math.min(deadline, Date.now() + 12_000);
+            await waitForFlow(
+                bot,
+                botState,
+                guiState,
+                log,
+                roundEnd,
+                () => guiState.flow?.step !== 'need_menu' || guiState.flow?.done,
+            );
+
+            if (guiState.flow?.step === 'need_menu' && !guiState.flow?.done) {
+                log('clan menu: повтор — GUI не прошёл');
+                await sleep(config.clanLoopWaitMs ?? 2000);
+            }
+        } else {
+            await sleep(400);
         }
-        await sleep(200);
     }
 
     const ok = Boolean(guiState.flow?.ok);
@@ -201,17 +231,23 @@ export async function runKickFromClan(bot, botState, guiState, config, log, nick
     const cmd = `/clan kick ${nick}`;
 
     while (Date.now() < deadline && guiState.flow && !guiState.flow.done) {
-        if (guiState.flow.step === 'need_confirm') {
-            await safeClanChatLoop(bot, botState, log, cmd, {
-                onBeforeChat: () => setExpectMenu(guiState, CLAN_WINDOW.CLAN_KICK_CONFIRM),
-                untilOk: () =>
-                    guiState.flow?.done ||
-                    guiState.flow?.step !== 'need_confirm',
-                deadline: Math.min(deadline, Date.now() + 10_000),
-                loopWaitMs: config.clanLoopWaitMs ?? 2000,
-            });
+        setExpectMenu(guiState, CLAN_WINDOW.CLAN_KICK_CONFIRM);
+        await closeWindowSafe(bot);
+        log(`clan cmd: ${cmd}`);
+        try {
+            bot.chat(cmd);
+        } catch (e) {
+            log(`chat fail: ${e.message}`);
+            break;
         }
-        await sleep(200);
+
+        const roundEnd = Math.min(deadline, Date.now() + 12_000);
+        await waitForFlow(bot, botState, guiState, log, roundEnd, () => guiState.flow?.done);
+
+        if (!guiState.flow?.done) {
+            log('clan kick: повтор — подтверждение не нажато');
+            await sleep(config.clanLoopWaitMs ?? 2000);
+        }
     }
 
     const ok = Boolean(guiState.flow?.ok);
