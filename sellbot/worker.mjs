@@ -60,10 +60,10 @@ let playerJoined = false;
 let playerWithdrew = false;
 let playerOffline = false;
 
-// GUI: права / kick
-let guiNick = '';
-let guiNickSlot = 11;
-let guiOk = false;
+// GUI: слот 11 — и кнопка «участники», и голова игрока в списке
+let guiBusy = false;
+let permsDone = false;
+let kickDone = false;
 
 const { logInfo, logOk, logServerMessage } = createChatLogger(config.username);
 
@@ -106,9 +106,9 @@ function resetDeliveryFlags() {
 
 function resetGui() {
     config.menu = null;
-    guiNick = '';
-    guiNickSlot = -1;
-    guiOk = false;
+    guiBusy = false;
+    permsDone = false;
+    kickDone = false;
 }
 
 async function closeWindow() {
@@ -117,17 +117,6 @@ async function closeWindow() {
         await bot.closeWindow(bot.currentWindow);
     } catch { /* */ }
     await rnd(300, 500);
-}
-
-function findNickSlot(nick) {
-    const w = bot?.currentWindow;
-    if (!w?.slots) return -1;
-    const low = nick.toLowerCase();
-    for (let i = 0; i < w.slots.length; i++) {
-        const s = w.slots[i];
-        if (s && JSON.stringify(s).toLowerCase().includes(low)) return i;
-    }
-    return -1;
 }
 
 // ========== чат ==========
@@ -192,93 +181,109 @@ function handleChatMessage(raw) {
 // ========== GUI (windowOpen) ==========
 
 async function onWindowOpen() {
-    if (!bot?.currentWindow || config.menu == null) return;
+    if (!bot?.currentWindow || config.menu == null || guiBusy) return;
 
+    guiBusy = true;
+    const slot = config.clanMembersMenuSlot;
     logInfo(`windowOpen → ${config.menu}`);
 
-    switch (config.menu) {
-        // /clan menu → клик «участники»
-        case 'clan_menu':
-            await rndClick();
-            if (!bot.currentWindow) break;
-            logInfo(`клик слот ${config.clanMembersMenuSlot}`);
-            config.menu = 'clan_members';
-            await bot.clickWindow(config.clanMembersMenuSlot, LMB, 0);
-            break;
-
-        // список участников → shift по нику
-        case 'clan_members':
-            await rndClick();
-            if (!bot.currentWindow) break;
-            guiNickSlot = findNickSlot(guiNick);
-            if (guiNickSlot < 0) {
-                logInfo(`ник ${guiNick} не найден в окне`);
-                guiOk = false;
+    try {
+        switch (config.menu) {
+            // окно 1: /clan menu → один клик → откроется участники
+            case 'clan_menu':
+                await rndClick();
+                if (!bot.currentWindow) break;
+                logInfo(`клик слот ${slot}`);
+                config.menu = 'clan_members';
+                await bot.clickWindow(slot, LMB, 0);
                 break;
-            }
-            logInfo(`shift×1 слот ${guiNickSlot}`);
-            config.menu = 'clan_shift2';
-            await bot.clickWindow(guiNickSlot, LMB, SHIFT);
-            break;
 
-        // второй shift (окно участников или прав)
-        case 'clan_shift2':
-            if (guiNickSlot < 0) break;
-            await rndClick();
-            if (!bot.currentWindow) break;
-            logInfo(`shift×2 слот ${guiNickSlot}`);
-            guiOk = true;
-            await bot.clickWindow(guiNickSlot, LMB, SHIFT);
-            await rnd(1500, 3500)
-            await closeWindow();
-            break;
+            // окно 2: участники → shift×1 → откроется права
+            case 'clan_members':
+                await rndClick();
+                if (!bot.currentWindow) break;
+                logInfo(`shift×1 слот ${slot}`);
+                config.menu = 'clan_shift2';
+                await bot.clickWindow(slot, LMB, SHIFT);
+                break;
 
-        // /clan kick → подтвердить
-        case 'clan_kick':
-            await rndClick();
-            if (!bot.currentWindow) break;
-            logInfo(`kick confirm слот ${config.clanKickConfirmSlot}`);
-            guiOk = true;
-            await bot.clickWindow(config.clanKickConfirmSlot, LMB, 0);
-            break;
+            // окно 3: права → shift×2 → готово
+            case 'clan_shift2':
+                await rndClick();
+                if (!bot.currentWindow) break;
+                logInfo(`shift×2 слот ${slot}`);
+                config.menu = null;
+                permsDone = true;
+                await bot.clickWindow(slot, LMB, SHIFT);
+                break;
+
+            // kick confirm → один клик
+            case 'clan_kick':
+                await rndClick();
+                if (!bot.currentWindow) break;
+                logInfo(`kick confirm слот ${config.clanKickConfirmSlot}`);
+                config.menu = null;
+                kickDone = true;
+                await bot.clickWindow(config.clanKickConfirmSlot, LMB, 0);
+                break;
+        }
+    } finally {
+        guiBusy = false;
     }
 }
 
-/** Шлём chat-команду, ждём пока GUI отработает (guiOk) или 12с */
-async function doGuiCmd(cmd, menu, deadline) {
-    while (Date.now() < deadline && !guiOk) {
-        config.menu = menu;
-        guiOk = false;
+async function grantWithdrawPerms(_nick, deadline) {
+    while (Date.now() < deadline) {
+        permsDone = false;
+        config.menu = 'clan_menu';
+        await closeWindow();
+        logInfo('/clan menu');
+        bot.chat('/clan menu');
+
+        const roundEnd = Math.min(deadline, Date.now() + 12_000);
+        while (Date.now() < roundEnd && !permsDone) {
+            await sleep(400);
+            if (!bot?.currentWindow) await antiAfkIfNeeded(bot, config, logInfo);
+        }
+
+        if (permsDone) {
+            await rnd(1500, 3500);
+            await closeWindow();
+            logOk('права withdraw выданы');
+            return true;
+        }
+        logInfo('права — повтор');
+        await sleep(config.clanLoopWaitMs);
+    }
+    config.menu = null;
+    return false;
+}
+
+async function kickFromClan(nick, deadline) {
+    const cmd = `/clan kick ${nick}`;
+    while (Date.now() < deadline) {
+        kickDone = false;
+        config.menu = 'clan_kick';
         await closeWindow();
         logInfo(cmd);
         bot.chat(cmd);
 
         const roundEnd = Math.min(deadline, Date.now() + 12_000);
-        while (Date.now() < roundEnd && !guiOk && config.menu != null) {
+        while (Date.now() < roundEnd && !kickDone) {
             await sleep(400);
             if (!bot?.currentWindow) await antiAfkIfNeeded(bot, config, logInfo);
         }
 
-        if (!guiOk) {
-            logInfo('GUI не прошёл — повтор');
-            await sleep(config.clanLoopWaitMs);
+        if (kickDone) {
+            await sleep(800);
+            await closeWindow();
+            return true;
         }
+        logInfo('kick — повтор');
+        await sleep(config.clanLoopWaitMs);
     }
     config.menu = null;
-    return guiOk;
-}
-
-async function grantWithdrawPerms(nick, deadline) {
-    guiNick = nick;
-    guiNickSlot = -1;
-    guiOk = false;
-    return doGuiCmd('/clan menu', 'clan_menu', deadline);
-}
-
-async function kickFromClan(nick, deadline) {
-    guiNick = nick;
-    guiOk = false;
-    return doGuiCmd(`/clan kick ${nick}`, 'clan_kick', deadline);
+    return false;
 }
 
 // ========== баланс ==========
