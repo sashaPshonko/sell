@@ -220,6 +220,7 @@ async function onWindowOpen() {
                 if (!bot.currentWindow) break;
                 logInfo(`клик слот ${slot}`);
                 config.menu = 'clan_members';
+                guiBusy = false; // следующее окно откроется сразу после клика
                 await bot.clickWindow(slot, LMB, 0);
                 break;
 
@@ -229,6 +230,7 @@ async function onWindowOpen() {
                 if (!bot.currentWindow) break;
                 logInfo(`shift×1 слот ${slot}`);
                 config.menu = 'clan_shift2';
+                guiBusy = false; // окно прав откроется само — не блокировать windowOpen
                 await bot.clickWindow(slot, LMB, SHIFT);
                 break;
 
@@ -258,27 +260,32 @@ async function onWindowOpen() {
 }
 
 async function grantWithdrawPerms(_nick, deadline) {
-    while (Date.now() < deadline) {
-        permsDone = false;
-        config.menu = 'clan_menu';
-        await closeWindow();
-        logInfo('/clan menu');
-        bot.chat('/clan menu');
+    permsDone = false;
+    config.menu = 'clan_menu';
+    await closeWindow();
+    logInfo('/clan menu');
+    bot.chat('/clan menu');
+    let lastMenuRetry = Date.now();
 
-        const roundEnd = Math.min(deadline, Date.now() + 12_000);
-        while (Date.now() < roundEnd && !permsDone) {
-            await sleep(400);
-            if (!bot?.currentWindow) await antiAfkIfNeeded(bot, config, logInfo);
-        }
-
-        if (permsDone) {
-            await rnd(1500, 3500);
+    while (Date.now() < deadline && !permsDone) {
+        await sleep(400);
+        // после shift×1 окно прав открывается само — не дёргать /clan menu снова
+        if (!permsDone && config.menu === 'clan_menu' && !bot?.currentWindow && Date.now() - lastMenuRetry > 12_000) {
+            logInfo('права — повтор');
             await closeWindow();
-            logOk('права withdraw выданы');
-            return true;
+            logInfo('/clan menu');
+            bot.chat('/clan menu');
+            lastMenuRetry = Date.now();
+        } else if (!bot?.currentWindow) {
+            await antiAfkIfNeeded(bot, config, logInfo);
         }
-        logInfo('права — повтор');
-        await sleep(config.clanLoopWaitMs);
+    }
+
+    if (permsDone) {
+        await rnd(1500, 3500);
+        await closeWindow();
+        logOk('права withdraw выданы');
+        return true;
     }
     config.menu = null;
     return false;
