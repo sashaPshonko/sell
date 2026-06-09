@@ -4,39 +4,60 @@ import { antiAfkIfNeeded } from './lib/afk-look.mjs';
 import { parseBalanceFromChat } from './lib/balance.mjs';
 import { createChatLogger } from './lib/chat-log.mjs';
 import { audit } from '../lib/audit.mjs';
-
-/** Успешная выдача /pay на FunTime */
-const PAY_SUCCESS_MARKERS = [
-    '[✔] Успешно!',
-];
+import {
+    closeWindowSafe,
+    formatClanInvestAmount,
+    isClanInviteSentLine,
+    isClanJoinedLine,
+    isClanPlayerOfflineLine,
+    isClanWithdrawLine,
+    safeClanChatLoop,
+    stripMcFormatting,
+} from './lib/clan-delivery.mjs';
+import {
+    attachClanGuiHandler,
+    createClanGuiState,
+    resetClanGuiState,
+    runGrantWithdrawPerms,
+    runKickFromClan,
+} from './lib/clan-gui.mjs';
 
 const config = {
     username: workerData.username,
     password: workerData.password,
     anarchy: workerData.anarchy,
-    payTemplate: workerData.payTemplate || '/pay {nick} {amount}',
-    paySuffix: workerData.paySuffix ?? '',
-    payAmountMultiplier: workerData.payAmountMultiplier ?? 0,
-    playerOfflineMarker:
-        workerData.playerOfflineMarker || '[✘] Ошибка! Указанный игрок не найден!',
-    insufficientFundsMarker:
-        workerData.insufficientFundsMarker || '[✘] Ошибка! У вас недостаточно денег.',
-    invalidNickMarkers: workerData.invalidNickMarkers || [],
+    deliveryMode: workerData.deliveryMode || 'clan',
+    clanInvestMultiplier: workerData.clanInvestMultiplier ?? 1_000_000,
+    clanPhaseTimeoutMs: workerData.clanPhaseTimeoutMs ?? 60_000,
+    clanLoopWaitMs: workerData.clanLoopWaitMs ?? 2000,
+    clanClickDelayMinMs: workerData.clanClickDelayMinMs ?? 1500,
+    clanClickDelayMaxMs: workerData.clanClickDelayMaxMs ?? 4500,
+    clanMembersMenuSlot: workerData.clanMembersMenuSlot ?? 11,
+    clanKickConfirmSlot: workerData.clanKickConfirmSlot ?? 0,
+    /** Пауза после /an перед выдачей (мс) */
+    anarchyRejoinWaitMs: workerData.anarchyRejoinWaitMs ?? 5000,
     idleQuitMs: workerData.idleQuitMs ?? 25_000,
-    deliverTimeoutMs: workerData.deliverTimeoutMs ?? 60_000,
-    payLoopWaitMs: workerData.payLoopWaitMs ?? 2000,
+    deliverTimeoutMs: workerData.deliverTimeoutMs ?? 600_000,
     balanceWaitMs: workerData.balanceWaitMs ?? 15_000,
     balanceCmdWaitMs: workerData.balanceCmdWaitMs ?? 2000,
     healthCheckObserveMs: workerData.healthCheckObserveMs ?? 8000,
 };
 
-const MAX_PAY_ATTEMPTS_WHEN_QUEUED = 8;
 const anarchyCmd = `/an${config.anarchy}`;
 const AFK_MARKER = 'Данная команда недоступна в режиме AFK';
 const CAPTCHA_MARKER = 'BotFilter >> Введите номер с картинки в чат';
 
 const botState = { afk: false, balance: null };
+const clanGuiState = createClanGuiState();
 const deliverQueue = [];
+
+/** Флаги текущей выдачи — выставляются из чата */
+const clanChatFlags = {
+    inviteSent: false,
+    joined: false,
+    withdrew: false,
+    offline: false,
+};
 
 let bot = null;
 let connecting = false;
@@ -44,10 +65,9 @@ let ready = false;
 let delivering = false;
 let currentOrder = null;
 let idleQuitTimer = null;
-/** Почасовая проверка: бан / капча без заказа */
 let healthCheckActive = false;
-/** Результат текущей итерации /pay (ставится из чата) */
-let payOutcome = null;
+/** После join — игнорировать смену ника */
+let clanJoinedForCurrent = false;
 
 const chatLog = createChatLogger(config.username);
 const log = (msg) => chatLog.logInfo(msg);
@@ -61,111 +81,20 @@ function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
 }
 
-function stripMcFormatting(text) {
-    return String(text)
-        .replace(/§./g, '')
-        .replace(/&[0-9a-fk-or]/gi, '');
+function resetClanChatFlags() {
+    clanChatFlags.inviteSent = false;
+    clanChatFlags.joined = false;
+    clanChatFlags.withdrew = false;
+    clanChatFlags.offline = false;
+    clanJoinedForCurrent = false;
 }
 
-function escapeRegex(s) {
-    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function phaseDeadlineMs() {
+    return Date.now() + config.clanPhaseTimeoutMs;
 }
 
-function matchesAny(text, markers) {
-    const lower = text.toLowerCase();
-    return markers.some((m) => m && lower.includes(String(m).toLowerCase()));
-}
-
-function nickInMessage(text, nick) {
-    return new RegExp(`\\b${escapeRegex(nick)}\\b`, 'i').test(text);
-}
-
-function formatPayAmount(amountKk) {
-    const n = Number(amountKk);
-    const mult = Number(config.payAmountMultiplier || 0);
-    if (mult > 0) return String(Math.round(n * mult));
-    if (config.paySuffix) return `${n}${config.paySuffix}`;
-    return String(n);
-}
-
-function buildPayCommand(order) {
-    const amount = formatPayAmount(order.amount);
-    return config.payTemplate
-        .replace(/\{nick\}/gi, order.nick)
-        .replace(/\{amount\}/gi, amount);
-}
-
-function isLikelyPlayerChat(text) {
-    const t = stripMcFormatting(text).trim();
-    // Типовые форматы пользовательского чата: "<nick> ...", "nick: ...", "nick » ..."
-    if (/^<[^>]{1,20}>/.test(t)) return true;
-    if (/^[a-zA-Z0-9_]{3,16}\s*[:»>]/.test(t)) return true;
-    return false;
-}
-
-/** Успех /pay — часто без ника в строке; галочка может быть ✔ или ✓ */
-function isPaySuccessLine(text) {
-    const plain = stripMcFormatting(text);
-    const lower = plain.toLowerCase();
-    if (isLikelyPlayerChat(plain)) return false;
-    return PAY_SUCCESS_MARKERS.some((m) => lower.includes(m.toLowerCase()));
-}
-
-/** Единственный признак: не на анархии / не в сети */
-function isPlayerOfflineLine(text) {
-    const plain = stripMcFormatting(text);
-    if (!plain || isLikelyPlayerChat(plain.trim())) return false;
-    const marker = config.playerOfflineMarker;
-    return Boolean(marker) && plain.includes(marker);
-}
-
-/** Баланс бота не хватает на /pay */
-function isInsufficientFundsLine(text) {
-    const plain = stripMcFormatting(text);
-    if (!plain || isLikelyPlayerChat(plain.trim())) return false;
-    const marker = config.insufficientFundsMarker;
-    return Boolean(marker) && plain.includes(marker);
-}
-
-function messageMatchesOrder(text, order, kind) {
-    if (
-        text.includes('⚡ Наша группа ВК vk.com/funtime') ||
-        text.includes('⚡ Наш Телеграм t.me/funtime') ||
-        text.includes('⚡ Наш Дискорд dd.FunTime.su') ||
-        text.includes('⚡ Наш Сайт FunTime.su') ||
-        text.includes('⚡ Наши сообщества и соц. сети /links') ||
-        text.includes('⚡ Вы играете на FunTime') ||
-        text.includes('Добро пожаловать на FunTime')
-    ) {
-        return false;
-    }
-    const hasNick = nickInMessage(text, order.nick);
-    return hasNick;
-}
-
-/** Не на анархии — стоп текущей выдачи; очередь других покупателей не трогаем */
-function abortDeliveryPlayerOffline() {
-    if (!delivering || !currentOrder) return;
-    const nick = currentOrder.nick;
-    const hasMore = deliverQueue.length > 0;
-    log(
-        `покупатель не в сети на сервере (${nick})${
-            hasMore ? ` — в очереди ещё ${deliverQueue.length}` : ''
-        }`,
-    );
-    finishDelivery('offline');
-    if (!hasMore) {
-        shutdownBot('player_not_found');
-    }
-}
-
-/** Нет монет на балансе — не спамим /pay */
-function abortDeliveryInsufficientFunds() {
-    if (!delivering || !currentOrder) return;
-    log('недостаточно денег на балансе — стоп выдачи, отключение');
-    deliverQueue.length = 0;
-    finishDelivery('insufficient_funds', { skipQueue: true });
-    shutdownBot('insufficient_funds');
+function investAmountForOrder(order) {
+    return formatClanInvestAmount(order.amount, config.clanInvestMultiplier);
 }
 
 function scheduleIdleQuit() {
@@ -182,7 +111,8 @@ function shutdownBot(reason) {
     ready = false;
     delivering = false;
     currentOrder = null;
-    payOutcome = null;
+    resetClanChatFlags();
+    resetClanGuiState(clanGuiState);
     try {
         bot?.quit();
     } catch {
@@ -196,17 +126,17 @@ function shutdownBot(reason) {
     }
 }
 
-async function fetchBalanceLike4Narek() {
+async function fetchBalance(deadlineMs = config.balanceWaitMs) {
     if (!bot?.chat) return null;
 
     botState.balance = null;
-    const deadline = Date.now() + config.balanceWaitMs;
+    const deadline = Date.now() + deadlineMs;
     const cmdWait = config.balanceCmdWaitMs;
 
     log('проверка баланса: /balance…');
 
     while (botState.balance === null && Date.now() < deadline) {
-        if (!healthCheckActive || !bot) return null;
+        if (!bot) return null;
         await antiAfkIfNeeded(bot, botState, log);
         bot.chat('/balance');
         await sleep(cmdWait);
@@ -218,6 +148,11 @@ async function fetchBalanceLike4Narek() {
         log('баланс: не ответил сервер');
     }
     return botState.balance;
+}
+
+async function fetchBalanceLike4Narek() {
+    if (!healthCheckActive || !bot) return null;
+    return fetchBalance(config.balanceWaitMs);
 }
 
 function finishHealthCheck(status) {
@@ -242,7 +177,6 @@ function finishHealthCheck(status) {
     shutdownBot(status === 'ok' ? 'health_ok' : status);
 }
 
-/** Заказ важнее: проверку обрываем, бот на анархии остаётся для выдачи */
 function abortHealthCheckForOrder() {
     if (!healthCheckActive) return false;
     log('проверка прервана — пришёл заказ');
@@ -265,8 +199,7 @@ async function runHealthCheck() {
             if (botState.balance != null) {
                 postEvent('health_balance', { balance: botState.balance });
             }
-            const observe = config.healthCheckObserveMs;
-            await sleep(observe);
+            await sleep(config.healthCheckObserveMs);
             if (healthCheckActive) finishHealthCheck('ok');
             return;
         }
@@ -373,6 +306,7 @@ async function ensureBot() {
                 await sleep(11_000);
                 bot = b;
                 ready = true;
+                attachClanGuiHandler(bot, clanGuiState, config, log);
                 postEvent('ready');
                 if (healthCheckActive) {
                     log('на анархии — бан/капча/баланс');
@@ -385,7 +319,7 @@ async function ensureBot() {
                     ok();
                     return;
                 }
-                log('на анархии, готов к /pay');
+                log('на анархии, готов к выдаче через клан');
                 processNextDeliver();
                 ok();
             } catch (e) {
@@ -400,128 +334,27 @@ async function ensureBot() {
     });
 }
 
-function resetPayOutcome() {
-    payOutcome = null;
-}
-
-/** Цикл /pay как safeAH в 4NAREK: antiAfk → команда → пауза → проверка успеха */
-async function payDeliveryLoop() {
-    const deadline = Date.now() + config.deliverTimeoutMs;
-    const loopWait = config.payLoopWaitMs;
-    let attempt = 0;
-
-    while (delivering && currentOrder && Date.now() < deadline) {
-        attempt += 1;
-
-        if (payOutcome === 'ok') {
-            finishDelivery('ok');
-            return;
-        }
-        if (payOutcome === 'offline') {
-            finishDelivery('offline');
-            return;
-        }
-        if (payOutcome === 'invalid') {
-            finishDelivery('invalid_nick');
-            return;
-        }
-        if (payOutcome === 'player_offline') {
-            abortDeliveryPlayerOffline();
-            return;
-        }
-        if (payOutcome === 'insufficient_funds') {
-            abortDeliveryInsufficientFunds();
-            return;
-        }
-
-        if (!bot?.chat) {
-            finishDelivery('disconnected');
-            return;
-        }
-
-        if (botState.afk) {
-            log(`AFK (круг ${attempt})`);
-        }
-        await antiAfkIfNeeded(bot, botState, log);
-
-        if (!bot?.chat) {
-            finishDelivery('disconnected');
-            return;
-        }
-
-        if (botState.afk) {
-            await sleep(loopWait);
-            continue;
-        }
-
-        if (deliverQueue.length > 0 && attempt >= MAX_PAY_ATTEMPTS_WHEN_QUEUED) {
-            log(
-                `в очереди ещё ${deliverQueue.length} — стоп /pay после ${attempt} попыток`,
-            );
-            finishDelivery('timeout');
-            return;
-        }
-
-        resetPayOutcome();
-        const cmd = buildPayCommand(currentOrder);
-        log(`/pay #${attempt}: ${cmd}`);
-        try {
-            bot.chat(cmd);
-        } catch (e) {
-            log(`chat fail: ${e.message}`);
-            finishDelivery('disconnected');
-            return;
-        }
-
-        await sleep(loopWait);
-
-        if (payOutcome === 'ok') {
-            finishDelivery('ok');
-            return;
-        }
-        if (payOutcome === 'offline') {
-            finishDelivery('offline');
-            return;
-        }
-        if (payOutcome === 'invalid') {
-            finishDelivery('invalid_nick');
-            return;
-        }
-        if (payOutcome === 'player_offline') {
-            abortDeliveryPlayerOffline();
-            return;
-        }
-        if (payOutcome === 'insufficient_funds') {
-            abortDeliveryInsufficientFunds();
-            return;
-        }
-    }
-
-    if (delivering && currentOrder) {
-        log(`таймаут ${currentOrder.orderId}`);
-        finishDelivery('timeout');
-    }
-}
-
-function trySetPayOutcomeFromChat(text) {
-    if (!delivering || !currentOrder) return;
-
-    if (isPaySuccessLine(text)) {
-        payOutcome = 'ok';
-        logOk(`pay успех: ${text.slice(0, 80)}`);
+function handleClanChatDuringDelivery(text, nick) {
+    if (isClanInviteSentLine(text)) {
+        clanChatFlags.inviteSent = true;
+        logOk(`clan invite отправлен`);
         return;
     }
-    if (isPlayerOfflineLine(text)) {
-        payOutcome = 'player_offline';
+    if (isClanJoinedLine(text, nick)) {
+        clanChatFlags.joined = true;
+        clanJoinedForCurrent = true;
+        logOk(`clan join: ${nick}`);
+        postEvent('clan_joined', { orderId: currentOrder.orderId, nick });
         return;
     }
-    if (isInsufficientFundsLine(text)) {
-        payOutcome = 'insufficient_funds';
-        log('сервер: недостаточно денег на балансе');
+    if (isClanWithdrawLine(text, nick)) {
+        clanChatFlags.withdrew = true;
+        logOk(`clan withdraw: ${nick}`);
         return;
     }
-    if (matchesAny(text, config.invalidNickMarkers) && messageMatchesOrder(text, currentOrder, 'invalid')) {
-        payOutcome = 'invalid';
+    if (isClanPlayerOfflineLine(text, nick)) {
+        clanChatFlags.offline = true;
+        log(`clan offline: ${nick}`);
     }
 }
 
@@ -561,43 +394,225 @@ async function onServerChat(rawText) {
         botState.balance = balance;
     }
 
-    if (delivering && currentOrder && isPlayerOfflineLine(text)) {
-        abortDeliveryPlayerOffline();
+    if (delivering && currentOrder?.nick) {
+        handleClanChatDuringDelivery(text, currentOrder.nick);
+    }
+}
+
+async function waitUntilFlag(flagName, deadline) {
+    while (delivering && currentOrder && Date.now() < deadline) {
+        if (clanChatFlags[flagName]) return true;
+        if (flagName !== 'offline' && clanChatFlags.offline) return false;
+        await antiAfkIfNeeded(bot, botState, log);
+        await sleep(400);
+    }
+    return clanChatFlags[flagName];
+}
+
+async function tryKickCurrent(nick, deadline) {
+    if (!nick || !bot) return;
+    log(`clan kick: ${nick}`);
+    await runKickFromClan(bot, botState, clanGuiState, config, log, nick, deadline);
+}
+
+/**
+ * Выдача через клан: invite → join → perms → invest → withdraw → kick.
+ */
+async function clanDeliveryLoop() {
+    const order = currentOrder;
+    const nick = order.nick;
+    const investRaw = investAmountForOrder(order);
+    const orderDeadline = Date.now() + config.deliverTimeoutMs;
+    let inviteSentEvent = false;
+    let investEvent = false;
+
+    const ensureOrderActive = () => delivering && currentOrder?.orderId === order.orderId;
+
+    // [0] Баланс перед invite
+    const balance = await fetchBalance();
+    if (!ensureOrderActive()) return;
+    const need = Number(investRaw);
+    if (balance == null || balance < need) {
+        log(`недостаточно баланса: ${balance ?? '?'} < ${need}`);
+        finishDelivery('insufficient_funds');
         return;
     }
 
-    if (delivering && currentOrder && isInsufficientFundsLine(text)) {
-        abortDeliveryInsufficientFunds();
+    // [1] /clan invite
+    log(`clan invite → ${nick}, invest ${investRaw}`);
+    resetClanChatFlags();
+    let phaseEnd = phaseDeadlineMs();
+
+    while (ensureOrderActive() && Date.now() < orderDeadline && Date.now() < phaseEnd) {
+        if (clanChatFlags.inviteSent) break;
+        if (clanChatFlags.offline) {
+            finishDelivery('offline');
+            return;
+        }
+
+        const r = await safeClanChatLoop(bot, botState, log, `/clan invite ${nick}`, {
+            untilOk: () => clanChatFlags.inviteSent,
+            untilOffline: () => clanChatFlags.offline,
+            deadline: phaseEnd,
+            loopWaitMs: config.clanLoopWaitMs,
+        });
+
+        if (clanChatFlags.offline || r === 'offline') {
+            finishDelivery('offline');
+            return;
+        }
+        if (clanChatFlags.inviteSent) break;
+    }
+
+    if (!ensureOrderActive()) return;
+    if (!clanChatFlags.inviteSent) {
+        log('clan invite: таймаут');
+        finishDelivery('timeout');
         return;
     }
 
-    trySetPayOutcomeFromChat(text);
+    if (!inviteSentEvent) {
+        inviteSentEvent = true;
+        postEvent('clan_invite_sent', { orderId: order.orderId, nick });
+    }
+
+    // [2] Ждём join
+    phaseEnd = phaseDeadlineMs();
+    log(`clan join: ждём ${nick}…`);
+    const joined = await waitUntilFlag('joined', Math.min(phaseEnd, orderDeadline));
+    if (!ensureOrderActive()) return;
+    if (!joined) {
+        log('clan join: таймаут');
+        await tryKickCurrent(nick, phaseDeadlineMs());
+        finishDelivery('timeout');
+        return;
+    }
+
+    // [3] Права withdraw через GUI
+    phaseEnd = phaseDeadlineMs();
+    log('clan menu: выдача прав…');
+    let permsOk = false;
+    while (ensureOrderActive() && Date.now() < phaseEnd && !permsOk) {
+        permsOk = await runGrantWithdrawPerms(
+            bot,
+            botState,
+            clanGuiState,
+            config,
+            log,
+            nick,
+            phaseEnd,
+        );
+        if (!permsOk) {
+            await antiAfkIfNeeded(bot, botState, log);
+            await sleep(config.clanLoopWaitMs);
+        }
+    }
+    if (!ensureOrderActive()) return;
+    if (!permsOk) {
+        log('clan menu: таймаут прав');
+        await tryKickCurrent(nick, phaseDeadlineMs());
+        finishDelivery('timeout');
+        return;
+    }
+
+    // [4] /clan invest (без маркера в чате — шлём из цикла с anti-AFK)
+    phaseEnd = phaseDeadlineMs();
+    log(`clan invest ${investRaw}`);
+    let investSent = false;
+    while (ensureOrderActive() && Date.now() < phaseEnd && !investSent) {
+        await antiAfkIfNeeded(bot, botState, log);
+        if (botState.afk) {
+            await sleep(config.clanLoopWaitMs);
+            continue;
+        }
+        try {
+            await closeWindowSafe(bot);
+            bot.chat(`/clan invest ${investRaw}`);
+            investSent = true;
+        } catch (e) {
+            log(`clan invest fail: ${e.message}`);
+            await sleep(config.clanLoopWaitMs);
+        }
+    }
+    if (!ensureOrderActive()) return;
+    if (!investSent) {
+        log('clan invest: таймаут');
+        await tryKickCurrent(nick, phaseDeadlineMs());
+        finishDelivery('timeout');
+        return;
+    }
+    await sleep(config.clanLoopWaitMs);
+
+    if (!investEvent) {
+        investEvent = true;
+        postEvent('clan_invested', {
+            orderId: order.orderId,
+            nick,
+            investAmount: investRaw,
+            amountKk: order.amount,
+        });
+    }
+
+    // [5] Ждём withdraw (сумму не проверяем — только ник в строке)
+    phaseEnd = phaseDeadlineMs();
+    log(`clan withdraw: ждём ${nick}…`);
+    while (ensureOrderActive() && Date.now() < phaseEnd && !clanChatFlags.withdrew) {
+        await antiAfkIfNeeded(bot, botState, log);
+        await sleep(400);
+    }
+
+    if (!ensureOrderActive()) return;
+    if (!clanChatFlags.withdrew) {
+        log('clan withdraw: таймаут');
+        await tryKickCurrent(nick, phaseDeadlineMs());
+        const queued = deliverQueue.length;
+        if (queued > 0) {
+            finishDelivery('timeout', { queued });
+        } else {
+            finishDelivery('timeout');
+        }
+        return;
+    }
+
+    // [6] Kick после успешного withdraw
+    phaseEnd = phaseDeadlineMs();
+    await tryKickCurrent(nick, phaseEnd);
+
+    if (!ensureOrderActive()) return;
+    finishDelivery('ok');
 }
 
 const FATAL_DELIVERY = new Set(['banned', 'captcha']);
 
-function finishDelivery(result, { skipQueue = false } = {}) {
+function finishDelivery(result, { skipQueue = false, queued } = {}) {
     if (!currentOrder) return;
     const orderId = currentOrder.orderId;
     const nick = currentOrder.nick;
     const amountKk = currentOrder.amount;
-    const queued = deliverQueue.length;
+    const queueLen = queued ?? deliverQueue.length;
     delivering = false;
     currentOrder = null;
-    resetPayOutcome();
+    resetClanChatFlags();
+    resetClanGuiState(clanGuiState);
 
     if (result === 'ok') {
-        void audit('game_pay_ok', { orderId, nick, amountKk });
+        void audit('game_clan_ok', { orderId, nick, amountKk });
         postEvent('delivery_ok', { orderId });
+    } else if (result === 'offline') {
+        postEvent('player_offline', { orderId });
+    } else if (result === 'insufficient_funds') {
+        postEvent('insufficient_funds', { orderId });
+    } else if (result === 'banned') {
+        postEvent('delivery_failed', { orderId, reason: 'banned' });
+    } else if (result === 'captcha') {
+        postEvent('delivery_failed', { orderId, reason: 'captcha' });
+    } else if (result === 'timeout' && queueLen > 0) {
+        postEvent('delivery_stalled', { orderId, reason: 'clan_withdraw_timeout', queued: queueLen });
+    } else if (result === 'timeout') {
+        postEvent('delivery_stalled', { orderId, reason: 'clan_timeout', queued: queueLen });
+    } else {
+        postEvent('delivery_failed', { orderId, reason: result || 'unknown' });
     }
-    else if (result === 'offline') postEvent('player_offline', { orderId });
-    else if (result === 'insufficient_funds') postEvent('insufficient_funds', { orderId });
-    else if (result === 'invalid_nick') postEvent('invalid_nick', { orderId });
-    else if (result === 'banned') postEvent('delivery_failed', { orderId, reason: 'banned' });
-    else if (result === 'captcha') postEvent('delivery_failed', { orderId, reason: 'captcha' });
-    else if (result === 'timeout' && queued > 0) {
-        postEvent('delivery_stalled', { orderId, reason: 'queue_timeout', queued });
-    } else postEvent('delivery_failed', { orderId, reason: result || 'unknown' });
 
     if (skipQueue || FATAL_DELIVERY.has(result)) {
         if (!skipQueue) deliverQueue.length = 0;
@@ -617,17 +632,47 @@ function processNextDeliver() {
     startDeliver(order);
 }
 
+async function ensureOnAnarchyBeforeOrder() {
+    if (!bot?.chat) return false;
+
+    await closeWindowSafe(bot);
+    await antiAfkIfNeeded(bot, botState, log);
+
+    if (botState.afk) {
+        log('AFK перед заказом — повтор после осмотра');
+        await sleep(config.clanLoopWaitMs);
+    }
+
+    log(`${anarchyCmd} (перед заказом)`);
+    try {
+        bot.chat(anarchyCmd);
+    } catch (e) {
+        log(`anarchy cmd fail: ${e.message}`);
+        return false;
+    }
+
+    const waitMs = Number(config.anarchyRejoinWaitMs) || 5000;
+    await sleep(waitMs);
+    return true;
+}
+
 async function startDeliver(order) {
     delivering = true;
     currentOrder = order;
     botState.afk = false;
-    resetPayOutcome();
-    log(`выдача ${order.orderId.slice(0, 8)}…: ${order.nick} ${order.amount}kk`);
+    resetClanChatFlags();
+    log(`выдача ${order.orderId.slice(0, 8)}…: ${order.nick} ${order.amount}kk (клан)`);
 
     try {
-        await payDeliveryLoop();
+        if (!(await ensureOnAnarchyBeforeOrder())) {
+            finishDelivery('disconnected');
+            return;
+        }
+        await clanDeliveryLoop();
     } catch (e) {
-        log(`delivery loop crash: ${e.message}`);
+        log(`clan delivery crash: ${e.message}`);
+        const nick = order.nick;
+        await tryKickCurrent(nick, phaseDeadlineMs());
         finishDelivery('delivery_loop_crash');
     }
 }
@@ -649,10 +694,13 @@ function cancelOrderInWorker(orderId) {
     }
     if (currentOrder?.orderId === orderId) {
         log(`прерывание выдачи: отмена ${orderId.slice(0, 8)}…`);
-        delivering = false;
-        currentOrder = null;
-        resetPayOutcome();
-        processNextDeliver();
+        const nick = currentOrder.nick;
+        void tryKickCurrent(nick, phaseDeadlineMs()).finally(() => {
+            delivering = false;
+            currentOrder = null;
+            resetClanChatFlags();
+            processNextDeliver();
+        });
     }
 }
 
@@ -661,7 +709,14 @@ async function enqueueOrder(order) {
         log(`пропуск ${order?.orderId}: нет ника`);
         return;
     }
-    if (currentOrder?.orderId === order.orderId) return;
+
+    if (currentOrder?.orderId === order.orderId) {
+        if (clanJoinedForCurrent) {
+            log(`ник игнор — ${order.nick} уже в клане`);
+        }
+        return;
+    }
+
     if (deliverQueue.some((o) => o.orderId === order.orderId)) return;
 
     abortHealthCheckForOrder();
@@ -682,7 +737,7 @@ async function enqueueOrder(order) {
     }
 }
 
-log('воркер запущен');
+log('воркер запущен (режим: клан)');
 
 parentPort.on('message', (data) => {
     if (data?.type === 'health_check') {

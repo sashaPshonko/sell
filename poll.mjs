@@ -26,6 +26,8 @@ import {
     buildDeliveryFailHint,
     buildQueueStallHint,
     buildDeliveryOkHint,
+    buildClanInviteHint,
+    buildClanWithdrawHint,
     buildOrderAlreadyDoneHint,
     hasGreetingInChat,
     DELIVERY_ANARCHY,
@@ -132,7 +134,33 @@ async function handleBotEvents(client, state) {
         const buyerId = order.buyerId;
 
         try {
-            if (ev.type === 'delivery_ok') {
+            if (ev.type === 'clan_invite_sent') {
+                const fresh = getOrder(state, ev.orderId) || order;
+                if (fresh.clanInviteHintSentAt) continue;
+                const nick = ev.nick || fresh.nick || '?';
+                await sendChatMessage(client, chatId, buildClanInviteHint(nick));
+                setOrderPhase(state, ev.orderId, fresh.phase, {
+                    clanInviteHintSentAt: new Date().toISOString(),
+                });
+                console.log(`[sell] clan invite hint → ${ev.orderId.slice(0, 8)}…`);
+            } else if (ev.type === 'clan_joined') {
+                setOrderPhase(state, ev.orderId, order.phase, {
+                    clanJoinedAt: new Date().toISOString(),
+                });
+                console.log(`[sell] clan joined ${ev.orderId.slice(0, 8)}…`);
+            } else if (ev.type === 'clan_invested') {
+                const fresh = getOrder(state, ev.orderId) || order;
+                if (fresh.clanWithdrawHintSentAt) continue;
+                const nick = ev.nick || fresh.nick || '?';
+                const invest =
+                    ev.investAmount ||
+                    String(Math.round((fresh.payAmountKk ?? fresh.amountKk) * 1_000_000));
+                await sendChatMessage(client, chatId, buildClanWithdrawHint(nick, invest));
+                setOrderPhase(state, ev.orderId, fresh.phase, {
+                    clanWithdrawHintSentAt: new Date().toISOString(),
+                });
+                console.log(`[sell] clan withdraw hint → ${ev.orderId.slice(0, 8)}…`);
+            } else if (ev.type === 'delivery_ok') {
                 const payKk = order.payAmountKk ?? order.amountKk;
                 setOrderPhase(state, ev.orderId, 'completed', {
                     gameDeliveryAt: new Date().toISOString(),
@@ -223,15 +251,26 @@ async function handleBotEvents(client, state) {
                     lastError: reason,
                     nick,
                 });
-                const failReason = reason;
-                await sendDeliveryHintOnce(
-                    client,
-                    state,
-                    chatId,
-                    ev.orderId,
-                    getOrder(state, ev.orderId) || order,
-                    () => buildDeliveryFailHint(failReason),
-                );
+                const fresh = getOrder(state, ev.orderId) || order;
+                const failHint = () => buildDeliveryFailHint(reason);
+                if (reason === 'captcha' || reason === 'banned') {
+                    if (!fresh.botStatusHintAt) {
+                        await sendChatMessage(client, chatId, failHint());
+                        setOrderPhase(state, ev.orderId, fresh.phase, {
+                            botStatusHintAt: new Date().toISOString(),
+                            deliveryHintSentAt: new Date().toISOString(),
+                        });
+                    }
+                } else {
+                    await sendDeliveryHintOnce(
+                        client,
+                        state,
+                        chatId,
+                        ev.orderId,
+                        fresh,
+                        failHint,
+                    );
+                }
                 console.warn(`[sell] fail ${ev.orderId}: ${reason}`);
             } else if (ev.type === 'invalid_nick') {
                 if (!shouldProcessBotRetryEvent(order)) {

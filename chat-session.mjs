@@ -373,6 +373,13 @@ export async function applyNickCommandUpdates(
         const buyerOrders = ordersInChat(state, chatId).filter((o) => o.buyerId === buyerId);
 
         for (const order of buyerOrders) {
+            if (order.clanJoinedAt && order.nick && order.nick !== u.nick) {
+                console.log(
+                    `[sell] чат ${chatId.slice(0, 8)}…: новый ник игнор — ${order.nick} уже в клане`,
+                );
+                continue;
+            }
+
             order.nick = u.nick;
             order.pausedUntilNick = false;
             order.deliveryHintSentAt = undefined;

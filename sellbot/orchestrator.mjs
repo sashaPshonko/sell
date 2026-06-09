@@ -155,15 +155,20 @@ function workerDataPayload() {
         username: botConfig.username,
         password: botConfig.password,
         anarchy: botConfig.anarchy,
-        payTemplate: cfg.payTemplate,
-        paySuffix: cfg.paySuffix,
-        payAmountMultiplier: cfg.payAmountMultiplier,
+        deliveryMode: cfg.deliveryMode,
+        clanInvestMultiplier: cfg.clanInvestMultiplier,
+        clanPhaseTimeoutMs: cfg.clanPhaseTimeoutMs,
+        clanLoopWaitMs: cfg.clanLoopWaitMs,
+        clanClickDelayMinMs: cfg.clanClickDelayMinMs,
+        clanClickDelayMaxMs: cfg.clanClickDelayMaxMs,
+        clanMembersMenuSlot: cfg.clanMembersMenuSlot,
+        clanKickConfirmSlot: cfg.clanKickConfirmSlot,
+        anarchyRejoinWaitMs: cfg.anarchyRejoinWaitMs,
         playerOfflineMarker: cfg.playerOfflineMarker,
         insufficientFundsMarker: cfg.insufficientFundsMarker,
         invalidNickMarkers: cfg.invalidNickMarkers,
         idleQuitMs: cfg.idleQuitMs,
         deliverTimeoutMs: cfg.deliverTimeoutMs,
-        payLoopWaitMs: cfg.payLoopWaitMs,
         balanceWaitMs: cfg.balanceWaitMs,
         balanceCmdWaitMs: cfg.balanceCmdWaitMs,
         healthCheckObserveMs: cfg.healthCheckObserveMs,
@@ -227,7 +232,7 @@ async function startWorker(reason = 'order') {
 
             if (message?.name === 'ready') {
                 workerReady = true;
-                console.log('[sellbot] бот на анархии, готов к /pay');
+                console.log('[sellbot] бот на анархии, готов к выдаче (клан)');
                 return;
             }
 
@@ -330,12 +335,18 @@ async function startWorker(reason = 'order') {
                 invalid_nick: 'invalid_nick',
                 player_offline: 'player_offline',
                 insufficient_funds: 'insufficient_funds',
+                clan_invite_sent: 'clan_invite_sent',
+                clan_invested: 'clan_invested',
+                clan_joined: 'clan_joined',
             }[message.name];
 
             if (evType) {
                 const ev = { type: evType, orderId };
                 if (message.reason) ev.reason = message.reason;
                 if (message.queued != null) ev.queued = message.queued;
+                if (message.investAmount != null) ev.investAmount = message.investAmount;
+                if (message.nick) ev.nick = message.nick;
+                if (message.amountKk != null) ev.amountKk = message.amountKk;
                 forwardToSell(ev);
 
                 const short = orderId.slice(0, 8);
@@ -357,9 +368,15 @@ async function startWorker(reason = 'order') {
                     await sendAlert(`⚠️ Оффлайн: ${short}… — пусть шлёт /nick на анархии`);
                 } else if (evType === 'insufficient_funds') {
                     await sendAlert(
-                        `💸 ${botConfig.username}: недостаточно денег для /pay (заказ ${short}…)\n` +
+                        `💸 ${botConfig.username}: недостаточно денег в казне/балансе (заказ ${short}…)\n` +
                             `Пополни баланс бота — покупателю ник не при чём`,
                     );
+                } else if (evType === 'clan_invite_sent') {
+                    console.log(`[sellbot] clan invite → ${order?.nick || '?'}`);
+                } else if (evType === 'clan_invested') {
+                    console.log(`[sellbot] clan invest → ${order?.nick || '?'}`);
+                } else if (evType === 'clan_joined') {
+                    console.log(`[sellbot] clan joined → ${order?.nick || '?'}`);
                 } else if (evType === 'invalid_nick') {
                     await sendAlert(`⚠️ Неверный ник: ${short}…`);
                 } else {

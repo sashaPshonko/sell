@@ -3,11 +3,11 @@ import { DELIVERY_ANARCHY } from './config.mjs';
 
 export { DELIVERY_ANARCHY };
 
-/** Предупреждение: выдача /pay — риск бана, только твинк. */
+/** Предупреждение: выдача через клан — риск бана, только твинк. */
 export function twinAccountWarningLines() {
     return [
         '⛔⛔⛔ ОБЯЗАТЕЛЬНО ТВИНК ⛔⛔⛔',
-        'Выдача через /pay — на основном аккаунте часто дают БАН.',
+        'Выдача через клан — на основном аккаунте часто дают БАН.',
         'Указывай ник ЗАПАСНОГО аккаунта (твинка), не основного!',
         '————————————————',
     ];
@@ -58,7 +58,7 @@ export function buildGreetingText(ctx = null) {
         '✅ выдача автоматическая - бот выдаст сам',
         '❗ Валюта только на Minecraft 1.21 (FunTime).',
         'На 1.16 не выдаём — отмена: /cancel',
-        '💸 Выдача через /pay на сервере (автоматически).',
+        '💸 Выдача через клан: приглашение → казна → ты снимешь /clan withdraw',
         '🔁 Ошибся в нике — напиши в ЭТОМ чате: /nick твой-ник',
         '⏳ Бот не выдал — повтори в ЭТОМ чате: /nick твой-ник',
         '❌ Отмена: /cancel',
@@ -79,7 +79,11 @@ export function buildNewOrderTwinHint(ctx = null) {
         '',
         ...twinAccountWarningLines(),
         `🎮 Анархия ${anka} — будь в сети.`,
-        'В ЭТОМ чате PlayerOK напиши ник твинка: /nick твой-ник',
+        '💸 Выдача теперь через клан (не /pay):',
+        'приглашение → казна → ты снимешь /clan withdraw',
+        '',
+        'В ЭТОМ чате PlayerOK напиши ник твинка:',
+        'твой-ник  или  /nick твой-ник',
     ];
     if (lotKk > 0) {
         lines.push('', `📦 Лот: ${lotKk}кк`);
@@ -200,17 +204,21 @@ export function buildDeliveryFailHint(reason) {
             lines.push(
                 '📋 Причина: капча на сервере (бот не смог зайти).',
                 '⏳ Это не твоя ошибка — попробуем снова чуть позже.',
+                '',
+                '🤖 Боту нужно ввести капчу в Minecraft — выдача временно стоит.',
             );
             break;
         case 'banned':
             lines.push(
                 '📋 Причина: аккаунт бота заблокирован на сервере.',
                 '⏳ Это не твоя ошибка — попробуем снова чуть позже.',
+                '',
+                '🤖 Аккаунт бота забанен на FunTime — выдача временно стоит.',
             );
             break;
         case 'insufficient_funds':
             lines.push(
-                '📋 Причина: на балансе бота не хватило монет для /pay.',
+                '📋 Причина: на балансе бота не хватило монет для выдачи через клан.',
                 '⏳ Пополним баланс и выдадим — напиши /nick чуть позже.',
             );
             break;
@@ -230,11 +238,11 @@ export function buildDeliveryFailHint(reason) {
     return lines.join('\n');
 }
 
-/** Таймаут выдачи при очереди — заказ сброшен, нужен повторный /nick */
+/** Таймаут выдачи — заказ сброшен, нужен повторный /nick */
 export function buildQueueStallHint() {
     const anka = DELIVERY_ANARCHY;
     return [
-        '⏱ Выдача заняла слишком долго (очередь на сервере).',
+        '⏱ Не успели завершить выдачу через клан (таймаут 1 мин на шаг).',
         '',
         `🎮 Будь на анархии ${anka} и в сети.`,
         '💬 В ЭТОМ чате PlayerOK (не в Minecraft!) напиши снова:',
@@ -408,10 +416,35 @@ export function buildDispatchingHint(nick, amountKk, bonus = null) {
     lines.push(
         '',
         `🎮 Будь на анархии ${anka} и в сети (FunTime 1.21).`,
-        '⛔ Ник должен быть твинка — на основном высокий риск бана за /pay.',
+        '⛔ Ник должен быть твинка — на основном высокий риск бана.',
         'Если не пришло за минуту — в ЭТОМ чате: /nick твой-ник',
     );
     return lines.join('\n');
+}
+
+/** После отправки приглашения в клан */
+export function buildClanInviteHint(nick) {
+    const anka = DELIVERY_ANARCHY;
+    return [
+        `📨 Приглашение в клан отправлено игроку «${nick}».`,
+        '',
+        `🎮 Зайди на анархию ${anka} и ПРИМИ приглашение в клан.`,
+        '⏳ Жди — после вступления бот вложит деньги в казну.',
+    ].join('\n');
+}
+
+/** После /clan invest — инструкция снять деньги */
+export function buildClanWithdrawHint(nick, investAmountRaw) {
+    const anka = DELIVERY_ANARCHY;
+    const amount = String(investAmountRaw || '').replace(/\D/g, '') || '?';
+    return [
+        `💰 Деньги вложены в казну клана для «${nick}».`,
+        '',
+        `🎮 На анархии ${anka} сними их командой:`,
+        `/clan withdraw ${amount}`,
+        '',
+        '⏳ У тебя ~1 минута. Если не успеешь — напиши /nick снова в этом чате.',
+    ].join('\n');
 }
 
 export function hasGreetingInChat(messages, sellerUserId) {

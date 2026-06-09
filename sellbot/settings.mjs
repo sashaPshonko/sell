@@ -10,10 +10,16 @@ const BOT_JSON = join(__dirname, 'bot.json');
 /** Настройки sellbot — только bot.json + эти дефолты (без .env) */
 export const DEFAULTS = {
     wsPort: 8790,
-    payTemplate: '/pay {nick} {amount}',
-    /** Пусто + multiplier: 200кк → 200000000 в /pay */
-    paySuffix: '',
-    payAmountMultiplier: 1_000_000,
+    deliveryMode: 'clan',
+    /** 200кк → /clan invest 200000000 */
+    clanInvestMultiplier: 1_000_000,
+    clanPhaseTimeoutMs: 60_000,
+    clanLoopWaitMs: 2000,
+    clanClickDelayMinMs: 1500,
+    clanClickDelayMaxMs: 4500,
+    clanMembersMenuSlot: 11,
+    clanKickConfirmSlot: 0,
+    anarchyRejoinWaitMs: 5000,
     mockDelivery: false,
     mockDeliveryMs: 300,
     healthCheckEnabled: true,
@@ -21,14 +27,13 @@ export const DEFAULTS = {
     healthCheckFirstMs: 120_000,
     healthCheckObserveMs: 8000,
     idleQuitMs: 25_000,
-    deliverTimeoutMs: 60_000,
-    payLoopWaitMs: 2000,
+    deliverTimeoutMs: 600_000,
     balanceMin: 1_000_000_000,
     balanceWaitMs: 15_000,
     balanceCmdWaitMs: 2000,
-    /** Единственная строка: покупатель не на анархии / не в сети на сервере */
+    /** Единственная строка: покупатель не на анархии / не в сети на сервере (legacy /pay) */
     playerOfflineMarker: '[✘] Ошибка! Указанный игрок не найден!',
-    /** Не хватает монет на балансе бота для /pay */
+    /** Не хватает монет на балансе бота */
     insufficientFundsMarker: '[✘] Ошибка! У вас недостаточно денег.',
     invalidNickMarkers: ['ник не найден'],
     telegramToken: '',
@@ -78,11 +83,17 @@ export async function loadSettings(path = BOT_JSON) {
 
     const settings = {
         wsPort: Number(pick(entry, 'wsPort', DEFAULTS.wsPort)),
-        payTemplate: pick(entry, 'payTemplate', DEFAULTS.payTemplate),
-        paySuffix: pick(entry, 'paySuffix', DEFAULTS.paySuffix),
-        payAmountMultiplier: Number(
-            pick(entry, 'payAmountMultiplier', DEFAULTS.payAmountMultiplier),
+        deliveryMode: String(pick(entry, 'deliveryMode', DEFAULTS.deliveryMode)).trim() || 'clan',
+        clanInvestMultiplier: Number(
+            pick(entry, 'clanInvestMultiplier', pick(entry, 'payAmountMultiplier', DEFAULTS.clanInvestMultiplier)),
         ),
+        clanPhaseTimeoutMs: Number(pick(entry, 'clanPhaseTimeoutMs', DEFAULTS.clanPhaseTimeoutMs)),
+        clanLoopWaitMs: Number(pick(entry, 'clanLoopWaitMs', pick(entry, 'payLoopWaitMs', DEFAULTS.clanLoopWaitMs))),
+        clanClickDelayMinMs: Number(pick(entry, 'clanClickDelayMinMs', DEFAULTS.clanClickDelayMinMs)),
+        clanClickDelayMaxMs: Number(pick(entry, 'clanClickDelayMaxMs', DEFAULTS.clanClickDelayMaxMs)),
+        clanMembersMenuSlot: Number(pick(entry, 'clanMembersMenuSlot', DEFAULTS.clanMembersMenuSlot)),
+        clanKickConfirmSlot: Number(pick(entry, 'clanKickConfirmSlot', DEFAULTS.clanKickConfirmSlot)),
+        anarchyRejoinWaitMs: Number(pick(entry, 'anarchyRejoinWaitMs', DEFAULTS.anarchyRejoinWaitMs)),
         mockDelivery: Boolean(pick(entry, 'mockDelivery', DEFAULTS.mockDelivery)),
         mockDeliveryMs: Number(pick(entry, 'mockDeliveryMs', DEFAULTS.mockDeliveryMs)),
         healthCheckEnabled: pick(entry, 'healthCheckEnabled', DEFAULTS.healthCheckEnabled) !== false,
@@ -93,7 +104,6 @@ export async function loadSettings(path = BOT_JSON) {
         ),
         idleQuitMs: Number(pick(entry, 'idleQuitMs', DEFAULTS.idleQuitMs)),
         deliverTimeoutMs: Number(pick(entry, 'deliverTimeoutMs', DEFAULTS.deliverTimeoutMs)),
-        payLoopWaitMs: Number(pick(entry, 'payLoopWaitMs', DEFAULTS.payLoopWaitMs)),
         balanceMin: Number(pick(entry, 'balanceMin', DEFAULTS.balanceMin)),
         balanceWaitMs: Number(pick(entry, 'balanceWaitMs', DEFAULTS.balanceWaitMs)),
         balanceCmdWaitMs: Number(pick(entry, 'balanceCmdWaitMs', DEFAULTS.balanceCmdWaitMs)),
