@@ -382,10 +382,11 @@ export async function applyNickCommandUpdates(
 
         for (const order of buyerOrders) {
             if (shouldIgnoreNickRedispatch(order)) {
+                const fulfilled = isOrderFulfilled(order);
                 console.log(
-                    `[sell] повторный ник игнор: ${order.orderId?.slice(0, 8)}… (выдача уже была)`,
+                    `[sell] повторный ник игнор: ${order.orderId?.slice(0, 8)}… (${fulfilled ? 'заказ закрыт' : 'выдача идёт'})`,
                 );
-                if (client && !order.lateNickHandled) {
+                if (fulfilled && client && !order.lateNickHandled) {
                     try {
                         await sendChatMessage(client, chatId, buildOrderAlreadyDoneHint());
                         setOrderPhase(state, order.orderId, order.phase, {
@@ -394,6 +395,8 @@ export async function applyNickCommandUpdates(
                     } catch (e) {
                         console.warn(`[sell] ответ в чат: ${e.message}`);
                     }
+                } else if (!fulfilled) {
+                    order.queueStatusSentAt = undefined;
                 }
                 continue;
             }

@@ -391,7 +391,7 @@ export function buildNickDeliveryActiveHint(nick, amountKk) {
     const anka = DELIVERY_ANARCHY;
     return [
         `⏳ Сейчас выдаю валюту на ник «${nick}».`,
-        `💰 Сумма: ${fmtKk(amountKk)}kk`,
+        `💰 Сумма: ${fmtKk(amountKk)}`,
         '',
         `🎮 Будь на анархии ${anka} и в сети.`,
     ].join('\n');
@@ -403,7 +403,7 @@ export function buildNickQueueWaitingHint(position, amountKk = null) {
     const posLine =
         position <= 2 ? 'Ты следующий в очереди.' : `Твоя очередь: ${position}.`;
     const lines = ['⏳ Сейчас валюта выдаётся другому покупателю.', posLine];
-    if (amountKk != null) lines.push(`💰 Твой заказ: ${fmtKk(amountKk)}kk`);
+    if (amountKk != null) lines.push(`💰 Твой заказ: ${fmtKk(amountKk)}`);
     lines.push('', `🎮 Будь на анархии ${anka} — выдадим, когда подойдёт очередь.`);
     return lines.join('\n');
 }
