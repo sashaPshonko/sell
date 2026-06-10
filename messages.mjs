@@ -333,6 +333,36 @@ export function buildRepeatPurchaseHint() {
     return '🎁 Повторная покупка в течение 24 ч — ещё +5% к валюте (🔁 «Бонус за повторную покупку»).';
 }
 
+/**
+ * Купил не 🎁-лот — сразу ссылка, где больше кк за те же ₽.
+ * @param {{ baseKk?: number, upsellKk?: number, priceRub?: number, url?: string, emoji?: string }} opts
+ */
+export function buildPremiumRefundUpsellHint(opts = {}) {
+    const baseKk = Math.round(Number(opts.baseKk) || 0);
+    const upsellKk = Math.round(Number(opts.upsellKk) || 0);
+    const priceRub = opts.priceRub != null ? Math.round(Number(opts.priceRub)) : null;
+    const url = String(opts.url || '').trim();
+    const marker = opts.emoji || '🎁';
+
+    const priceBit = priceRub != null && priceRub > 0 ? `за ${priceRub} ₽` : 'за те же деньги';
+    const lines = [];
+
+    if (upsellKk > baseKk && baseKk > 0) {
+        lines.push(`💡 ${priceBit} можно получить ${upsellKk}кк вместо ${baseKk}кк:`);
+    } else {
+        lines.push(`💡 Есть лот ${marker} с большей выгодой ${priceBit}:`);
+    }
+
+    if (url) {
+        lines.push(url);
+    } else {
+        lines.push(`Посмотри лоты с ${marker} на профиле продавца.`);
+    }
+
+    lines.push('', 'Если валюта ещё не выдана — /cancel и купи по ссылке.');
+    return lines.join('\n');
+}
+
 /** Нет конкретного лота-аналога — подсказка про 🎁 на профиле (без ссылки). */
 export function buildProfileBrowseHint(opts = {}) {
     const marker = opts.emoji || '🎁';

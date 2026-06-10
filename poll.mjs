@@ -46,6 +46,7 @@ import {
     chatHasPendingOrders,
     ensureChatGreeting,
     sendTwinRemindersForNewOrders,
+    sendPremiumRefundUpsellForOrders,
     syncChatNick,
     applyNickCommandUpdates,
     applyCancelCommands,
@@ -601,6 +602,10 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
         );
     } else if (!greetingAt) {
         greetingAt = findGreetingAnchorInChat(messages, sellerUserId);
+    }
+
+    if (newlyRegistered.length) {
+        await sendPremiumRefundUpsellForOrders(client, state, chatId, newlyRegistered);
     }
 
     if (hadGreetingBefore && newlyRegistered.length) {

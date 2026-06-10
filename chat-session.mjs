@@ -24,7 +24,13 @@ import {
     buildNickQueueWaitingHint,
     buildOrderAlreadyDoneHint,
     buildOrderClosedOnPlayerokHint,
+    buildPremiumRefundUpsellHint,
 } from './messages.mjs';
+import {
+    resolveProfileUpsell,
+    profileUpsellEmoji,
+    isMarkedProfileLot,
+} from './lib/profile-upsell.mjs';
 import {
     getQueuePosition,
     getQueueTotal,
@@ -33,6 +39,7 @@ import {
 import { sendGreeting, sendChatMessage } from './chat.mjs';
 import { dispatchOrder, dispatchNickUpdate, dispatchCancelOrder } from './dispatch.mjs';
 import { applyOrderPayBonus, buyerEligibleForRepeatBonus } from './lib/pay-bonus.mjs';
+import { isBuyerBanned } from './lib/banlist.mjs';
 import { cancelDealOnPlayerok } from './cancel.mjs';
 import { DELIVERY_ANARCHY } from './messages.mjs';
 import { isStaleDeal, isActionableOrder } from './lib/deal-cutoff.mjs';
@@ -53,11 +60,8 @@ const DISPATCH_RECOVERY_MS = 90_000;
  * Синхронизирует ник покупателя на весь чат (все его заказы).
  * @returns {string|null}
  */
-/** Окно /nick: при незакрытом заказе в чате — любой /nick из ленты (без отсечки по paidAt). */
-function nickMessagesAfter(session, greetingAtIso, state, chatId, buyerId) {
-    if (state && chatId && buyerId && buyerHasPendingOrder(state, chatId, buyerId)) {
-        return null;
-    }
+/** Не раньше nickResetAt (новая оплата) или приветствия — старые /nick из чата не трогаем. */
+function nickMessagesAfter(session, greetingAtIso) {
     if (session.nickResetAt) return session.nickResetAt;
     return greetingAtIso || null;
 }
@@ -87,7 +91,7 @@ export function syncChatNick(
     sellerUsername = null,
 ) {
     const session = getBuyerSession(state, chatId, buyerId);
-    const after = nickMessagesAfter(session, greetingAtIso, state, chatId, buyerId);
+    const after = nickMessagesAfter(session, greetingAtIso);
     const buyerUsername = resolveBuyerUsername(state, chatId, buyerId);
 
     const nickParseOpts = {
@@ -109,9 +113,6 @@ export function syncChatNick(
             if (order.buyerId !== buyerId) continue;
             if (order.phase === 'completed' || order.phase === 'cancelled') continue;
             order.nick = pick.nick;
-            if (order.pausedUntilNick) {
-                order.pausedUntilNick = false;
-            }
             if (isActionableOrder(order) && order.phase === 'new') {
                 setOrderPhase(state, order.orderId, 'awaiting_nick', { nick: pick.nick });
             }
@@ -168,6 +169,62 @@ export async function ensureChatGreeting(client, state, chatId, messages, seller
         });
     }
     return chat.greetingAt;
+}
+
+/**
+ * Лот без 🎁 — сразу ссылка, где больше кк за те же ₽.
+ * @param {object[]} newOrders — заказы из registerDealOrders
+ */
+export async function sendPremiumRefundUpsellForOrders(client, state, chatId, newOrders) {
+    if (!client || !newOrders?.length) return;
+    if (process.env.PREMIUM_REFUND_UPSELL === '0') return;
+
+    const sellerUserId = state.sellerUserId;
+    const sellerUsername = state.sellerUsername ?? null;
+
+    for (const order of newOrders) {
+        if (!order || !isActionableOrder(order)) continue;
+        if (order.premiumRefundUpsellSentAt) continue;
+        if (isMarkedProfileLot(order.itemName)) continue;
+        if (isBuyerBanned(state, order.buyerId)) continue;
+
+        let match = null;
+        if (sellerUserId) {
+            try {
+                match = await resolveProfileUpsell(
+                    client,
+                    order,
+                    sellerUserId,
+                    sellerUsername,
+                );
+            } catch (e) {
+                console.warn(`[sell] premium-refund upsell: ${e.message}`);
+            }
+        }
+
+        try {
+            await sendChatMessage(
+                client,
+                chatId,
+                buildPremiumRefundUpsellHint({
+                    baseKk: order.amountKk,
+                    upsellKk: match?.kk,
+                    priceRub: match?.priceRub ?? order.itemPriceRub,
+                    url: match?.url,
+                    emoji: match?.emoji ?? profileUpsellEmoji(),
+                }),
+            );
+            const phase = order.phase === 'new' ? 'awaiting_nick' : order.phase;
+            setOrderPhase(state, order.orderId, phase, {
+                premiumRefundUpsellSentAt: new Date().toISOString(),
+            });
+            console.log(
+                `[sell] premium-refund upsell → ${order.orderId.slice(0, 8)}…`,
+            );
+        } catch (e) {
+            console.warn(`[sell] premium-refund upsell чат: ${e.message}`);
+        }
+    }
 }
 
 /**
@@ -306,7 +363,7 @@ export async function applyNickCommandUpdates(
     const sellerKnown = sellerKnownIds instanceof Set
         ? sellerKnownIds
         : new Set(sellerKnownIds || []);
-    const after = nickMessagesAfter(session, greetingAtIso, state, chatId, buyerId);
+    const after = nickMessagesAfter(session, greetingAtIso);
     const buyerUsername = resolveBuyerUsername(state, chatId, buyerId);
     const nickParseOpts = {
         allowNikPhrase: true,
@@ -387,7 +444,12 @@ export async function applyNickCommandUpdates(
                 console.log(
                     `[sell] повторный ник игнор: ${order.orderId?.slice(0, 8)}… (${fulfilled ? 'заказ закрыт' : 'выдача идёт'})`,
                 );
-                if (fulfilled && client && !order.lateNickHandled) {
+                if (
+                    fulfilled
+                    && client
+                    && !order.lateNickHandled
+                    && !buyerHasPendingOrder(state, chatId, buyerId)
+                ) {
                     try {
                         await sendChatMessage(client, chatId, buildOrderAlreadyDoneHint());
                         setOrderPhase(state, order.orderId, order.phase, {
@@ -573,9 +635,12 @@ export async function flushChatDispatchQueue(state, deals, client = null) {
         }
 
         const chatId = paid.chatId || order.chatId;
-        const nick =
-            getBuyerSession(state, chatId, paid.buyerId).nick || order.nick || null;
+        const session = getBuyerSession(state, chatId, paid.buyerId);
+        const nick = session.nick || order.nick || null;
         if (!nick) continue;
+        const resetAt = session.nickResetAt ? Date.parse(session.nickResetAt) : 0;
+        const nickAt = session.nickAt ? Date.parse(session.nickAt) : 0;
+        if (resetAt && (!nickAt || nickAt < resetAt)) continue;
 
         order.nick = nick;
         applyOrderPayBonus(state, order);
@@ -675,6 +740,10 @@ export function registerDealOrders(state, deals, cutoffIso = null) {
         ) {
             const session = getBuyerSession(state, paid.chatId, paid.buyerId);
             session.nickResetAt = paid.paidAt;
+            delete session.nick;
+            delete session.via;
+            delete session.messageId;
+            delete session.nickAt;
             delete session.appliedNickMessageId;
         }
         console.log(
