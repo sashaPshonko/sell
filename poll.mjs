@@ -20,7 +20,7 @@ import {
 import { drainBotEvents, dispatchCancelOrder } from './dispatch.mjs';
 import { setDeliveryQueueSnapshot } from './lib/delivery-queue.mjs';
 import { cancelClosedOrdersOnSellbot } from './lib/sellbot-cancel.mjs';
-import { isOrderFulfilled } from './lib/playerok-deal-sync.mjs';
+import { isOrderFulfilled, clanDeliveryRetryReset } from './lib/playerok-deal-sync.mjs';
 import { sendChatMessage } from './chat.mjs';
 import {
     buildWrongNickHint,
@@ -247,20 +247,23 @@ async function handleBotEvents(client, state) {
                     ev.reason === 'clan_withdraw_timeout' &&
                     withdrawn > 0 &&
                     remain > 0;
-                markDeliveryPaused(state, ev.orderId, 'awaiting_nick', {
-                    lastError: 'stall_queue',
-                    nick,
-                    ...(withdrawn > 0
-                        ? {
-                              clanPlayerWithdrawn: Math.max(
-                                  order.clanPlayerWithdrawn || 0,
-                                  withdrawn,
-                              ),
-                              clanWithdrawHintSentAt: null,
-                              clanRemainderHintSentAt: null,
-                          }
-                        : {}),
-                });
+                markDeliveryPaused(
+                    state,
+                    ev.orderId,
+                    'awaiting_nick',
+                    clanDeliveryRetryReset({
+                        lastError: 'stall_queue',
+                        nick,
+                        ...(withdrawn > 0
+                            ? {
+                                  clanPlayerWithdrawn: Math.max(
+                                      order.clanPlayerWithdrawn || 0,
+                                      withdrawn,
+                                  ),
+                              }
+                            : {}),
+                    }),
+                );
                 if (partialWithdraw) {
                     await sendChatMessage(
                         client,
@@ -309,10 +312,12 @@ async function handleBotEvents(client, state) {
                 }
                 const nick =
                     getBuyerSession(state, chatId, buyerId).nick || order.nick;
-                markDeliveryPaused(state, ev.orderId, 'awaiting_nick', {
-                    lastError: reason,
-                    nick,
-                });
+                markDeliveryPaused(
+                    state,
+                    ev.orderId,
+                    'awaiting_nick',
+                    clanDeliveryRetryReset({ lastError: reason, nick }),
+                );
                 const fresh = getOrder(state, ev.orderId) || order;
                 const failHint = () => buildDeliveryFailHint(reason);
                 if (reason === 'captcha' || reason === 'banned') {
@@ -362,10 +367,15 @@ async function handleBotEvents(client, state) {
                     );
                     continue;
                 }
-                markDeliveryPaused(state, ev.orderId, 'awaiting_nick', {
-                    lastError: 'player_offline',
-                    nick: getBuyerSession(state, chatId, buyerId).nick || order.nick,
-                });
+                markDeliveryPaused(
+                    state,
+                    ev.orderId,
+                    'awaiting_nick',
+                    clanDeliveryRetryReset({
+                        lastError: 'player_offline',
+                        nick: getBuyerSession(state, chatId, buyerId).nick || order.nick,
+                    }),
+                );
                 await sendDeliveryHintOnce(
                     client,
                     state,
@@ -381,10 +391,15 @@ async function handleBotEvents(client, state) {
                     );
                     continue;
                 }
-                markDeliveryPaused(state, ev.orderId, 'awaiting_nick', {
-                    lastError: 'insufficient_funds',
-                    nick: getBuyerSession(state, chatId, buyerId).nick || order.nick,
-                });
+                markDeliveryPaused(
+                    state,
+                    ev.orderId,
+                    'awaiting_nick',
+                    clanDeliveryRetryReset({
+                        lastError: 'insufficient_funds',
+                        nick: getBuyerSession(state, chatId, buyerId).nick || order.nick,
+                    }),
+                );
                 await sendDeliveryHintOnce(
                     client,
                     state,

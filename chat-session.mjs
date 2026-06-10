@@ -42,6 +42,7 @@ import {
     playerokIsClosed,
     canDispatchToSellbot,
     shouldIgnoreNickRedispatch,
+    clanDeliveryRetryReset,
     buyerHasPendingOrder,
     isOrderFulfilled,
 } from './lib/playerok-deal-sync.mjs';
@@ -329,8 +330,8 @@ export async function applyNickCommandUpdates(
         ) {
             const needsWork = buyerOrders.some((o) => {
                 if (isOrderFulfilled(o)) return false;
-                // После сбоя ждём новый /nick — не крутим тот же ник на каждом poll
-                if (o.pausedUntilNick) return false;
+                // После сбоя ждём новый /nick в чате
+                if (o.pausedUntilNick) return true;
                 // dispatched / ws_pending — отдельные пути (recovery / retryWsPendingOrders)
                 if (o.phase === 'dispatched' || o.phase === 'ws_pending') return false;
                 return isActionableOrder(o) && canDispatchToSellbot(o);
@@ -417,15 +418,19 @@ export async function applyNickCommandUpdates(
                 order.wrongNickWarned = false;
                 if (changed) {
                     await dispatchNickUpdate(order.orderId, u.nick);
-                } else if (isNewNickMessage || u.recovery) {
-                    setOrderPhase(state, order.orderId, 'awaiting_nick', {
-                        nick: u.nick,
-                        lastError: null,
-                        dispatchAckSentAt: undefined,
-                        ...(u.recovery
-                            ? { nickRecoveryForMessageId: u.messageId }
-                            : {}),
-                    });
+                } else if (isNewNickMessage || u.recovery || order.pausedUntilNick) {
+                    setOrderPhase(
+                        state,
+                        order.orderId,
+                        'awaiting_nick',
+                        clanDeliveryRetryReset({
+                            nick: u.nick,
+                            lastError: null,
+                            ...(u.recovery
+                                ? { nickRecoveryForMessageId: u.messageId }
+                                : {}),
+                        }),
+                    );
                     queuedForDelivery = true;
                 }
                 continue;
@@ -441,10 +446,15 @@ export async function applyNickCommandUpdates(
                 continue;
             }
 
-            setOrderPhase(state, order.orderId, 'awaiting_nick', {
-                nick: u.nick,
-                lastError: null,
-            });
+            setOrderPhase(
+                state,
+                order.orderId,
+                'awaiting_nick',
+                clanDeliveryRetryReset({
+                    nick: u.nick,
+                    lastError: null,
+                }),
+            );
             queuedForDelivery = true;
         }
 
