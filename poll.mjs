@@ -1,4 +1,5 @@
 import { loadEnv } from './lib/env.mjs';
+import { CLAN_WITHDRAW_MIN_RATIO } from './config.mjs';
 import { audit } from './lib/audit.mjs';
 import { createClient } from './playerok-client.mjs';
 import {
@@ -28,6 +29,8 @@ import {
     buildDeliveryOkHint,
     buildClanInviteHint,
     buildClanWithdrawHint,
+    buildClanPartialWithdrawHint,
+    clanFullAmountRaw,
     buildOrderAlreadyDoneHint,
     hasGreetingInChat,
     DELIVERY_ANARCHY,
@@ -152,10 +155,13 @@ async function handleBotEvents(client, state) {
                 const fresh = getOrder(state, ev.orderId) || order;
                 if (fresh.clanWithdrawHintSentAt) continue;
                 const nick = ev.nick || fresh.nick || '?';
-                const invest =
-                    ev.investAmount ||
-                    String(Math.round((fresh.payAmountKk ?? fresh.amountKk) * 1_000_000));
-                await sendChatMessage(client, chatId, buildClanWithdrawHint(nick, invest));
+                const fullAmount =
+                    ev.fullInvestAmount || clanFullAmountRaw(fresh);
+                await sendChatMessage(
+                    client,
+                    chatId,
+                    buildClanWithdrawHint(nick, fullAmount),
+                );
                 setOrderPhase(state, ev.orderId, fresh.phase, {
                     clanWithdrawHintSentAt: new Date().toISOString(),
                 });
@@ -206,18 +212,45 @@ async function handleBotEvents(client, state) {
                 }
                 const nick =
                     getBuyerSession(state, chatId, buyerId).nick || order.nick;
+                const withdrawn = Number(ev.playerWithdrawn || 0);
+                const fullAmount = Number(clanFullAmountRaw(order));
+                const minOk = Math.floor(fullAmount * CLAN_WITHDRAW_MIN_RATIO);
+                const partialWithdraw =
+                    ev.reason === 'clan_withdraw_timeout' &&
+                    withdrawn > 0 &&
+                    withdrawn < minOk;
                 markDeliveryPaused(state, ev.orderId, 'awaiting_nick', {
                     lastError: 'stall_queue',
                     nick,
+                    ...(withdrawn > 0
+                        ? {
+                              clanPlayerWithdrawn: Math.max(
+                                  order.clanPlayerWithdrawn || 0,
+                                  withdrawn,
+                              ),
+                              clanWithdrawHintSentAt: null,
+                          }
+                        : {}),
                 });
-                await sendDeliveryHintOnce(
-                    client,
-                    state,
-                    chatId,
-                    ev.orderId,
-                    getOrder(state, ev.orderId) || order,
-                    buildQueueStallHint,
-                );
+                if (partialWithdraw) {
+                    await sendChatMessage(
+                        client,
+                        chatId,
+                        buildClanPartialWithdrawHint(nick, fullAmount),
+                    );
+                    setOrderPhase(state, ev.orderId, order.phase, {
+                        deliveryHintSentAt: new Date().toISOString(),
+                    });
+                } else {
+                    await sendDeliveryHintOnce(
+                        client,
+                        state,
+                        chatId,
+                        ev.orderId,
+                        getOrder(state, ev.orderId) || order,
+                        buildQueueStallHint,
+                    );
+                }
                 console.warn(`[sell] stall ${ev.orderId} (очередь ${ev.queued ?? '?'})`);
             } else if (ev.type === 'delivery_failed') {
                 if (!shouldProcessBotRetryEvent(order)) {

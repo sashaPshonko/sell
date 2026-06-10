@@ -421,17 +421,44 @@ export function buildClanInviteHint(nick) {
     ].join('\n');
 }
 
-/** После /clan invest — инструкция снять деньги */
-export function buildClanWithdrawHint(nick, investAmountRaw) {
+/** Полная сумма заказа в монетах (kk × 1M) */
+export function clanFullAmountRaw(orderOrKk, multiplier = 1_000_000) {
+    const kk =
+        typeof orderOrKk === 'object'
+            ? (orderOrKk.payAmountKk ?? orderOrKk.amountKk)
+            : orderOrKk;
+    return String(Math.round(Number(kk) * multiplier));
+}
+
+/** После /clan invest — снять всю сумму заказа */
+export function buildClanWithdrawHint(nick, fullAmountRaw) {
     const anka = DELIVERY_ANARCHY;
-    const amount = String(investAmountRaw || '').replace(/\D/g, '') || '?';
+    const amount = String(fullAmountRaw || '').replace(/\D/g, '') || '?';
     return [
         `💰 Деньги вложены в казну клана для «${nick}».`,
         '',
-        `🎮 На анархии ${anka} сними их командой:`,
+        `🎮 На анархии ${anka} сними ВСЮ сумму заказа:`,
         `/clan withdraw ${amount}`,
         '',
-        '⏳ У тебя ~1 минута. Если не успеешь — напиши /nick снова в этом чате.',
+        '⏳ Нужно снять полностью — можно несколькими withdraw, но итого должна совпасть.',
+        'Если не снимешь всё — остаток заберёт бот после кика из клана.',
+    ].join('\n');
+}
+
+/** Игрок снял не всю сумму — напомнить про полную */
+export function buildClanPartialWithdrawHint(nick, fullAmountRaw) {
+    const anka = DELIVERY_ANARCHY;
+    const amount = String(fullAmountRaw || '').replace(/\D/g, '') || '?';
+    return [
+        `⚠️ Ты снял не всю сумму из казны.`,
+        '',
+        `🎮 На анархии ${anka} сними ВСЮ сумму заказа:`,
+        `/clan withdraw ${amount}`,
+        '',
+        'Можно частями, но итого должна совпасть с суммой заказа.',
+        '',
+        askNickInChatLine(),
+        '💰 Бот продолжит выдачу после /nick.',
     ].join('\n');
 }
 

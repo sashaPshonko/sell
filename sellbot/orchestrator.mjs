@@ -160,6 +160,7 @@ function workerDataPayload() {
         clanPhaseTimeoutMs: cfg.clanPhaseTimeoutMs,
         clanLoopWaitMs: cfg.clanLoopWaitMs,
         clanInvestWaitMs: cfg.clanInvestWaitMs,
+        clanWithdrawMinRatio: cfg.clanWithdrawMinRatio,
         clanClickDelayMinMs: cfg.clanClickDelayMinMs,
         clanClickDelayMaxMs: cfg.clanClickDelayMaxMs,
         clanMembersMenuSlot: cfg.clanMembersMenuSlot,
@@ -345,7 +346,10 @@ async function startWorker(reason = 'order') {
                 const ev = { type: evType, orderId };
                 if (message.reason) ev.reason = message.reason;
                 if (message.queued != null) ev.queued = message.queued;
+                if (message.playerWithdrawn != null) ev.playerWithdrawn = message.playerWithdrawn;
                 if (message.investAmount != null) ev.investAmount = message.investAmount;
+                if (message.priorWithdrawn != null) ev.priorWithdrawn = message.priorWithdrawn;
+                if (message.fullInvestAmount != null) ev.fullInvestAmount = message.fullInvestAmount;
                 if (message.nick) ev.nick = message.nick;
                 if (message.amountKk != null) ev.amountKk = message.amountKk;
                 forwardToSell(ev);

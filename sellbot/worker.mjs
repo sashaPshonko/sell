@@ -1,7 +1,11 @@
 import mineflayer from 'mineflayer';
 import { parentPort, workerData } from 'worker_threads';
 import { antiAfkIfNeeded, lookAroundSpin } from './lib/afk-look.mjs';
-import { parseBalanceFromChat } from './lib/balance.mjs';
+import {
+    parseBalanceFromChat,
+    parseClanBalanceFromChat,
+    parseClanWithdrawAmount,
+} from './lib/balance.mjs';
 import { createChatLogger } from './lib/chat-log.mjs';
 import { audit } from '../lib/audit.mjs';
 
@@ -31,6 +35,7 @@ const config = {
     clanLoopWaitMs: workerData.clanLoopWaitMs ?? 2000,
     /** пауза после /clan invest до повтора — ждём «пополнил баланс казны» */
     clanInvestWaitMs: workerData.clanInvestWaitMs ?? 15_000,
+    clanWithdrawMinRatio: workerData.clanWithdrawMinRatio ?? 0.9,
     clanClickDelayMinMs: workerData.clanClickDelayMinMs ?? 1500,
     clanClickDelayMaxMs: workerData.clanClickDelayMaxMs ?? 4500,
     clanMembersMenuSlot: workerData.clanMembersMenuSlot ?? 11,
@@ -68,6 +73,11 @@ let playerJoined = false;
 let moneyInvested = false;
 let playerWithdrew = false;
 let playerOffline = false;
+/** сколько должен снять игрок; ждём полную сумму, не первый withdraw */
+let expectedWithdrawAmount = 0;
+let withdrawnTotal = 0;
+/** баланс казны клана из чата (Баланс клана:) */
+let clanBalance = null;
 
 // GUI: слот 11 — и кнопка «участники», и голова игрока в списке
 let guiBusy = false;
@@ -107,6 +117,12 @@ function investSum(kk) {
     return String(Math.round(Number(kk) * config.clanInvestMultiplier));
 }
 
+function isWithdrawComplete(withdrawn, expected) {
+    if (expected <= 0) return false;
+    const ratio = config.clanWithdrawMinRatio ?? 0.9;
+    return withdrawn >= expected || withdrawn >= Math.floor(expected * ratio);
+}
+
 function resetDeliveryFlags() {
     inviteSent = false;
     playerJoined = false;
@@ -114,6 +130,8 @@ function resetDeliveryFlags() {
     playerWithdrew = false;
     playerOffline = false;
     clanJoinedForCurrent = false;
+    expectedWithdrawAmount = 0;
+    withdrawnTotal = 0;
 }
 
 function resetGui() {
@@ -173,6 +191,9 @@ function handleChatMessage(raw) {
     const bal = parseBalanceFromChat(text);
     if (bal != null) config.balance = bal;
 
+    const clanBal = parseClanBalanceFromChat(text);
+    if (clanBal != null) clanBalance = clanBal;
+
     if (!delivering || !currentOrder?.nick) return;
     const nick = currentOrder.nick;
 
@@ -197,10 +218,26 @@ function handleChatMessage(raw) {
         return;
     }
 
-    // [X] Игрок <ник> снял $... из казны
+    // [X] Игрок <ник> снял $... из казны — кикаем только после полной суммы
     if (text.includes('Игрок') && text.includes(CLAN_WITHDRAW_MID) && text.includes(CLAN_WITHDRAW_TAIL) && nickIn(text, nick)) {
-        playerWithdrew = true;
-        logOk(`withdraw: ${nick}`);
+        const chunk = parseClanWithdrawAmount(text);
+        if (chunk == null) return;
+        if (expectedWithdrawAmount <= 0) {
+            logInfo(`withdraw +${chunk} (ожидаемая сумма ещё не задана)`);
+            return;
+        }
+        withdrawnTotal += chunk;
+        logInfo(`withdraw +${chunk} (${withdrawnTotal}/${expectedWithdrawAmount})`);
+        if (isWithdrawComplete(withdrawnTotal, expectedWithdrawAmount)) {
+            playerWithdrew = true;
+            if (withdrawnTotal >= expectedWithdrawAmount) {
+                logOk(`withdraw: ${nick}`);
+            } else {
+                logOk(
+                    `withdraw ≥${Math.round((config.clanWithdrawMinRatio ?? 0.9) * 100)}%: ${nick}`,
+                );
+            }
+        }
         return;
     }
 
@@ -346,6 +383,50 @@ async function kickFromClan(nick, deadline) {
     return false;
 }
 
+/** После кика — снять всё, что осталось в казне */
+async function sweepClanTreasury(waitMs = 15_000) {
+    if (!bot?.chat) return 0;
+    await closeWindow();
+    let bal = await safeClanBalance(waitMs);
+    if (bal == null || bal <= 0) {
+        if (bal === 0) logInfo('казна пуста');
+        return 0;
+    }
+    const deadline = Date.now() + waitMs;
+    let swept = 0;
+    while (Date.now() < deadline) {
+        logInfo(`казна ${bal} → /clan withdraw ${bal}`);
+        clanBalance = null;
+        bot.chat(`/clan withdraw ${bal}`);
+        await sleep(config.clanLoopWaitMs);
+        const after = await safeClanBalance(8000);
+        if (after === 0) {
+            logOk(`казна собрана: ${bal}`);
+            return swept + bal;
+        }
+        if (after != null && after < bal) {
+            swept += bal - after;
+            bal = after;
+            continue;
+        }
+        await sleep(2000);
+        const recheck = await safeClanBalance(8000);
+        if (recheck === 0 || recheck == null) {
+            logOk(`казна собрана (~${bal})`);
+            return swept + bal;
+        }
+        bal = recheck;
+    }
+    logInfo('казна — не удалось собрать полностью');
+    return swept;
+}
+
+async function kickAndSweepClan(nick, deadline) {
+    const kicked = await kickFromClan(nick, deadline);
+    await sweepClanTreasury();
+    return kicked;
+}
+
 // ========== баланс ==========
 
 async function safeBalance(waitMs = config.balanceWaitMs) {
@@ -361,6 +442,27 @@ async function safeBalance(waitMs = config.balanceWaitMs) {
     }
     if (config.balance != null) logInfo(`баланс: ${config.balance}`);
     return config.balance;
+}
+
+async function safeClanBalance(waitMs = 12_000) {
+    if (!bot?.chat) return null;
+    clanBalance = null;
+    const deadline = Date.now() + waitMs;
+    let triedBalance = false;
+    while (clanBalance == null && Date.now() < deadline) {
+        if (!bot) return null;
+        await closeWindow();
+        bot.chat('/clan money');
+        await sleep(config.balanceCmdWaitMs);
+        if (clanBalance == null && !triedBalance) {
+            triedBalance = true;
+            bot.chat('/clan balance');
+            await sleep(config.balanceCmdWaitMs);
+        }
+        if (clanBalance == null) await antiAfkIfNeeded(bot, config, logInfo);
+    }
+    if (clanBalance != null) logInfo(`баланс клана: ${clanBalance}`);
+    return clanBalance;
 }
 
 // ========== бот ==========
@@ -489,22 +591,33 @@ function shutdown(reason) {
 async function deliverClan() {
     const order = currentOrder;
     const nick = order.nick;
-    const invest = investSum(order.amount);
+    const fullInvest = Number(investSum(order.amount));
+    const priorWithdrawn = Number(order.priorWithdrawn || 0);
+    const investThisRound = Math.max(0, fullInvest - priorWithdrawn);
+    const invest = String(investThisRound);
     const orderEnd = Date.now() + config.deliverTimeoutMs;
     const active = () => delivering && currentOrder?.orderId === order.orderId;
     const phaseEnd = () => Date.now() + config.clanPhaseTimeoutMs;
 
     // 0. баланс
-    const balance = await safeBalance();
-    if (!active()) return;
-    if (balance == null || balance < Number(invest)) {
-        logInfo(`мало денег: ${balance ?? '?'} < ${invest}`);
-        endDelivery('insufficient_funds');
+    if (investThisRound > 0) {
+        const balance = await safeBalance();
+        if (!active()) return;
+        if (balance == null || balance < investThisRound) {
+            logInfo(`мало денег: ${balance ?? '?'} < ${invest}`);
+            endDelivery('insufficient_funds');
+            return;
+        }
+    } else if (priorWithdrawn < fullInvest) {
+        logInfo(`invest=0, prior=${priorWithdrawn} < full=${fullInvest}`);
+        endDelivery('timeout');
         return;
     }
 
     // 1. invite
-    logInfo(`invite ${nick}, invest ${invest}`);
+    logInfo(
+        `invite ${nick}, invest ${invest} (полная ${fullInvest}, уже снято ${priorWithdrawn})`,
+    );
     resetDeliveryFlags();
     let end = phaseEnd();
     while (active() && Date.now() < orderEnd && Date.now() < end && !inviteSent) {
@@ -533,7 +646,7 @@ async function deliverClan() {
     }
     if (!active()) return;
     if (!playerJoined) {
-        await kickFromClan(nick, phaseEnd());
+        await kickAndSweepClan(nick, phaseEnd());
         endDelivery('timeout');
         return;
     }
@@ -548,7 +661,7 @@ async function deliverClan() {
     }
     if (!active()) return;
     if (!perms) {
-        await kickFromClan(nick, phaseEnd());
+        await kickAndSweepClan(nick, phaseEnd());
         endDelivery('timeout');
         return;
     }
@@ -558,42 +671,56 @@ async function deliverClan() {
     guiBusy = false;
     await closeWindow();
     await rnd(500, 1000);
-    logInfo(`invest ${invest}`);
-    moneyInvested = false;
-    end = phaseEnd();
-    lastAfkCheck = 0;
-    while (active() && Date.now() < end && !moneyInvested) {
-        if (Date.now() - lastAfkCheck >= AFK_WAIT_MS) {
-            await afkTick();
-            lastAfkCheck = Date.now();
-        }
-        if (config.afk) {
-            await antiAfkIfNeeded(bot, config, logInfo);
-            await sleep(CHAT_POLL_MS);
-            continue;
-        }
-        await closeWindow();
-        logInfo(`/clan invest ${invest}`);
-        bot.chat(`/clan invest ${invest}`);
-        const attemptEnd = Date.now() + config.clanInvestWaitMs;
-        while (Date.now() < attemptEnd && !moneyInvested) {
+    moneyInvested = investThisRound <= 0;
+    if (investThisRound > 0) {
+        logInfo(`invest ${invest}`);
+        end = phaseEnd();
+        lastAfkCheck = 0;
+        while (active() && Date.now() < end && !moneyInvested) {
             if (Date.now() - lastAfkCheck >= AFK_WAIT_MS) {
                 await afkTick();
                 lastAfkCheck = Date.now();
             }
-            await sleep(CHAT_POLL_MS);
+            if (config.afk) {
+                await antiAfkIfNeeded(bot, config, logInfo);
+                await sleep(CHAT_POLL_MS);
+                continue;
+            }
+            await closeWindow();
+            logInfo(`/clan invest ${invest}`);
+            bot.chat(`/clan invest ${invest}`);
+            const attemptEnd = Date.now() + config.clanInvestWaitMs;
+            while (Date.now() < attemptEnd && !moneyInvested) {
+                if (Date.now() - lastAfkCheck >= AFK_WAIT_MS) {
+                    await afkTick();
+                    lastAfkCheck = Date.now();
+                }
+                await sleep(CHAT_POLL_MS);
+            }
         }
+        if (!active()) return;
+        if (!moneyInvested) {
+            await kickAndSweepClan(nick, phaseEnd());
+            endDelivery('timeout');
+            return;
+        }
+        post('clan_invested', {
+            orderId: order.orderId,
+            nick,
+            investAmount: invest,
+            fullInvestAmount: String(fullInvest),
+            amountKk: order.amount,
+            priorWithdrawn,
+        });
+    } else {
+        logInfo('invest пропуск — игрок уже снял полную сумму');
     }
-    if (!active()) return;
-    if (!moneyInvested) {
-        await kickFromClan(nick, phaseEnd());
-        endDelivery('timeout');
-        return;
-    }
-    post('clan_invested', { orderId: order.orderId, nick, investAmount: invest, amountKk: order.amount });
 
-    // 5. withdraw — игрок один раз /clan withdraw
-    logInfo(`ждём withdraw ${nick}`);
+    // 5. withdraw — ждём полную сумму заказа (можно несколькими /clan withdraw)
+    expectedWithdrawAmount = fullInvest;
+    withdrawnTotal = priorWithdrawn;
+    playerWithdrew = isWithdrawComplete(priorWithdrawn, fullInvest);
+    logInfo(`ждём withdraw ${nick} (${withdrawnTotal}/${expectedWithdrawAmount})`);
     end = phaseEnd();
     lastAfkCheck = 0;
     while (active() && Date.now() < end && !playerWithdrew) {
@@ -604,14 +731,20 @@ async function deliverClan() {
         await sleep(CHAT_POLL_MS);
     }
     if (!active()) return;
+    if (!playerWithdrew && isWithdrawComplete(withdrawnTotal, expectedWithdrawAmount)) {
+        playerWithdrew = true;
+        logOk(
+            `withdraw ≥${Math.round((config.clanWithdrawMinRatio ?? 0.9) * 100)}%: ${nick} (таймаут фазы)`,
+        );
+    }
     if (!playerWithdrew) {
-        await kickFromClan(nick, phaseEnd());
+        await kickAndSweepClan(nick, phaseEnd());
         endDelivery('timeout', deliverQueue.length);
         return;
     }
 
-    // 6. kick
-    await kickFromClan(nick, phaseEnd());
+    // 6. kick + собрать остаток казны
+    await kickAndSweepClan(nick, phaseEnd());
     if (!active()) return;
     endDelivery('ok');
 }
@@ -622,6 +755,8 @@ function endDelivery(result, queued) {
     if (!currentOrder) return;
     const { orderId, nick, amount: amountKk } = currentOrder;
     const q = queued ?? deliverQueue.length;
+    const totalWithdrawn = Math.max(withdrawnTotal, Number(currentOrder.priorWithdrawn || 0));
+    const playerWithdrawn = totalWithdrawn > 0 ? totalWithdrawn : undefined;
     delivering = false;
     currentOrder = null;
     resetDeliveryFlags();
@@ -640,9 +775,19 @@ function endDelivery(result, queued) {
     } else if (result === 'captcha') {
         post('delivery_failed', { orderId, reason: 'captcha' });
     } else if (result === 'timeout' && q > 0) {
-        post('delivery_stalled', { orderId, reason: 'clan_withdraw_timeout', queued: q });
+        post('delivery_stalled', {
+            orderId,
+            reason: 'clan_withdraw_timeout',
+            queued: q,
+            playerWithdrawn,
+        });
     } else if (result === 'timeout') {
-        post('delivery_stalled', { orderId, reason: 'clan_timeout', queued: q });
+        post('delivery_stalled', {
+            orderId,
+            reason: 'clan_timeout',
+            queued: q,
+            playerWithdrawn,
+        });
     } else {
         post('delivery_failed', { orderId, reason: result || 'unknown' });
     }
@@ -670,7 +815,7 @@ async function startDeliver(order) {
         await deliverClan();
     } catch (e) {
         logInfo(`crash: ${e.message}`);
-        await kickFromClan(order.nick, Date.now() + config.clanPhaseTimeoutMs);
+        await kickAndSweepClan(order.nick, Date.now() + config.clanPhaseTimeoutMs);
         endDelivery('delivery_loop_crash');
     }
 }
@@ -764,7 +909,7 @@ function cancelOrder(orderId) {
     }
     if (currentOrder?.orderId !== orderId) return;
     const nick = currentOrder.nick;
-    void kickFromClan(nick, Date.now() + config.clanPhaseTimeoutMs).finally(() => {
+    void kickAndSweepClan(nick, Date.now() + config.clanPhaseTimeoutMs).finally(() => {
         delivering = false;
         currentOrder = null;
         resetDeliveryFlags();

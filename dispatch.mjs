@@ -46,6 +46,10 @@ export async function dispatchOrder(order, state = null) {
         console.warn('[dispatch] WS отключён');
         return { sent: 0 };
     }
+    const existing = state?.orders?.[order.orderId || order.dealId];
+    const priorWithdrawn = Number(
+        existing?.clanPlayerWithdrawn ?? order.clanPlayerWithdrawn ?? 0,
+    );
     const payload = {
         orderId: order.orderId,
         dealId: order.dealId,
@@ -58,6 +62,7 @@ export async function dispatchOrder(order, state = null) {
         anarchy: DELIVERY_ANARCHY,
         itemName: order.itemName,
         server: order.server || null,
+        priorWithdrawn: priorWithdrawn > 0 ? priorWithdrawn : undefined,
     };
     return t.pushOrder(payload);
 }
