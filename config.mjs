@@ -7,5 +7,5 @@ export const DELIVERY_ANARCHY = '221';
 /** Число для sellbot (/l и выдача) */
 export const DELIVERY_ANARCHY_NUM = Number(DELIVERY_ANARCHY) || 221;
 
-/** Доля от суммы заказа — если игрок снял ≥ этого, считаем выдачу успешной */
+/** ≥ этой доли — даём доп. время доснять; по таймауту выдача всё равно ок */
 export const CLAN_WITHDRAW_MIN_RATIO = 0.9;

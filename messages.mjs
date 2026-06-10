@@ -430,32 +430,41 @@ export function clanFullAmountRaw(orderOrKk, multiplier = 1_000_000) {
     return String(Math.round(Number(kk) * multiplier));
 }
 
-/** После /clan invest — снять всю сумму заказа */
-export function buildClanWithdrawHint(nick, fullAmountRaw) {
+function clanAmountDigits(raw) {
+    return String(raw || '').replace(/\D/g, '') || '?';
+}
+
+/** После /clan invest — снять сумму из казны */
+export function buildClanWithdrawHint(nick, withdrawAmountRaw) {
     const anka = DELIVERY_ANARCHY;
-    const amount = String(fullAmountRaw || '').replace(/\D/g, '') || '?';
+    const amount = clanAmountDigits(withdrawAmountRaw);
     return [
         `💰 Деньги вложены в казну клана для «${nick}».`,
         '',
-        `🎮 На анархии ${anka} сними ВСЮ сумму заказа:`,
+        `🎮 На анархии ${anka} сними:`,
         `/clan withdraw ${amount}`,
-        '',
-        '⏳ Нужно снять полностью — можно несколькими withdraw, но итого должна совпасть.',
-        'Если не снимешь всё — остаток заберёт бот после кика из клана.',
     ].join('\n');
 }
 
-/** Игрок снял не всю сумму — напомнить про полную */
-export function buildClanPartialWithdrawHint(nick, fullAmountRaw) {
+/** Снял не всё — остаток (во время выдачи) */
+export function buildClanRemainderHint(nick, remainAmountRaw) {
     const anka = DELIVERY_ANARCHY;
-    const amount = String(fullAmountRaw || '').replace(/\D/g, '') || '?';
+    const amount = clanAmountDigits(remainAmountRaw);
     return [
-        `⚠️ Ты снял не всю сумму из казны.`,
-        '',
-        `🎮 На анархии ${anka} сними ВСЮ сумму заказа:`,
+        `🎮 На анархии ${anka} досними:`,
         `/clan withdraw ${amount}`,
+    ].join('\n');
+}
+
+/** Снял не всё — остаток + повтор /nick после сбоя */
+export function buildClanPartialWithdrawHint(nick, remainAmountRaw) {
+    const anka = DELIVERY_ANARCHY;
+    const amount = clanAmountDigits(remainAmountRaw);
+    return [
+        `⚠️ Снята не вся сумма.`,
         '',
-        'Можно частями, но итого должна совпасть с суммой заказа.',
+        `🎮 На анархии ${anka} досними:`,
+        `/clan withdraw ${amount}`,
         '',
         askNickInChatLine(),
         '💰 Бот продолжит выдачу после /nick.',

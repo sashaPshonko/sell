@@ -1,5 +1,4 @@
 import { loadEnv } from './lib/env.mjs';
-import { CLAN_WITHDRAW_MIN_RATIO } from './config.mjs';
 import { audit } from './lib/audit.mjs';
 import { createClient } from './playerok-client.mjs';
 import {
@@ -29,6 +28,7 @@ import {
     buildDeliveryOkHint,
     buildClanInviteHint,
     buildClanWithdrawHint,
+    buildClanRemainderHint,
     buildClanPartialWithdrawHint,
     clanFullAmountRaw,
     buildOrderAlreadyDoneHint,
@@ -155,17 +155,39 @@ async function handleBotEvents(client, state) {
                 const fresh = getOrder(state, ev.orderId) || order;
                 if (fresh.clanWithdrawHintSentAt) continue;
                 const nick = ev.nick || fresh.nick || '?';
-                const fullAmount =
-                    ev.fullInvestAmount || clanFullAmountRaw(fresh);
+                const withdrawAmount =
+                    ev.withdrawAmount ||
+                    ev.investAmount ||
+                    ev.fullInvestAmount ||
+                    clanFullAmountRaw(fresh);
                 await sendChatMessage(
                     client,
                     chatId,
-                    buildClanWithdrawHint(nick, fullAmount),
+                    buildClanWithdrawHint(nick, withdrawAmount),
                 );
                 setOrderPhase(state, ev.orderId, fresh.phase, {
                     clanWithdrawHintSentAt: new Date().toISOString(),
+                    clanRemainderHintSentAt: null,
                 });
                 console.log(`[sell] clan withdraw hint → ${ev.orderId.slice(0, 8)}…`);
+            } else if (ev.type === 'clan_withdraw_partial') {
+                const fresh = getOrder(state, ev.orderId) || order;
+                const nick = ev.nick || fresh.nick || '?';
+                const full = Number(ev.full || clanFullAmountRaw(fresh));
+                const withdrawn = Number(ev.withdrawn || 0);
+                const remain = Math.max(0, full - withdrawn);
+                if (remain <= 0) continue;
+                if (withdrawn <= Number(fresh.clanRemainderHintWithdrawn || 0)) continue;
+                await sendChatMessage(
+                    client,
+                    chatId,
+                    buildClanRemainderHint(nick, remain),
+                );
+                setOrderPhase(state, ev.orderId, fresh.phase, {
+                    clanRemainderHintSentAt: new Date().toISOString(),
+                    clanRemainderHintWithdrawn: withdrawn,
+                });
+                console.log(`[sell] clan remainder hint → ${ev.orderId.slice(0, 8)}…`);
             } else if (ev.type === 'delivery_ok') {
                 const payKk = order.payAmountKk ?? order.amountKk;
                 setOrderPhase(state, ev.orderId, 'completed', {
@@ -214,11 +236,11 @@ async function handleBotEvents(client, state) {
                     getBuyerSession(state, chatId, buyerId).nick || order.nick;
                 const withdrawn = Number(ev.playerWithdrawn || 0);
                 const fullAmount = Number(clanFullAmountRaw(order));
-                const minOk = Math.floor(fullAmount * CLAN_WITHDRAW_MIN_RATIO);
+                const remain = Math.max(0, fullAmount - withdrawn);
                 const partialWithdraw =
                     ev.reason === 'clan_withdraw_timeout' &&
                     withdrawn > 0 &&
-                    withdrawn < minOk;
+                    remain > 0;
                 markDeliveryPaused(state, ev.orderId, 'awaiting_nick', {
                     lastError: 'stall_queue',
                     nick,
@@ -229,6 +251,7 @@ async function handleBotEvents(client, state) {
                                   withdrawn,
                               ),
                               clanWithdrawHintSentAt: null,
+                              clanRemainderHintSentAt: null,
                           }
                         : {}),
                 });
@@ -236,7 +259,7 @@ async function handleBotEvents(client, state) {
                     await sendChatMessage(
                         client,
                         chatId,
-                        buildClanPartialWithdrawHint(nick, fullAmount),
+                        buildClanPartialWithdrawHint(nick, remain),
                     );
                     setOrderPhase(state, ev.orderId, order.phase, {
                         deliveryHintSentAt: new Date().toISOString(),

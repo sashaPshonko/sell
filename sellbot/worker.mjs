@@ -36,6 +36,7 @@ const config = {
     /** пауза после /clan invest до повтора — ждём «пополнил баланс казны» */
     clanInvestWaitMs: workerData.clanInvestWaitMs ?? 15_000,
     clanWithdrawMinRatio: workerData.clanWithdrawMinRatio ?? 0.9,
+    clanWithdrawGraceMs: workerData.clanWithdrawGraceMs ?? 60_000,
     clanClickDelayMinMs: workerData.clanClickDelayMinMs ?? 1500,
     clanClickDelayMaxMs: workerData.clanClickDelayMaxMs ?? 4500,
     clanMembersMenuSlot: workerData.clanMembersMenuSlot ?? 11,
@@ -117,10 +118,10 @@ function investSum(kk) {
     return String(Math.round(Number(kk) * config.clanInvestMultiplier));
 }
 
-function isWithdrawComplete(withdrawn, expected) {
+function hasWithdrawGraceEligible(withdrawn, expected) {
     if (expected <= 0) return false;
     const ratio = config.clanWithdrawMinRatio ?? 0.9;
-    return withdrawn >= expected || withdrawn >= Math.floor(expected * ratio);
+    return withdrawn >= Math.floor(expected * ratio);
 }
 
 function resetDeliveryFlags() {
@@ -228,15 +229,16 @@ function handleChatMessage(raw) {
         }
         withdrawnTotal += chunk;
         logInfo(`withdraw +${chunk} (${withdrawnTotal}/${expectedWithdrawAmount})`);
-        if (isWithdrawComplete(withdrawnTotal, expectedWithdrawAmount)) {
+        if (withdrawnTotal >= expectedWithdrawAmount) {
             playerWithdrew = true;
-            if (withdrawnTotal >= expectedWithdrawAmount) {
-                logOk(`withdraw: ${nick}`);
-            } else {
-                logOk(
-                    `withdraw ≥${Math.round((config.clanWithdrawMinRatio ?? 0.9) * 100)}%: ${nick}`,
-                );
-            }
+            logOk(`withdraw: ${nick}`);
+        } else {
+            post('clan_withdraw_partial', {
+                orderId: currentOrder.orderId,
+                nick,
+                withdrawn: withdrawnTotal,
+                full: expectedWithdrawAmount,
+            });
         }
         return;
     }
@@ -708,6 +710,7 @@ async function deliverClan() {
             orderId: order.orderId,
             nick,
             investAmount: invest,
+            withdrawAmount: invest,
             fullInvestAmount: String(fullInvest),
             amountKk: order.amount,
             priorWithdrawn,
@@ -716,14 +719,36 @@ async function deliverClan() {
         logInfo('invest пропуск — игрок уже снял полную сумму');
     }
 
-    // 5. withdraw — ждём полную сумму заказа (можно несколькими /clan withdraw)
+    // 5. withdraw — полная сумма; ≥90% → доп. время; по grace-таймауту тоже ок
     expectedWithdrawAmount = fullInvest;
     withdrawnTotal = priorWithdrawn;
-    playerWithdrew = isWithdrawComplete(priorWithdrawn, fullInvest);
+    playerWithdrew = priorWithdrawn >= fullInvest;
     logInfo(`ждём withdraw ${nick} (${withdrawnTotal}/${expectedWithdrawAmount})`);
-    end = phaseEnd();
+    const phaseDeadline = Date.now() + config.clanPhaseTimeoutMs;
+    let graceDeadline = null;
     lastAfkCheck = 0;
-    while (active() && Date.now() < end && !playerWithdrew) {
+    while (active() && !playerWithdrew) {
+        const now = Date.now();
+        if (withdrawnTotal >= expectedWithdrawAmount) {
+            playerWithdrew = true;
+            logOk(`withdraw: ${nick}`);
+            break;
+        }
+        if (hasWithdrawGraceEligible(withdrawnTotal, expectedWithdrawAmount)) {
+            if (graceDeadline == null) {
+                graceDeadline = now + config.clanWithdrawGraceMs;
+                logInfo(`≥90% — ждём полное снятие (${config.clanWithdrawGraceMs}ms)`);
+            }
+            if (now >= graceDeadline) {
+                playerWithdrew = true;
+                logOk(
+                    `withdraw ≥${Math.round((config.clanWithdrawMinRatio ?? 0.9) * 100)}% (grace): ${nick}`,
+                );
+                break;
+            }
+        } else if (now >= phaseDeadline) {
+            break;
+        }
         if (Date.now() - lastAfkCheck >= AFK_WAIT_MS) {
             await afkTick();
             lastAfkCheck = Date.now();
@@ -731,12 +756,6 @@ async function deliverClan() {
         await sleep(CHAT_POLL_MS);
     }
     if (!active()) return;
-    if (!playerWithdrew && isWithdrawComplete(withdrawnTotal, expectedWithdrawAmount)) {
-        playerWithdrew = true;
-        logOk(
-            `withdraw ≥${Math.round((config.clanWithdrawMinRatio ?? 0.9) * 100)}%: ${nick} (таймаут фазы)`,
-        );
-    }
     if (!playerWithdrew) {
         await kickAndSweepClan(nick, phaseEnd());
         endDelivery('timeout', deliverQueue.length);

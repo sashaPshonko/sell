@@ -17,8 +17,9 @@ export const DEFAULTS = {
     clanLoopWaitMs: 2000,
     /** после /clan invest — ждём строку в чате, не шлём повтор раньше */
     clanInvestWaitMs: 15_000,
-    /** ≥90% от суммы заказа — выдача засчитана */
+    /** ≥90% — доп. ожидание полного снятия; по grace-таймауту выдача ок */
     clanWithdrawMinRatio: 0.9,
+    clanWithdrawGraceMs: 60_000,
     clanClickDelayMinMs: 1500,
     clanClickDelayMaxMs: 4500,
     clanMembersMenuSlot: 11,
@@ -96,6 +97,9 @@ export async function loadSettings(path = BOT_JSON) {
         clanInvestWaitMs: Number(pick(entry, 'clanInvestWaitMs', DEFAULTS.clanInvestWaitMs)),
         clanWithdrawMinRatio: Number(
             pick(entry, 'clanWithdrawMinRatio', DEFAULTS.clanWithdrawMinRatio),
+        ),
+        clanWithdrawGraceMs: Number(
+            pick(entry, 'clanWithdrawGraceMs', DEFAULTS.clanWithdrawGraceMs),
         ),
         clanClickDelayMinMs: Number(pick(entry, 'clanClickDelayMinMs', DEFAULTS.clanClickDelayMinMs)),
         clanClickDelayMaxMs: Number(pick(entry, 'clanClickDelayMaxMs', DEFAULTS.clanClickDelayMaxMs)),

@@ -161,6 +161,7 @@ function workerDataPayload() {
         clanLoopWaitMs: cfg.clanLoopWaitMs,
         clanInvestWaitMs: cfg.clanInvestWaitMs,
         clanWithdrawMinRatio: cfg.clanWithdrawMinRatio,
+        clanWithdrawGraceMs: cfg.clanWithdrawGraceMs,
         clanClickDelayMinMs: cfg.clanClickDelayMinMs,
         clanClickDelayMaxMs: cfg.clanClickDelayMaxMs,
         clanMembersMenuSlot: cfg.clanMembersMenuSlot,
@@ -340,6 +341,7 @@ async function startWorker(reason = 'order') {
                 clan_invite_sent: 'clan_invite_sent',
                 clan_invested: 'clan_invested',
                 clan_joined: 'clan_joined',
+                clan_withdraw_partial: 'clan_withdraw_partial',
             }[message.name];
 
             if (evType) {
@@ -350,6 +352,9 @@ async function startWorker(reason = 'order') {
                 if (message.investAmount != null) ev.investAmount = message.investAmount;
                 if (message.priorWithdrawn != null) ev.priorWithdrawn = message.priorWithdrawn;
                 if (message.fullInvestAmount != null) ev.fullInvestAmount = message.fullInvestAmount;
+                if (message.withdrawAmount != null) ev.withdrawAmount = message.withdrawAmount;
+                if (message.withdrawn != null) ev.withdrawn = message.withdrawn;
+                if (message.full != null) ev.full = message.full;
                 if (message.nick) ev.nick = message.nick;
                 if (message.amountKk != null) ev.amountKk = message.amountKk;
                 forwardToSell(ev);
