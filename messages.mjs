@@ -344,22 +344,37 @@ export function buildPremiumRefundUpsellHint(opts = {}) {
     const url = String(opts.url || '').trim();
     const marker = opts.emoji || '🎁';
 
-    const priceBit = priceRub != null && priceRub > 0 ? `за ${priceRub} ₽` : 'за те же деньги';
-    const lines = [];
+    const priceBit = priceRub != null && priceRub > 0 ? `${priceRub} ₽` : 'те же деньги';
+    const extraKk = upsellKk > baseKk && baseKk > 0 ? upsellKk - baseKk : 0;
+    const lines = [
+        `🎁✨ ВЫГОДНЕЕ — БОЛЬШЕ КК ${marker}`,
+        '————————————————',
+    ];
 
     if (upsellKk > baseKk && baseKk > 0) {
-        lines.push(`💡 ${priceBit} можно получить ${upsellKk}кк вместо ${baseKk}кк:`);
+        lines.push(
+            `💸 За ${priceBit}:`,
+            `   📦 Сейчас: ${baseKk}кк`,
+            `   🔥 Лот ниже: ${upsellKk}кк${extraKk > 0 ? ` (+${extraKk}кк!)` : ''}`,
+        );
     } else {
-        lines.push(`💡 Есть лот ${marker} с большей выгодой ${priceBit}:`);
+        lines.push(`💸 За ${priceBit} — лот ${marker} с большей выгодой:`);
     }
 
+    lines.push('');
     if (url) {
-        lines.push(url);
+        lines.push('🔗 Ссылка на лот:', url);
     } else {
-        lines.push(`Посмотри лоты с ${marker} на профиле продавца.`);
+        lines.push(`🔗 Лоты с ${marker} — на профиле продавца (пролистай вниз).`);
     }
 
-    lines.push('', 'Если валюта ещё не выдана — /cancel и купи по ссылке.');
+    lines.push(
+        '',
+        '⏳ Валюта ещё НЕ выдана?',
+        '1️⃣ напиши /cancel',
+        '2️⃣ купи по ссылке ☝️',
+        '✅ получишь больше за те же ₽',
+    );
     return lines.join('\n');
 }
 
