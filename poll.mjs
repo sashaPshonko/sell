@@ -18,6 +18,7 @@ import {
     flushScheduledChatMessages,
 } from './lib/scheduled-chat.mjs';
 import { drainBotEvents, dispatchCancelOrder } from './dispatch.mjs';
+import { setDeliveryQueueSnapshot } from './lib/delivery-queue.mjs';
 import { cancelClosedOrdersOnSellbot } from './lib/sellbot-cancel.mjs';
 import { isOrderFulfilled } from './lib/playerok-deal-sync.mjs';
 import { sendChatMessage } from './chat.mjs';
@@ -128,6 +129,11 @@ async function sendDeliveryHintOnce(client, state, chatId, orderId, order, build
 
 async function handleBotEvents(client, state) {
     for (const ev of await drainBotEvents()) {
+        if (ev.type === 'delivery_queue') {
+            setDeliveryQueueSnapshot(ev);
+            continue;
+        }
+
         const order = getOrder(state, ev.orderId);
         if (!order) {
             console.warn(`[sell] ws: неизвестный заказ ${ev.orderId}`);

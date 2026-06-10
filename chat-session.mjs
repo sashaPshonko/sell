@@ -20,9 +20,16 @@ import {
     buildNewOrderTwinHint,
     buildOrderCancelledHint,
     buildDispatchingHint,
+    buildNickDeliveryActiveHint,
+    buildNickQueueWaitingHint,
     buildOrderAlreadyDoneHint,
     buildOrderClosedOnPlayerokHint,
 } from './messages.mjs';
+import {
+    getQueuePosition,
+    getQueueTotal,
+    isQueueBusy,
+} from './lib/delivery-queue.mjs';
 import { sendGreeting, sendChatMessage } from './chat.mjs';
 import { dispatchOrder, dispatchNickUpdate, dispatchCancelOrder } from './dispatch.mjs';
 import { applyOrderPayBonus, buyerEligibleForRepeatBonus } from './lib/pay-bonus.mjs';
@@ -401,6 +408,7 @@ export async function applyNickCommandUpdates(
             order.nick = u.nick;
             order.pausedUntilNick = false;
             order.deliveryHintSentAt = undefined;
+            order.queueStatusSentAt = undefined;
 
             if (order.phase === 'dispatched') {
                 order.wrongNickWarned = false;
@@ -435,6 +443,12 @@ export async function applyNickCommandUpdates(
                 lastError: null,
             });
             queuedForDelivery = true;
+        }
+
+        if (u.via === 'command' && client) {
+            for (const order of buyerOrders.filter((o) => !isOrderFulfilled(o))) {
+                await notifyDeliveryQueueStatus(client, state, chatId, order, u.nick);
+            }
         }
 
         if (!queuedForDelivery && client) {
@@ -476,31 +490,58 @@ export async function applyNickCommandUpdates(
     return { known, sellerKnown };
 }
 
+function buildQueueStatusMessage(order, nick) {
+    const payKk = order.payAmountKk ?? order.amountKk;
+    const q = getQueuePosition(order.orderId);
+    if (q.isActive) {
+        return buildDispatchingHint(nick, order.amountKk, {
+            lotKk: order.amountKk,
+            payAmountKk: order.payAmountKk,
+            wheelPct: order.bonusWheelPct,
+            repeatPct: order.bonusRepeatPct,
+            bonusWheelKk: order.bonusWheelKk,
+            bonusRepeatKk: order.bonusRepeatKk,
+        });
+    }
+    if (q.position > 1) {
+        return buildNickQueueWaitingHint(q.position, payKk);
+    }
+    if (isQueueBusy()) {
+        return buildNickQueueWaitingHint(getQueueTotal() + 1, payKk);
+    }
+    return buildNickDeliveryActiveHint(nick, payKk);
+}
+
+/** Статус очереди — /nick или перед dispatch */
+async function notifyDeliveryQueueStatus(client, state, chatId, order, nick) {
+    if (!client || !order || order.queueStatusSentAt) return;
+    if (!isActionableOrder(order) && order.phase !== 'dispatched' && order.phase !== 'ws_pending') {
+        return;
+    }
+    if (order.playerokStatus && !playerokNeedsDelivery(order.playerokStatus)) return;
+
+    try {
+        await sendChatMessage(client, chatId, buildQueueStatusMessage(order, nick));
+        setOrderPhase(state, order.orderId, order.phase, {
+            queueStatusSentAt: new Date().toISOString(),
+        });
+    } catch (e) {
+        console.warn(`[sell] очередь: ${e.message}`);
+    }
+}
+
 /** Одно сообщение — только для этого заказа (не для всех открытых в чате). */
 async function notifyDispatchingForOrder(client, state, chatId, order, nick) {
     if (!order || order.dispatchAckSentAt) return;
     if (!isActionableOrder(order)) return;
     if (order.playerokStatus && !playerokNeedsDelivery(order.playerokStatus)) return;
 
-    try {
-        await sendChatMessage(
-            client,
-            chatId,
-            buildDispatchingHint(nick, order.amountKk, {
-                lotKk: order.amountKk,
-                payAmountKk: order.payAmountKk,
-                wheelPct: order.bonusWheelPct,
-                repeatPct: order.bonusRepeatPct,
-                bonusWheelKk: order.bonusWheelKk,
-                bonusRepeatKk: order.bonusRepeatKk,
-            }),
-        );
-        setOrderPhase(state, order.orderId, order.phase, {
-            dispatchAckSentAt: new Date().toISOString(),
-        });
-    } catch (e) {
-        console.warn(`[sell] «сейчас выдаю»: ${e.message}`);
-    }
+    await notifyDeliveryQueueStatus(client, state, chatId, order, nick);
+    if (!getOrder(state, order.orderId)?.queueStatusSentAt) return;
+
+    setOrderPhase(state, order.orderId, order.phase, {
+        dispatchAckSentAt: new Date().toISOString(),
+    });
 }
 
 /** Все незавершённые заказы чата → sellbot, строго по времени оплаты */

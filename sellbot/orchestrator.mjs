@@ -328,6 +328,15 @@ async function startWorker(reason = 'order') {
                 return;
             }
 
+            if (message?.name === 'delivery_queue') {
+                forwardToSell({
+                    type: 'delivery_queue',
+                    active: message.active ?? null,
+                    waiting: message.waiting ?? [],
+                });
+                return;
+            }
+
             const orderId = message.orderId;
             if (!orderId) return;
 

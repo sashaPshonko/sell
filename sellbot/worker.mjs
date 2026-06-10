@@ -93,6 +93,24 @@ function post(name, extra = {}) {
     parentPort.postMessage({ name, ...extra });
 }
 
+function postQueueStatus() {
+    post('delivery_queue', {
+        active:
+            delivering && currentOrder
+                ? {
+                      orderId: currentOrder.orderId,
+                      nick: currentOrder.nick,
+                      amount: currentOrder.amount,
+                  }
+                : null,
+        waiting: deliverQueue.map((o) => ({
+            orderId: o.orderId,
+            nick: o.nick,
+            amount: o.amount,
+        })),
+    });
+}
+
 function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
 }
@@ -781,6 +799,8 @@ function endDelivery(result, queued) {
     resetDeliveryFlags();
     resetGui();
 
+    postQueueStatus();
+
     if (result === 'ok') {
         deliveredOrderIds.add(orderId);
         void audit('game_clan_ok', { orderId, nick, amountKk });
@@ -823,6 +843,7 @@ async function startDeliver(order) {
     currentOrder = order;
     config.afk = false;
     resetDeliveryFlags();
+    postQueueStatus();
     logInfo(`выдача ${order.orderId.slice(0, 8)}… ${order.nick} ${order.amount}kk`);
 
     try {
@@ -912,6 +933,7 @@ async function addOrder(order) {
     while (i < deliverQueue.length && (Number(deliverQueue[i].paidAtMs) || 0) <= t) i++;
     deliverQueue.splice(i, 0, order);
     logInfo(`очередь ${deliverQueue.length}: ${order.nick} ${order.amount}kk`);
+    postQueueStatus();
 
     clearTimeout(idleQuitTimer);
     try {
@@ -926,12 +948,16 @@ function cancelOrder(orderId) {
     for (let i = deliverQueue.length - 1; i >= 0; i--) {
         if (deliverQueue[i].orderId === orderId) deliverQueue.splice(i, 1);
     }
-    if (currentOrder?.orderId !== orderId) return;
+    if (currentOrder?.orderId !== orderId) {
+        postQueueStatus();
+        return;
+    }
     const nick = currentOrder.nick;
     void kickAndSweepClan(nick, Date.now() + config.clanPhaseTimeoutMs).finally(() => {
         delivering = false;
         currentOrder = null;
         resetDeliveryFlags();
+        postQueueStatus();
         nextOrder();
     });
 }

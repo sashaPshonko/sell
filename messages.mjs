@@ -386,6 +386,28 @@ export function buildOrderClosedOnPlayerokHint() {
  * @param {number} amountKk — сумма лота
  * @param {object|null} [bonus] — payAmountKk и поля бонуса (как у buildDeliveryOkHint)
  */
+/** /nick — сейчас выдаём этому покупателю */
+export function buildNickDeliveryActiveHint(nick, amountKk) {
+    const anka = DELIVERY_ANARCHY;
+    return [
+        `⏳ Сейчас выдаю валюту на ник «${nick}».`,
+        `💰 Сумма: ${fmtKk(amountKk)}kk`,
+        '',
+        `🎮 Будь на анархии ${anka} и в сети.`,
+    ].join('\n');
+}
+
+/** /nick — в очереди, сейчас выдают другому */
+export function buildNickQueueWaitingHint(position, amountKk = null) {
+    const anka = DELIVERY_ANARCHY;
+    const posLine =
+        position <= 2 ? 'Ты следующий в очереди.' : `Твоя очередь: ${position}.`;
+    const lines = ['⏳ Сейчас валюта выдаётся другому покупателю.', posLine];
+    if (amountKk != null) lines.push(`💰 Твой заказ: ${fmtKk(amountKk)}kk`);
+    lines.push('', `🎮 Будь на анархии ${anka} — выдадим, когда подойдёт очередь.`);
+    return lines.join('\n');
+}
+
 export function buildDispatchingHint(nick, amountKk, bonus = null) {
     const anka = DELIVERY_ANARCHY;
     const payoutBonus =
