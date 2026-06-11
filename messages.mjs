@@ -542,7 +542,9 @@ export function hasGreetingInChat(messages, sellerUserId) {
     const marker = (process.env.GREETING_MARKER || 'выдача автоматическая').toLowerCase();
     for (const msg of messages) {
         if (!msg?.text || msg.user?.id !== sellerUserId) continue;
-        if (msg.text.toLowerCase().includes(marker)) return true;
+        const text = msg.text.toLowerCase();
+        if (text.includes(marker)) return true;
+        if (text.includes('оплата получена') && text.includes('твинк')) return true;
     }
     return false;
 }

@@ -22,8 +22,6 @@ import {
     buildDispatchingHint,
     buildNickDeliveryActiveHint,
     buildNickQueueWaitingHint,
-    buildOrderAlreadyDoneHint,
-    buildOrderClosedOnPlayerokHint,
     buildPremiumRefundUpsellHint,
 } from './messages.mjs';
 import {
@@ -47,6 +45,8 @@ import {
     playerokNeedsDelivery,
     playerokIsCancelled,
     playerokIsClosed,
+    resolveDealStatus,
+    dealNeedsFulfillment,
     canDispatchToSellbot,
     shouldIgnoreNickRedispatch,
     clanDeliveryRetryReset,
@@ -181,12 +181,20 @@ export async function sendPremiumRefundUpsellForOrders(client, state, chatId, ne
 
     const sellerUserId = state.sellerUserId;
     const sellerUsername = state.sellerUsername ?? null;
+    const upsellSentForBuyer = new Set();
 
     for (const order of newOrders) {
         if (!order || !isActionableOrder(order)) continue;
+        if (!playerokNeedsDelivery(order.playerokStatus)) continue;
         if (order.premiumRefundUpsellSentAt) continue;
         if (isMarkedProfileLot(order.itemName)) continue;
         if (isBuyerBanned(state, order.buyerId)) continue;
+        if (order.buyerId && upsellSentForBuyer.has(order.buyerId)) {
+            setOrderPhase(state, order.orderId, order.phase, {
+                premiumRefundUpsellSentAt: new Date().toISOString(),
+            });
+            continue;
+        }
 
         let match = null;
         if (sellerUserId) {
@@ -202,6 +210,12 @@ export async function sendPremiumRefundUpsellForOrders(client, state, chatId, ne
             }
         }
 
+        const phase = order.phase === 'new' ? 'awaiting_nick' : order.phase;
+        setOrderPhase(state, order.orderId, phase, {
+            premiumRefundUpsellSentAt: new Date().toISOString(),
+        });
+        if (order.buyerId) upsellSentForBuyer.add(order.buyerId);
+
         try {
             await sendChatMessage(
                 client,
@@ -214,10 +228,6 @@ export async function sendPremiumRefundUpsellForOrders(client, state, chatId, ne
                     emoji: match?.emoji ?? profileUpsellEmoji(),
                 }),
             );
-            const phase = order.phase === 'new' ? 'awaiting_nick' : order.phase;
-            setOrderPhase(state, order.orderId, phase, {
-                premiumRefundUpsellSentAt: new Date().toISOString(),
-            });
             console.log(
                 `[sell] premium-refund upsell → ${order.orderId.slice(0, 8)}…`,
             );
@@ -235,27 +245,42 @@ export async function sendTwinRemindersForNewOrders(client, state, chatId, newOr
     if (!newOrders?.length) return;
 
     const chat = ensureChat(state, chatId);
+    const twinSentForBuyer = new Set();
 
     for (const order of newOrders) {
         if (!order || !isActionableOrder(order)) continue;
+        if (!playerokNeedsDelivery(order.playerokStatus)) continue;
         if (order.twinReminderSentAt) continue;
+        if (order.buyerId && twinSentForBuyer.has(order.buyerId)) {
+            setOrderPhase(state, order.orderId, order.phase, {
+                twinReminderSentAt: new Date().toISOString(),
+                greetedAt: order.greetedAt || chat.greetingAt,
+            });
+            continue;
+        }
 
-        await sendChatMessage(
-            client,
-            chatId,
-            buildNewOrderTwinHint({
-                lotKk: order.amountKk,
-                repeatEligible: buyerEligibleForRepeatBonus(state, order.buyerId),
-            }),
-        );
         const phase = order.phase === 'new' ? 'awaiting_nick' : order.phase;
         setOrderPhase(state, order.orderId, phase, {
             twinReminderSentAt: new Date().toISOString(),
             greetedAt: order.greetedAt || chat.greetingAt,
         });
-        console.log(
-            `[sell] чат ${chatId.slice(0, 8)}…: напоминание твинк (заказ ${order.orderId.slice(0, 8)}…)`,
-        );
+        if (order.buyerId) twinSentForBuyer.add(order.buyerId);
+
+        try {
+            await sendChatMessage(
+                client,
+                chatId,
+                buildNewOrderTwinHint({
+                    lotKk: order.amountKk,
+                    repeatEligible: buyerEligibleForRepeatBonus(state, order.buyerId),
+                }),
+            );
+            console.log(
+                `[sell] чат ${chatId.slice(0, 8)}…: напоминание твинк (заказ ${order.orderId.slice(0, 8)}…)`,
+            );
+        } catch (e) {
+            console.warn(`[sell] напоминание твинк: ${e.message}`);
+        }
     }
 }
 
@@ -444,21 +469,7 @@ export async function applyNickCommandUpdates(
                 console.log(
                     `[sell] повторный ник игнор: ${order.orderId?.slice(0, 8)}… (${fulfilled ? 'заказ закрыт' : 'выдача идёт'})`,
                 );
-                if (
-                    fulfilled
-                    && client
-                    && !order.lateNickHandled
-                    && !buyerHasPendingOrder(state, chatId, buyerId)
-                ) {
-                    try {
-                        await sendChatMessage(client, chatId, buildOrderAlreadyDoneHint());
-                        setOrderPhase(state, order.orderId, order.phase, {
-                            lateNickHandled: true,
-                        });
-                    } catch (e) {
-                        console.warn(`[sell] ответ в чат: ${e.message}`);
-                    }
-                } else if (!fulfilled) {
+                if (!fulfilled) {
                     order.queueStatusSentAt = undefined;
                 }
                 continue;
@@ -537,28 +548,13 @@ export async function applyNickCommandUpdates(
                     })`,
                 );
             } else if (u.via === 'command') {
-                const closed = buyerOrders.find((o) => isOrderFulfilled(o));
-                if (closed) {
-                    const hint = closed.gameDeliveryAt
-                        ? buildOrderAlreadyDoneHint()
-                        : buildOrderClosedOnPlayerokHint();
-                    try {
-                        await sendChatMessage(client, chatId, hint);
-                        console.log(
-                            `[sell] ${closed.orderId.slice(0, 8)}…: /nick после закрытия (playerok=${closed.playerokStatus || '?'})`,
-                        );
-                    } catch (e) {
-                        console.warn(`[sell] ответ в чат: ${e.message}`);
-                    }
-                } else {
-                    console.warn(
-                        `[sell] /nick ${u.nick} — нечего выдавать (заказы: ${
-                            buyerOrders
-                                .map((o) => `${o.orderId?.slice(0, 8)}… ${o.phase}`)
-                                .join(', ') || 'нет'
-                        })`,
-                    );
-                }
+                console.warn(
+                    `[sell] /nick ${u.nick} — нечего выдавать (заказы: ${
+                        buyerOrders
+                            .map((o) => `${o.orderId?.slice(0, 8)}… ${o.phase}`)
+                            .join(', ') || 'нет'
+                    })`,
+                );
             }
         }
     }
@@ -690,12 +686,15 @@ export async function flushChatDispatchQueue(state, deals, client = null) {
     }
 }
 
-export function registerDealOrders(state, deals, cutoffIso = null) {
+export function registerDealOrders(state, deals, cutoffIso = null, timeline = null) {
     const newlyRegistered = [];
     for (const paid of deals) {
         const oid = paid.dealId;
         const prev = getOrder(state, oid);
         if (prev) continue;
+
+        const latestStatus = resolveDealStatus(timeline, oid, paid.status);
+        const statusAt = timeline?.get?.(oid)?.at ?? paid.paidAt;
 
         if (isStaleDeal(paid, cutoffIso)) {
             upsertOrder(state, {
@@ -704,8 +703,8 @@ export function registerDealOrders(state, deals, cutoffIso = null) {
                 chatId: paid.chatId,
                 anarchy: DELIVERY_ANARCHY,
                 phase: 'legacy',
-                playerokStatus: paid.status,
-                playerokStatusAt: paid.paidAt,
+                playerokStatus: latestStatus,
+                playerokStatusAt: statusAt,
             });
             console.log(
                 `[sell] старый заказ (игнор): ${oid.slice(0, 8)}… | ${paid.buyer} | ${paid.amountKk}kk`,
@@ -714,11 +713,11 @@ export function registerDealOrders(state, deals, cutoffIso = null) {
         }
 
         let phase = 'new';
-        if (playerokIsCancelled(paid.status)) {
+        if (playerokIsCancelled(latestStatus)) {
             phase = 'cancelled';
-        } else if (playerokIsClosed(paid.status)) {
+        } else if (playerokIsClosed(latestStatus)) {
             phase = 'completed';
-        } else if (!playerokNeedsDelivery(paid.status)) {
+        } else if (!playerokNeedsDelivery(latestStatus)) {
             phase = 'completed';
         }
 
@@ -728,15 +727,16 @@ export function registerDealOrders(state, deals, cutoffIso = null) {
             chatId: paid.chatId,
             anarchy: DELIVERY_ANARCHY,
             phase,
-            playerokStatus: paid.status,
-            playerokStatusAt: paid.paidAt,
+            playerokStatus: latestStatus,
+            playerokStatusAt: statusAt,
         });
+
+        const needsOnboarding = phase !== 'completed' && phase !== 'cancelled';
         if (
-            paid.chatId
+            needsOnboarding
+            && paid.chatId
             && paid.buyerId
             && paid.paidAt
-            && phase !== 'completed'
-            && phase !== 'cancelled'
         ) {
             const session = getBuyerSession(state, paid.chatId, paid.buyerId);
             session.nickResetAt = paid.paidAt;
@@ -746,10 +746,14 @@ export function registerDealOrders(state, deals, cutoffIso = null) {
             delete session.nickAt;
             delete session.appliedNickMessageId;
         }
+
         console.log(
-            `[sell] заказ ${oid.slice(0, 8)}…: ${paid.itemName} | ${paid.buyer} | ${paid.amountKk}kk`,
+            `[sell] заказ ${oid.slice(0, 8)}…: ${paid.itemName} | ${paid.buyer} | ${paid.amountKk}kk (${latestStatus})`,
         );
-        newlyRegistered.push(state.orders[oid]);
+
+        if (needsOnboarding && dealNeedsFulfillment(timeline, oid, latestStatus)) {
+            newlyRegistered.push(state.orders[oid]);
+        }
     }
     return newlyRegistered;
 }
@@ -759,10 +763,14 @@ export function filterActionableDeals(state, deals) {
 }
 
 /** Оплаты из чата + открытые заказы из state (если ITEM_PAID выпал из ленты). */
-export function mergeChatDeals(state, chatId, dealsFromMessages) {
+export function mergeChatDeals(state, chatId, dealsFromMessages, timeline = null) {
     const byId = new Map();
     for (const d of dealsFromMessages) {
-        byId.set(d.dealId, d);
+        const status = resolveDealStatus(timeline, d.dealId, d.status);
+        if (timeline && !dealNeedsFulfillment(timeline, d.dealId, d.status)) {
+            continue;
+        }
+        byId.set(d.dealId, { ...d, status });
     }
     for (const order of ordersInChat(state, chatId)) {
         if (!isActionableOrder(order)) continue;

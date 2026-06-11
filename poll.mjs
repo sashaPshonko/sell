@@ -11,7 +11,14 @@ import {
     findGreetingAnchorInChat,
     isBuyerUser,
 } from './parse.mjs';
-import { loadState, saveState, getOrder, setOrderPhase, ordersInChat } from './state.mjs';
+import {
+    loadState,
+    saveState,
+    getOrder,
+    setOrderPhase,
+    ordersInChat,
+    getBuyerSession,
+} from './state.mjs';
 import { recordBuyerDelivery } from './lib/pay-bonus.mjs';
 import {
     scheduleRepeatPromoMessage,
@@ -73,7 +80,7 @@ import {
     fetchChatMessagesDeep,
     reconcileOrdersFromChatHistory,
 } from './lib/chat-reconcile.mjs';
-import { ensureChat, getBuyerSession } from './state.mjs';
+import { ensureChat } from './state.mjs';
 import { assertPlayerokAuth } from './lib/check-auth.mjs';
 
 loadEnv();
@@ -433,15 +440,22 @@ async function handleCompletedLateNick(client, state, chatId, messages, dealTime
         if (!completionAt) continue;
 
         const oid = order.orderId || order.dealId;
-        const hasNewerPaid = [...dealTimeline.values()].some(
+        const session = getBuyerSession(state, chatId, order.buyerId);
+        if (
+            session.nickResetAt
+            && completionAt
+            && Date.parse(session.nickResetAt) > Date.parse(completionAt)
+        ) {
+            continue;
+        }
+        const hasNewerDeal = [...dealTimeline.values()].some(
             (snap) =>
                 snap.buyerId === order.buyerId
                 && snap.dealId !== oid
-                && snap.status === 'PAID'
                 && snap.at
                 && Date.parse(snap.at) > Date.parse(completionAt),
         );
-        if (hasNewerPaid) continue;
+        if (hasNewerDeal) continue;
 
         const known = new Set(order.seenLateNickMessageIds || []);
         const updates = parseBuyerNickUpdates(
@@ -555,13 +569,18 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
         return;
     }
 
-    const deals = mergeChatDeals(state, chatId, dealsFromMessages);
+    const deals = mergeChatDeals(state, chatId, dealsFromMessages, dealTimeline);
 
     for (const paid of deals) {
         if (!paid.chatId) paid.chatId = chatId;
     }
 
-    const newlyRegistered = registerDealOrders(state, dealsFromMessages, cutoffIso);
+    const newlyRegistered = registerDealOrders(
+        state,
+        dealsFromMessages,
+        cutoffIso,
+        dealTimeline,
+    );
     syncChatOrdersFromPlayerok(state, chatId, dealTimeline);
     await rejectBannedBuyerOrdersInChat(client, state, chatId);
 
