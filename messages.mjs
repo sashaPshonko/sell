@@ -4,7 +4,7 @@ import { DELIVERY_ANARCHY } from './config.mjs';
 export { DELIVERY_ANARCHY };
 
 function askNickInChatLine() {
-    return '💬 Напиши в этом чате PlayerOK свой ник (не в Minecraft).';
+    return '💬 Напиши в этом чате свой ник (не в Minecraft).';
 }
 
 /** Предупреждение: выдача через клан — риск бана, только твинк. */
