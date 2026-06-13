@@ -21,7 +21,7 @@ let healthCheckRunning = false;
 let healthInProgress = false;
 /** orderId → последний заказ (для nick_update) */
 const activeOrders = new Map();
-/** Закрытые sell'ом — не принимать повторно */
+/** Успешно выданные — не принимать повторно (cancel/retry не блокирует) */
 const closedOrderIds = new Set();
 
 function forwardToSell(ev) {
@@ -478,7 +478,7 @@ async function handleOrder(order) {
 }
 
 function handleCancelOrder(orderId) {
-    closedOrderIds.add(orderId);
+    // cancel — снять с воркера; closedOrderIds только после delivery_ok (иначе retry /nick мёртв)
     activeOrders.delete(orderId);
     safePostToWorker({ type: 'cancel_order', orderId });
     console.log(`[sellbot] отмена заказа ${orderId.slice(0, 8)}…`);
