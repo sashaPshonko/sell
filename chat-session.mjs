@@ -23,6 +23,8 @@ import {
     buildNickDeliveryActiveHint,
     buildNickQueueWaitingHint,
     buildPremiumRefundUpsellHint,
+    buildClanWithdrawWaitHint,
+    clanFullAmountRaw,
 } from './messages.mjs';
 import {
     resolveProfileUpsell,
@@ -371,6 +373,32 @@ export async function applyCancelCommands(
 /**
  * Новый /nick — обновить сессию и перезапустить выдачу у dispatched (если завис).
  */
+function clanRemainAmount(order) {
+    const full = Number(clanFullAmountRaw(order));
+    const withdrawn = Math.max(
+        Number(order.clanRemainderHintWithdrawn || 0),
+        Number(order.clanPlayerWithdrawn || 0),
+    );
+    return Math.max(0, full - withdrawn);
+}
+
+async function notifyClanWithdrawWaitHint(client, state, chatId, order, nick) {
+    if (!client || !order || order.clanWithdrawNickHintSentAt) return;
+    if (!order.clanWithdrawHintSentAt && !order.clanRemainderHintSentAt) return;
+
+    const remain = clanRemainAmount(order);
+    if (remain <= 0) return;
+
+    try {
+        await sendChatMessage(client, chatId, buildClanWithdrawWaitHint(nick, remain));
+        setOrderPhase(state, order.orderId, order.phase, {
+            clanWithdrawNickHintSentAt: new Date().toISOString(),
+        });
+    } catch (e) {
+        console.warn(`[sell] clan withdraw wait hint: ${e.message}`);
+    }
+}
+
 export async function applyNickCommandUpdates(
     state,
     chatId,
@@ -443,24 +471,16 @@ export async function applyNickCommandUpdates(
     }
 
     for (const u of updates) {
-        if (u.fromSeller) {
-            sellerKnown.add(u.messageId);
-        } else {
-            known.add(u.messageId);
-        }
         const priorMessageId = session.messageId;
         const isNewNickMessage = Boolean(u.messageId && u.messageId !== priorMessageId);
         const changed = session.nick !== u.nick;
-        session.appliedNickMessageId = u.messageId;
-        session.nick = u.nick;
-        session.via = u.via;
-        session.messageId = u.messageId;
-        session.nickAt = u.at;
 
         const who = u.fromSeller ? ' (продавец)' : '';
         console.log(`[sell] чат ${chatId.slice(0, 8)}…: ник → ${u.nick}${who}`);
 
         let queuedForDelivery = false;
+        let nickApplied = false;
+        let blockedByActiveDelivery = false;
         const buyerOrders = ordersInChat(state, chatId).filter((o) => o.buyerId === buyerId);
 
         for (const order of buyerOrders) {
@@ -471,6 +491,12 @@ export async function applyNickCommandUpdates(
                 );
                 if (!fulfilled) {
                     order.queueStatusSentAt = undefined;
+                    if (
+                        !order.pausedUntilNick
+                        && (order.phase === 'dispatched' || order.phase === 'ws_pending')
+                    ) {
+                        blockedByActiveDelivery = true;
+                    }
                 }
                 continue;
             }
@@ -482,16 +508,18 @@ export async function applyNickCommandUpdates(
                 continue;
             }
 
+            const wasPausedUntilNick = order.pausedUntilNick;
             order.nick = u.nick;
             order.pausedUntilNick = false;
             order.deliveryHintSentAt = undefined;
             order.queueStatusSentAt = undefined;
+            nickApplied = true;
 
             if (order.phase === 'dispatched') {
                 order.wrongNickWarned = false;
                 if (changed) {
                     await dispatchNickUpdate(order.orderId, u.nick);
-                } else if (isNewNickMessage || u.recovery || order.pausedUntilNick) {
+                } else if (isNewNickMessage || u.recovery || wasPausedUntilNick) {
                     setOrderPhase(
                         state,
                         order.orderId,
@@ -531,13 +559,36 @@ export async function applyNickCommandUpdates(
             queuedForDelivery = true;
         }
 
-        if (u.via === 'command' && client) {
+        if (nickApplied) {
+            if (u.fromSeller) {
+                sellerKnown.add(u.messageId);
+            } else {
+                known.add(u.messageId);
+            }
+            session.appliedNickMessageId = u.messageId;
+            session.nick = u.nick;
+            session.via = u.via;
+            session.messageId = u.messageId;
+            session.nickAt = u.at;
+        } else if (blockedByActiveDelivery && client) {
+            const active = buyerOrders.find(
+                (o) =>
+                    !isOrderFulfilled(o)
+                    && shouldIgnoreNickRedispatch(o)
+                    && !o.pausedUntilNick,
+            );
+            if (active) {
+                await notifyClanWithdrawWaitHint(client, state, chatId, active, u.nick);
+            }
+        }
+
+        if (u.via === 'command' && client && nickApplied) {
             for (const order of buyerOrders.filter((o) => !isOrderFulfilled(o))) {
                 await notifyDeliveryQueueStatus(client, state, chatId, order, u.nick);
             }
         }
 
-        if (!queuedForDelivery && client) {
+        if (!queuedForDelivery && client && nickApplied) {
             if (buyerHasPendingOrder(state, chatId, buyerId)) {
                 console.log(
                     `[sell] ник ${u.nick} (${u.via}) — открытый заказ, выдачу ждём flush (${

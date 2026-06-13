@@ -523,6 +523,20 @@ export function buildClanRemainderHint(nick, remainAmountRaw) {
     ].join('\n');
 }
 
+/** Покупатель пишет /nick, пока ждём withdraw в игре */
+export function buildClanWithdrawWaitHint(nick, remainAmountRaw) {
+    const anka = DELIVERY_ANARCHY;
+    const amount = clanAmountDigits(remainAmountRaw);
+    return [
+        `⏳ Ник «${nick}» уже принят — выдача идёт.`,
+        '',
+        `🎮 Сначала досними на анархии ${anka}:`,
+        `/clan withdraw ${amount}`,
+        '',
+        '💬 Писать /nick снова не нужно — только команда в Minecraft.',
+    ].join('\n');
+}
+
 /** Снял не всё — остаток + повтор /nick после сбоя */
 export function buildClanPartialWithdrawHint(nick, remainAmountRaw) {
     const anka = DELIVERY_ANARCHY;

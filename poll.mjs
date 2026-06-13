@@ -200,6 +200,10 @@ async function handleBotEvents(client, state) {
                 setOrderPhase(state, ev.orderId, fresh.phase, {
                     clanRemainderHintSentAt: new Date().toISOString(),
                     clanRemainderHintWithdrawn: withdrawn,
+                    clanPlayerWithdrawn: Math.max(
+                        fresh.clanPlayerWithdrawn || 0,
+                        withdrawn,
+                    ),
                 });
                 console.log(`[sell] clan remainder hint → ${ev.orderId.slice(0, 8)}…`);
             } else if (ev.type === 'delivery_ok') {
