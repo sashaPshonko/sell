@@ -24,6 +24,7 @@ import {
     buildNickQueueWaitingHint,
     buildPremiumRefundUpsellHint,
     buildClanWithdrawWaitHint,
+    buildDeliveryAttemptsExceededHint,
     clanFullAmountRaw,
 } from './messages.mjs';
 import {
@@ -54,9 +55,9 @@ import {
     clanDeliveryRetryReset,
     buyerHasPendingOrder,
     isOrderFulfilled,
+    isDeliveryAttemptsExhausted,
+    MAX_DELIVERY_ATTEMPTS,
 } from './lib/playerok-deal-sync.mjs';
-
-const DISPATCH_RECOVERY_MS = 90_000;
 
 /**
  * Синхронизирует ник покупателя на весь чат (все его заказы).
@@ -442,30 +443,12 @@ export async function applyNickCommandUpdates(
                 if (isOrderFulfilled(o)) return false;
                 // После сбоя ждём новый /nick в чате
                 if (o.pausedUntilNick) return true;
-                // dispatched / ws_pending — отдельные пути (recovery / retryWsPendingOrders)
+                // dispatched / ws_pending — ждём sellbot / retryWsPendingOrders
                 if (o.phase === 'dispatched' || o.phase === 'ws_pending') return false;
                 return isActionableOrder(o) && canDispatchToSellbot(o);
             });
             if (needsWork) {
                 updates = [{ ...latest }];
-            }
-        } else if (
-            latest?.nick
-            && latest.messageId
-            && latest.messageId === session.appliedNickMessageId
-            && session.nick === latest.nick
-        ) {
-            const stuckDispatched = buyerOrders.some((o) => {
-                if (isOrderFulfilled(o) || o.phase !== 'dispatched') return false;
-                if (o.nickRecoveryForMessageId === latest.messageId) return false;
-                const dispatchedAt = o.dispatchedAt ? Date.parse(o.dispatchedAt) : 0;
-                if (dispatchedAt && Date.now() - dispatchedAt < DISPATCH_RECOVERY_MS) {
-                    return false;
-                }
-                return true;
-            });
-            if (stuckDispatched) {
-                updates = [{ ...latest, recovery: true }];
             }
         }
     }
@@ -513,6 +496,10 @@ export async function applyNickCommandUpdates(
             order.pausedUntilNick = false;
             order.deliveryHintSentAt = undefined;
             order.queueStatusSentAt = undefined;
+            if (isNewNickMessage) {
+                order.deliveryAttempts = 0;
+                order.deliveryAttemptsHintSentAt = undefined;
+            }
             nickApplied = true;
 
             if (order.phase === 'dispatched') {
@@ -675,6 +662,21 @@ export async function flushChatDispatchQueue(state, deals, client = null) {
         const order = getOrder(state, oid);
         if (!order) continue;
         if (!canDispatchToSellbot(order)) {
+            if (isDeliveryAttemptsExhausted(order)) {
+                const chatId = paid.chatId || order.chatId;
+                if (client && !order.deliveryAttemptsHintSentAt) {
+                    await sendChatMessage(
+                        client,
+                        chatId,
+                        buildDeliveryAttemptsExceededHint(MAX_DELIVERY_ATTEMPTS),
+                    );
+                    setOrderPhase(state, oid, order.phase, {
+                        deliveryAttemptsHintSentAt: new Date().toISOString(),
+                        pausedUntilNick: true,
+                    });
+                    void dispatchCancelOrder(oid);
+                }
+            }
             continue;
         }
         if (order.phase === 'dispatched') {
@@ -711,11 +713,12 @@ export async function flushChatDispatchQueue(state, deals, client = null) {
             if (sent > 0) {
                 const payKk = fresh.payAmountKk ?? paid.amountKk;
                 console.log(
-                    `[sell] ${oid}: → sellbot ${nick} ${payKk}kk (лот ${paid.amountKk}kk)`,
+                    `[sell] ${oid}: → sellbot ${nick} ${payKk}kk (лот ${paid.amountKk}kk, попытка ${(fresh.deliveryAttempts || 0) + 1}/${MAX_DELIVERY_ATTEMPTS})`,
                 );
                 setOrderPhase(state, oid, 'dispatched', {
                     nick,
                     dispatchedAt: new Date().toISOString(),
+                    deliveryAttempts: (fresh.deliveryAttempts || 0) + 1,
                 });
             } else {
                 const payKk = fresh.payAmountKk ?? paid.amountKk;
@@ -890,6 +893,7 @@ export async function retryWsPendingOrders(state) {
                     nick: order.nick,
                     dispatchedAt: new Date().toISOString(),
                     lastError: null,
+                    deliveryAttempts: (fresh.deliveryAttempts || 0) + 1,
                 });
             }
         } catch (e) {

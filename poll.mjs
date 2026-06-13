@@ -276,6 +276,7 @@ async function handleBotEvents(client, state) {
                             : {}),
                     }),
                 );
+                void dispatchCancelOrder(ev.orderId);
                 if (partialWithdraw) {
                     await sendChatMessage(
                         client,
@@ -311,6 +312,7 @@ async function handleBotEvents(client, state) {
                         lastError: 'invalid_nick',
                         nick: null,
                     });
+                    void dispatchCancelOrder(ev.orderId);
                     await sendDeliveryHintOnce(
                         client,
                         state,
@@ -330,6 +332,7 @@ async function handleBotEvents(client, state) {
                     'awaiting_nick',
                     clanDeliveryRetryReset({ lastError: reason, nick }),
                 );
+                void dispatchCancelOrder(ev.orderId);
                 const fresh = getOrder(state, ev.orderId) || order;
                 const failHint = () => buildDeliveryFailHint(reason);
                 if (reason === 'captcha' || reason === 'banned') {
@@ -364,6 +367,7 @@ async function handleBotEvents(client, state) {
                     lastError: 'invalid_nick',
                     nick: null,
                 });
+                void dispatchCancelOrder(ev.orderId);
                 await sendDeliveryHintOnce(
                     client,
                     state,
@@ -388,6 +392,7 @@ async function handleBotEvents(client, state) {
                         nick: getBuyerSession(state, chatId, buyerId).nick || order.nick,
                     }),
                 );
+                void dispatchCancelOrder(ev.orderId);
                 await sendDeliveryHintOnce(
                     client,
                     state,
@@ -412,6 +417,7 @@ async function handleBotEvents(client, state) {
                         nick: getBuyerSession(state, chatId, buyerId).nick || order.nick,
                     }),
                 );
+                void dispatchCancelOrder(ev.orderId);
                 await sendDeliveryHintOnce(
                     client,
                     state,

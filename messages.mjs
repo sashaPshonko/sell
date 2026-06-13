@@ -227,6 +227,18 @@ export function buildDeliveryFailHint(reason) {
     return lines.join('\n');
 }
 
+/** Лимит попыток на один /nick — нужен новый /nick с анархии */
+export function buildDeliveryAttemptsExceededHint(maxAttempts = 3) {
+    const anka = DELIVERY_ANARCHY;
+    return [
+        `⏹ Не вышло выдать за ${maxAttempts} попытки.`,
+        '',
+        `🎮 Зайди на анархию ${anka} и будь в сети.`,
+        askNickInChatLine(),
+        '💰 После нового /nick бот попробует снова (счётчик сбросится).',
+    ].join('\n');
+}
+
 /** Таймаут выдачи — заказ сброшен, нужен повторный /nick */
 export function buildQueueStallHint() {
     const anka = DELIVERY_ANARCHY;
@@ -533,7 +545,8 @@ export function buildClanWithdrawWaitHint(nick, remainAmountRaw) {
         `🎮 Сначала досними на анархии ${anka}:`,
         `/clan withdraw ${amount}`,
         '',
-        '💬 Писать /nick снова не нужно — только команда в Minecraft.',
+        '💬 Пока выдача идёт — только /clan withdraw в Minecraft.',
+        '⏱ Если тебя нет на анке — через ~1 мин бот остановит попытку; тогда напиши /nick снова.',
     ].join('\n');
 }
 

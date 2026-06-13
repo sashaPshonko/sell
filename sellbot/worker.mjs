@@ -747,6 +747,14 @@ async function deliverClan() {
     lastAfkCheck = 0;
     while (active() && !playerWithdrew) {
         const now = Date.now();
+        if (now >= orderEnd) {
+            logInfo('withdraw — общий лимит выдачи');
+            break;
+        }
+        if (playerOffline) {
+            endDelivery('offline');
+            return;
+        }
         if (withdrawnTotal >= expectedWithdrawAmount) {
             playerWithdrew = true;
             logOk(`withdraw: ${nick}`);
