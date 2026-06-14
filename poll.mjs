@@ -207,6 +207,12 @@ async function handleBotEvents(client, state) {
                 });
                 console.log(`[sell] clan remainder hint → ${ev.orderId.slice(0, 8)}…`);
             } else if (ev.type === 'delivery_ok') {
+                if (order.gameDeliveryAt || order.buyerNotifiedAt) {
+                    console.log(
+                        `[sell] delivery_ok ${ev.orderId.slice(0, 8)}… дубликат, пропуск`,
+                    );
+                    continue;
+                }
                 const payKk = order.payAmountKk ?? order.amountKk;
                 setOrderPhase(state, ev.orderId, 'completed', {
                     gameDeliveryAt: new Date().toISOString(),
