@@ -32,11 +32,7 @@ import {
     profileUpsellEmoji,
     isMarkedProfileLot,
 } from './lib/profile-upsell.mjs';
-import {
-    getQueuePosition,
-    getQueueTotal,
-    isQueueBusy,
-} from './lib/delivery-queue.mjs';
+import { getQueuePosition } from './lib/delivery-queue.mjs';
 import { sendGreeting, sendChatMessage } from './chat.mjs';
 import { dispatchOrder, dispatchNickUpdate, dispatchCancelOrder } from './dispatch.mjs';
 import { applyOrderPayBonus, buyerEligibleForRepeatBonus } from './lib/pay-bonus.mjs';
@@ -569,12 +565,6 @@ export async function applyNickCommandUpdates(
             }
         }
 
-        if (u.via === 'command' && client && nickApplied) {
-            for (const order of buyerOrders.filter((o) => !isOrderFulfilled(o))) {
-                await notifyDeliveryQueueStatus(client, state, chatId, order, u.nick);
-            }
-        }
-
         if (!queuedForDelivery && client && nickApplied) {
             if (buyerHasPendingOrder(state, chatId, buyerId)) {
                 console.log(
@@ -599,9 +589,9 @@ export async function applyNickCommandUpdates(
     return { known, sellerKnown };
 }
 
-function buildQueueStatusMessage(order, nick) {
+function buildQueueStatusMessage(state, order, nick) {
     const payKk = order.payAmountKk ?? order.amountKk;
-    const q = getQueuePosition(order.orderId);
+    const q = getQueuePosition(order.orderId, state);
     if (q.isActive) {
         return buildDispatchingHint(nick, order.amountKk, {
             lotKk: order.amountKk,
@@ -612,11 +602,8 @@ function buildQueueStatusMessage(order, nick) {
             bonusRepeatKk: order.bonusRepeatKk,
         });
     }
-    if (q.position > 1) {
+    if (q.inQueue && q.position > 1) {
         return buildNickQueueWaitingHint(q.position, payKk);
-    }
-    if (isQueueBusy()) {
-        return buildNickQueueWaitingHint(getQueueTotal() + 1, payKk);
     }
     return buildNickDeliveryActiveHint(nick, payKk);
 }
@@ -630,7 +617,7 @@ async function notifyDeliveryQueueStatus(client, state, chatId, order, nick) {
     if (order.playerokStatus && !playerokNeedsDelivery(order.playerokStatus)) return;
 
     try {
-        await sendChatMessage(client, chatId, buildQueueStatusMessage(order, nick));
+        await sendChatMessage(client, chatId, buildQueueStatusMessage(state, order, nick));
         setOrderPhase(state, order.orderId, order.phase, {
             queueStatusSentAt: new Date().toISOString(),
         });
@@ -694,10 +681,6 @@ export async function flushChatDispatchQueue(state, deals, client = null) {
         order.nick = nick;
         applyOrderPayBonus(state, order);
 
-        if (client) {
-            await notifyDispatchingForOrder(client, state, chatId, order, nick);
-        }
-
         try {
             const fresh = getOrder(state, oid) || order;
             const { sent } = await dispatchOrder(
@@ -720,6 +703,15 @@ export async function flushChatDispatchQueue(state, deals, client = null) {
                     dispatchedAt: new Date().toISOString(),
                     deliveryAttempts: (fresh.deliveryAttempts || 0) + 1,
                 });
+                if (client) {
+                    await notifyDispatchingForOrder(
+                        client,
+                        state,
+                        chatId,
+                        getOrder(state, oid) || order,
+                        nick,
+                    );
+                }
             } else {
                 const payKk = fresh.payAmountKk ?? paid.amountKk;
                 console.warn(
