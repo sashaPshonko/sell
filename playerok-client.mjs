@@ -116,7 +116,7 @@ export function createClient() {
 
         async chatMessages(
             chatId,
-            first = Number(process.env.CHAT_MESSAGES_FIRST || 40),
+            first = Number(process.env.CHAT_MESSAGES_FIRST || 20),
             after = null,
         ) {
             const hash = process.env.CHAT_MESSAGES_HASH;
