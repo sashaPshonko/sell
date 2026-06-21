@@ -182,6 +182,7 @@ async function handleBotEvents(client, state) {
                 setOrderPhase(state, ev.orderId, fresh.phase, {
                     clanWithdrawHintSentAt: new Date().toISOString(),
                     clanRemainderHintSentAt: null,
+                    clanInvestedAt: new Date().toISOString(),
                 });
                 console.log(`[sell] clan withdraw hint → ${ev.orderId.slice(0, 8)}…`);
             } else if (ev.type === 'clan_withdraw_partial') {

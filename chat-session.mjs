@@ -328,7 +328,7 @@ export async function applyCancelCommands(
                 cancelledAt: new Date().toISOString(),
             });
             if (wasDispatched) {
-                await dispatchCancelOrder(order.orderId);
+                await dispatchCancelOrder(order.orderId, state);
             }
 
             if (process.env.AUTO_CANCEL_PLAYEROK === '1') {
@@ -661,7 +661,7 @@ export async function flushChatDispatchQueue(state, deals, client = null) {
                         deliveryAttemptsHintSentAt: new Date().toISOString(),
                         pausedUntilNick: true,
                     });
-                    void dispatchCancelOrder(oid);
+                    void dispatchCancelOrder(oid, state);
                 }
             }
             continue;

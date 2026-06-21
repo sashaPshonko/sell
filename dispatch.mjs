@@ -35,7 +35,7 @@ export async function dispatchOrder(order, state = null) {
                 console.log(
                     `[dispatch] пропуск ${oid?.slice(0, 8)}… (заказ закрыт, phase=${existing.phase})`,
                 );
-                void dispatchCancelOrder(oid);
+                void dispatchCancelOrder(oid, state);
                 return { sent: 0, skipped: true };
             }
         }
@@ -73,7 +73,15 @@ export async function dispatchNickUpdate(orderId, nick) {
     return t.pushNickUpdate(orderId, nick);
 }
 
-export async function dispatchCancelOrder(orderId) {
+export async function dispatchCancelOrder(orderId, state = null) {
+    if (state) {
+        const { getOrder } = await import('./state.mjs');
+        const order = getOrder(state, orderId);
+        if (order && order.clanInvestedAt) {
+            console.log(`[dispatch] ❌ Отмена запрещена: деньги в казне ${orderId.slice(0,8)}…`);
+            return;
+        }
+    }
     const t = await getTransport();
     if (!t?.pushCancelOrder) return;
     return t.pushCancelOrder(orderId);
