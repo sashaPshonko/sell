@@ -64,6 +64,7 @@ import {
     ensurePollStarted,
     getDealCutoffIso,
     migrateStaleOrders,
+    isActionableOrder,
 } from './lib/deal-cutoff.mjs';
 import {
     applySellerBanCommands,
@@ -601,9 +602,14 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
     syncChatOrdersFromPlayerok(state, chatId, dealTimeline);
     await rejectBannedBuyerOrdersInChat(client, state, chatId);
 
+    if (newlyRegistered.length) {
+        await sendPremiumRefundUpsellForOrders(client, state, chatId, newlyRegistered);
+    }
+
     if (republishWhen() === 'paid') {
         for (const order of newlyRegistered) {
             if (isBuyerBanned(state, order.buyerId)) continue;
+            if (!isActionableOrder(order)) continue;
             scheduleRepublishItem(client, state, order);
         }
     }
@@ -638,10 +644,6 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
         );
     } else if (!greetingAt) {
         greetingAt = findGreetingAnchorInChat(messages, sellerUserId);
-    }
-
-    if (newlyRegistered.length) {
-        await sendPremiumRefundUpsellForOrders(client, state, chatId, newlyRegistered);
     }
 
     if (hadGreetingBefore && newlyRegistered.length) {

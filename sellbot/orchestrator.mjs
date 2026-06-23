@@ -158,6 +158,7 @@ function workerDataPayload() {
         deliveryMode: cfg.deliveryMode,
         clanInvestMultiplier: cfg.clanInvestMultiplier,
         clanPhaseTimeoutMs: cfg.clanPhaseTimeoutMs,
+        clanWithdrawSoloTimeoutMs: cfg.clanWithdrawSoloTimeoutMs,
         clanLoopWaitMs: cfg.clanLoopWaitMs,
         clanInvestWaitMs: cfg.clanInvestWaitMs,
         clanWithdrawMinRatio: cfg.clanWithdrawMinRatio,

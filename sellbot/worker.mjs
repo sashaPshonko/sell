@@ -32,6 +32,7 @@ const config = {
     anarchy: workerData.anarchy,
     clanInvestMultiplier: workerData.clanInvestMultiplier ?? 1_000_000,
     clanPhaseTimeoutMs: workerData.clanPhaseTimeoutMs ?? 60_000,
+    clanWithdrawSoloTimeoutMs: workerData.clanWithdrawSoloTimeoutMs ?? 300_000,
     clanLoopWaitMs: workerData.clanLoopWaitMs ?? 2000,
     /** пауза после /clan invest до повтора — ждём «пополнил баланс казны» */
     clanInvestWaitMs: workerData.clanInvestWaitMs ?? 15_000,
@@ -140,6 +141,15 @@ function hasWithdrawGraceEligible(withdrawn, expected) {
     if (expected <= 0) return false;
     const ratio = config.clanWithdrawMinRatio ?? 0.9;
     return withdrawn >= Math.floor(expected * ratio);
+}
+
+/** withdraw: дольше ждём, если деньги уже в казне и за нами никого в очереди */
+function withdrawPhaseTimeoutMs() {
+    const solo = deliverQueue.length === 0;
+    if (moneyInvested && solo) {
+        return config.clanWithdrawSoloTimeoutMs;
+    }
+    return config.clanPhaseTimeoutMs;
 }
 
 function resetDeliveryFlags() {
@@ -741,8 +751,12 @@ async function deliverClan() {
     expectedWithdrawAmount = fullInvest;
     withdrawnTotal = priorWithdrawn;
     playerWithdrew = priorWithdrawn >= fullInvest;
-    logInfo(`ждём withdraw ${nick} (${withdrawnTotal}/${expectedWithdrawAmount})`);
-    const phaseDeadline = Date.now() + config.clanPhaseTimeoutMs;
+    const withdrawMs = withdrawPhaseTimeoutMs();
+    logInfo(
+        `ждём withdraw ${nick} (${withdrawnTotal}/${expectedWithdrawAmount}), таймаут ${Math.round(withdrawMs / 1000)}с` +
+            (withdrawMs > config.clanPhaseTimeoutMs ? ' (solo, деньги в казне)' : ''),
+    );
+    const phaseDeadline = Date.now() + withdrawMs;
     let graceDeadline = null;
     lastAfkCheck = 0;
     while (active() && !playerWithdrew) {
@@ -953,6 +967,10 @@ async function addOrder(order) {
 }
 
 function cancelOrder(orderId) {
+    if (currentOrder?.orderId === orderId && moneyInvested) {
+        logInfo(`отмена отклонена: деньги уже в казне (${orderId.slice(0, 8)}…)`);
+        return;
+    }
     for (let i = deliverQueue.length - 1; i >= 0; i--) {
         if (deliverQueue[i].orderId === orderId) deliverQueue.splice(i, 1);
     }

@@ -76,9 +76,10 @@ export async function dispatchNickUpdate(orderId, nick) {
 export async function dispatchCancelOrder(orderId, state = null) {
     if (state) {
         const { getOrder } = await import('./state.mjs');
+        const { isBuyerOrderCancelBlocked } = await import('./lib/order-cancel.mjs');
         const order = getOrder(state, orderId);
-        if (order && order.clanInvestedAt) {
-            console.log(`[dispatch] ❌ Отмена запрещена: деньги в казне ${orderId.slice(0,8)}…`);
+        if (order && isBuyerOrderCancelBlocked(order)) {
+            console.log(`[dispatch] ❌ Отмена запрещена: деньги в казне ${orderId.slice(0, 8)}…`);
             return;
         }
     }

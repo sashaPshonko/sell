@@ -19,6 +19,7 @@ import {
     hasGreetingInChat,
     buildNewOrderTwinHint,
     buildOrderCancelledHint,
+    buildOrderCancelDeniedHint,
     buildDispatchingHint,
     buildNickDeliveryActiveHint,
     buildNickQueueWaitingHint,
@@ -38,6 +39,7 @@ import { dispatchOrder, dispatchNickUpdate, dispatchCancelOrder } from './dispat
 import { applyOrderPayBonus, buyerEligibleForRepeatBonus } from './lib/pay-bonus.mjs';
 import { isBuyerBanned } from './lib/banlist.mjs';
 import { cancelDealOnPlayerok } from './cancel.mjs';
+import { isBuyerOrderCancelBlocked } from './lib/order-cancel.mjs';
 import { DELIVERY_ANARCHY } from './messages.mjs';
 import { isStaleDeal, isActionableOrder } from './lib/deal-cutoff.mjs';
 import {
@@ -171,7 +173,9 @@ export async function ensureChatGreeting(client, state, chatId, messages, seller
 }
 
 /**
- * Лот без 🎁 — сразу ссылка, где больше кк за те же ₽.
+ * Лот без 🎁 — если на профиле есть 🎁-аналог (больше kk, те же ₽):
+ * сразу отмена на PlayerOK + ссылка на выгодный лот.
+ * Если аналога нет — ничего (позже scheduled profile upsell / browse hint).
  * @param {object[]} newOrders — заказы из registerDealOrders
  */
 export async function sendPremiumRefundUpsellForOrders(client, state, chatId, newOrders) {
@@ -180,7 +184,7 @@ export async function sendPremiumRefundUpsellForOrders(client, state, chatId, ne
 
     const sellerUserId = state.sellerUserId;
     const sellerUsername = state.sellerUsername ?? null;
-    const upsellSentForBuyer = new Set();
+    const messagedBuyers = new Set();
 
     for (const order of newOrders) {
         if (!order || !isActionableOrder(order)) continue;
@@ -188,12 +192,6 @@ export async function sendPremiumRefundUpsellForOrders(client, state, chatId, ne
         if (order.premiumRefundUpsellSentAt) continue;
         if (isMarkedProfileLot(order.itemName)) continue;
         if (isBuyerBanned(state, order.buyerId)) continue;
-        if (order.buyerId && upsellSentForBuyer.has(order.buyerId)) {
-            setOrderPhase(state, order.orderId, order.phase, {
-                premiumRefundUpsellSentAt: new Date().toISOString(),
-            });
-            continue;
-        }
 
         let match = null;
         if (sellerUserId) {
@@ -205,33 +203,69 @@ export async function sendPremiumRefundUpsellForOrders(client, state, chatId, ne
                     sellerUsername,
                 );
             } catch (e) {
-                console.warn(`[sell] premium-refund upsell: ${e.message}`);
+                console.warn(`[sell] profile-upsell refund: ${e.message}`);
             }
         }
 
-        const phase = order.phase === 'new' ? 'awaiting_nick' : order.phase;
-        setOrderPhase(state, order.orderId, phase, {
+        const baseKk = Math.round(Number(order.amountKk) || 0);
+        const upsellKk = Math.round(Number(match?.kk) || 0);
+        if (!match?.url || upsellKk <= baseKk || baseKk <= 0) {
+            continue;
+        }
+
+        const wasDispatched = order.phase === 'dispatched';
+        setOrderPhase(state, order.orderId, 'cancelled', {
+            cancelledAt: new Date().toISOString(),
+            cancelReason: 'profile_upsell_refund',
             premiumRefundUpsellSentAt: new Date().toISOString(),
         });
-        if (order.buyerId) upsellSentForBuyer.add(order.buyerId);
+        if (wasDispatched) {
+            await dispatchCancelOrder(order.orderId, state);
+        }
+
+        let playerokCancelled = false;
+        if (process.env.AUTO_CANCEL_PLAYEROK === '1') {
+            try {
+                await cancelDealOnPlayerok(client, order.orderId);
+                setOrderPhase(state, order.orderId, 'cancelled', {
+                    playerokCancelledAt: new Date().toISOString(),
+                });
+                playerokCancelled = true;
+            } catch (e) {
+                console.warn(
+                    `[sell] profile-upsell PlayerOK отмена ${order.orderId.slice(0, 8)}…: ${e.message}`,
+                );
+            }
+        } else {
+            console.warn(
+                '[sell] profile-upsell: AUTO_CANCEL_PLAYEROK≠1 — возврат на PlayerOK вручную',
+            );
+        }
+
+        console.log(
+            `[sell] profile-upsell refund ${order.orderId.slice(0, 8)}… → ${upsellKk}кк (было ${baseKk}кк)`,
+        );
+
+        if (order.buyerId && messagedBuyers.has(order.buyerId)) {
+            continue;
+        }
+        if (order.buyerId) messagedBuyers.add(order.buyerId);
 
         try {
             await sendChatMessage(
                 client,
                 chatId,
                 buildPremiumRefundUpsellHint({
-                    baseKk: order.amountKk,
-                    upsellKk: match?.kk,
-                    priceRub: match?.priceRub ?? order.itemPriceRub,
-                    url: match?.url,
-                    emoji: match?.emoji ?? profileUpsellEmoji(),
+                    baseKk,
+                    upsellKk,
+                    priceRub: match.priceRub ?? order.itemPriceRub,
+                    url: match.url,
+                    emoji: match.emoji ?? profileUpsellEmoji(),
+                    playerokCancelled,
                 }),
             );
-            console.log(
-                `[sell] premium-refund upsell → ${order.orderId.slice(0, 8)}…`,
-            );
         } catch (e) {
-            console.warn(`[sell] premium-refund upsell чат: ${e.message}`);
+            console.warn(`[sell] profile-upsell refund чат: ${e.message}`);
         }
     }
 }
@@ -316,12 +350,21 @@ export async function applyCancelCommands(
         known.add(msg.id);
 
         let cancelled = 0;
+        let blocked = 0;
         let playerokCancelled = 0;
         for (const order of ordersInChat(state, chatId)) {
             if (order.buyerId !== buyerId) continue;
             if (order.phase === 'completed' || order.phase === 'cancelled') continue;
             const paidAtMs = order.paidAt ? Date.parse(order.paidAt) : 0;
             if (paidAtMs > msgAt) continue;
+
+            if (isBuyerOrderCancelBlocked(order)) {
+                blocked += 1;
+                console.log(
+                    `[sell] /cancel отклонён: деньги в казне ${order.orderId.slice(0, 8)}…`,
+                );
+                continue;
+            }
 
             const wasDispatched = order.phase === 'dispatched';
             setOrderPhase(state, order.orderId, 'cancelled', {
@@ -360,7 +403,14 @@ export async function applyCancelCommands(
                 console.warn(`[sell] отмена, ответ в чат: ${e.message}`);
             }
             replied = true;
-        } else if (!cancelled) {
+        } else if (blocked > 0 && !replied) {
+            try {
+                await sendChatMessage(client, chatId, buildOrderCancelDeniedHint());
+            } catch (e) {
+                console.warn(`[sell] отмена запрещена, ответ в чат: ${e.message}`);
+            }
+            replied = true;
+        } else if (!cancelled && !blocked) {
             console.log(`[sell] /cancel: нечего отменять (чат ${chatId.slice(0, 8)}…)`);
         }
     }

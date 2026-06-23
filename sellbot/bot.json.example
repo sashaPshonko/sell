@@ -7,6 +7,7 @@
     "deliveryMode": "clan",
     "clanInvestMultiplier": 1000000,
     "clanPhaseTimeoutMs": 60000,
+    "clanWithdrawSoloTimeoutMs": 300000,
     "clanLoopWaitMs": 2000,
     "clanInvestWaitMs": 15000,
     "clanClickDelayMinMs": 1500,

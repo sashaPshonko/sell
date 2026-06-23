@@ -14,6 +14,8 @@ export const DEFAULTS = {
     /** 200кк → /clan invest 200000000 */
     clanInvestMultiplier: 1_000_000,
     clanPhaseTimeoutMs: 60_000,
+    /** withdraw после invest: если в очереди только текущий клиент */
+    clanWithdrawSoloTimeoutMs: 300_000,
     clanLoopWaitMs: 2000,
     /** после /clan invest — ждём строку в чате, не шлём повтор раньше */
     clanInvestWaitMs: 15_000,
@@ -93,6 +95,9 @@ export async function loadSettings(path = BOT_JSON) {
             pick(entry, 'clanInvestMultiplier', pick(entry, 'payAmountMultiplier', DEFAULTS.clanInvestMultiplier)),
         ),
         clanPhaseTimeoutMs: Number(pick(entry, 'clanPhaseTimeoutMs', DEFAULTS.clanPhaseTimeoutMs)),
+        clanWithdrawSoloTimeoutMs: Number(
+            pick(entry, 'clanWithdrawSoloTimeoutMs', DEFAULTS.clanWithdrawSoloTimeoutMs),
+        ),
         clanLoopWaitMs: Number(pick(entry, 'clanLoopWaitMs', pick(entry, 'payLoopWaitMs', DEFAULTS.clanLoopWaitMs))),
         clanInvestWaitMs: Number(pick(entry, 'clanInvestWaitMs', DEFAULTS.clanInvestWaitMs)),
         clanWithdrawMinRatio: Number(
