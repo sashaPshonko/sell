@@ -1,4 +1,4 @@
-import { REPEAT_EXTRA_PCT, formatWheelBonusTiersText } from './lib/pay-bonus.mjs';
+import { REPEAT_EXTRA_PCT, formatRandomBonusHintText } from './lib/pay-bonus.mjs';
 import { DELIVERY_ANARCHY } from './config.mjs';
 
 export { DELIVERY_ANARCHY };
@@ -32,7 +32,7 @@ export function buildGreetingText(ctx = null) {
     const bonusLines = [
         '',
         '🎁 БОНУС к выдаче:',
-        `После ника к лоту добавим случайный бонус: ${formatWheelBonusTiersText(lotKk)}.`,
+        `После ника ${formatRandomBonusHintText()}.`,
     ];
     if (repeatEligible) {
         bonusLines.push(
@@ -269,7 +269,7 @@ function fmtKk(n) {
     return `${v}кк`;
 }
 
-function fmtBonusKk(kk, pct) {
+function fmtBonusKk(kk, pct = 0) {
     const k = Number(kk) || 0;
     const p = Number(pct) || 0;
     if (k <= 0) return '—';
@@ -311,11 +311,11 @@ function buildPayoutBreakdownLines(bonus, defaultLotKk = 0, opts = null) {
     const totalLabel = opts?.totalLabel || 'Итого';
     const lines = [`💰 ${totalLabel}: ${fmtKk(paid)}`, `📦 Лот: ${fmtKk(lot)}`];
 
-    if (wheelKk > 0 || wheelPct > 0) {
-        lines.push(`🎲 Случайный бонус: ${fmtBonusKk(wheelKk, wheelPct)}`);
+    if (wheelKk > 0) {
+        lines.push(`🎲 Случайный бонус: ${fmtBonusKk(wheelKk)}`);
     }
 
-    if (repeatKk > 0 || repeatPct > 0) {
+    if (repeatKk > 0) {
         lines.push(
             `🔁 Бонус за повторную покупку (24ч): ${fmtBonusKk(repeatKk, repeatPct)}`,
         );
@@ -353,7 +353,7 @@ export function buildDeliveryOkHint(amountKk, bonus = null) {
 
 /** Через 10с после подтверждения сделки на PlayerOK */
 export function buildRepeatPurchaseHint() {
-    return '🎁 Повторная покупка в течение 24 ч — ещё +5% к валюте (🔁 «Бонус за повторную покупку»).';
+    return `🎁 Повторная покупка в течение 24 ч — ещё +${REPEAT_EXTRA_PCT}% к валюте.`;
 }
 
 /**
