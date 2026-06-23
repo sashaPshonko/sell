@@ -174,8 +174,7 @@ export async function ensureChatGreeting(client, state, chatId, messages, seller
 
 /**
  * Лот без 🎁 — если на профиле есть 🎁-аналог (больше kk, те же ₽):
- * сразу отмена на PlayerOK + ссылка на выгодный лот.
- * Если аналога нет — ничего (позже scheduled profile upsell / browse hint).
+ * отмена на PlayerOK + ссылка. Без успешного автовозврата — обычная выдача.
  * @param {object[]} newOrders — заказы из registerDealOrders
  */
 export async function sendPremiumRefundUpsellForOrders(client, state, chatId, newOrders) {
@@ -213,33 +212,31 @@ export async function sendPremiumRefundUpsellForOrders(client, state, chatId, ne
             continue;
         }
 
+        if (process.env.AUTO_CANCEL_PLAYEROK !== '1') {
+            console.log(
+                `[sell] profile-upsell ${order.orderId.slice(0, 8)}…: аналог ${upsellKk}кк, нет AUTO_CANCEL — выдача`,
+            );
+            continue;
+        }
+
+        try {
+            await cancelDealOnPlayerok(client, order.orderId);
+        } catch (e) {
+            console.warn(
+                `[sell] profile-upsell PlayerOK ${order.orderId.slice(0, 8)}…: ${e.message} — выдача`,
+            );
+            continue;
+        }
+
         const wasDispatched = order.phase === 'dispatched';
         setOrderPhase(state, order.orderId, 'cancelled', {
             cancelledAt: new Date().toISOString(),
             cancelReason: 'profile_upsell_refund',
             premiumRefundUpsellSentAt: new Date().toISOString(),
+            playerokCancelledAt: new Date().toISOString(),
         });
         if (wasDispatched) {
             await dispatchCancelOrder(order.orderId, state);
-        }
-
-        let playerokCancelled = false;
-        if (process.env.AUTO_CANCEL_PLAYEROK === '1') {
-            try {
-                await cancelDealOnPlayerok(client, order.orderId);
-                setOrderPhase(state, order.orderId, 'cancelled', {
-                    playerokCancelledAt: new Date().toISOString(),
-                });
-                playerokCancelled = true;
-            } catch (e) {
-                console.warn(
-                    `[sell] profile-upsell PlayerOK отмена ${order.orderId.slice(0, 8)}…: ${e.message}`,
-                );
-            }
-        } else {
-            console.warn(
-                '[sell] profile-upsell: AUTO_CANCEL_PLAYEROK≠1 — возврат на PlayerOK вручную',
-            );
         }
 
         console.log(
@@ -256,12 +253,9 @@ export async function sendPremiumRefundUpsellForOrders(client, state, chatId, ne
                 client,
                 chatId,
                 buildPremiumRefundUpsellHint({
-                    baseKk,
                     upsellKk,
-                    priceRub: match.priceRub ?? order.itemPriceRub,
                     url: match.url,
                     emoji: match.emoji ?? profileUpsellEmoji(),
-                    playerokCancelled,
                 }),
             );
         } catch (e) {

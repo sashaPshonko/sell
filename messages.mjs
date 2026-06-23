@@ -357,39 +357,15 @@ export function buildRepeatPurchaseHint() {
 }
 
 /**
- * Купил лот без 🎁 — нашли 🎁-аналог (больше kk, те же ₽): возврат + ссылка.
- * @param {{ baseKk?: number, upsellKk?: number, priceRub?: number, url?: string, emoji?: string, playerokCancelled?: boolean }} opts
+ * Автовозврат прошёл — коротко ссылка на 🎁-лот.
+ * @param {{ upsellKk?: number, url?: string, emoji?: string }} opts
  */
 export function buildPremiumRefundUpsellHint(opts = {}) {
-    const baseKk = Math.round(Number(opts.baseKk) || 0);
     const upsellKk = Math.round(Number(opts.upsellKk) || 0);
-    const priceRub = opts.priceRub != null ? Math.round(Number(opts.priceRub)) : null;
     const url = String(opts.url || '').trim();
     const marker = opts.emoji || '🎁';
-    const playerokCancelled = opts.playerokCancelled === true;
 
-    const priceBit = priceRub != null && priceRub > 0 ? `${priceRub} ₽` : 'ту же цену';
-    const extraKk = upsellKk > baseKk && baseKk > 0 ? upsellKk - baseKk : 0;
-    const lines = [
-        `🎁✨ ВЫГОДНЕЕ — БОЛЬШЕ КК ${marker}`,
-        '————————————————',
-        `💸 За ${priceBit}:`,
-        `   📦 Сейчас: ${baseKk}кк`,
-        `   🔥 Выгоднее: ${upsellKk}кк${extraKk > 0 ? ` (+${extraKk}кк!)` : ''}`,
-        '',
-    ];
-
-    if (playerokCancelled) {
-        lines.push('✅ Оплата возвращена — можешь сразу купить выгодный лот.');
-    } else {
-        lines.push(
-            '💬 Оформи возврат через поддержку PlayerOK (или дождись автоматического).',
-        );
-    }
-
-    lines.push('', '🔗 Ссылка на лот:', url);
-    lines.push('', '👆 Купи по ссылке — получишь больше за те же деньги.');
-    return lines.join('\n');
+    return `Деньги вернули. Бери ${marker} — ${upsellKk}кк по этой же цене:\n${url}`;
 }
 
 /** Нет конкретного лота-аналога — подсказка про 🎁 на профиле (без ссылки). */
