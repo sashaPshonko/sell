@@ -6,6 +6,10 @@ import {
     parseClanBalanceFromChat,
     parseClanWithdrawAmount,
 } from './lib/balance.mjs';
+import {
+    parseClanMembersFromChat,
+    findClanIntruders,
+} from './lib/clan-members.mjs';
 import { createChatLogger } from './lib/chat-log.mjs';
 import { audit } from '../lib/audit.mjs';
 
@@ -80,6 +84,8 @@ let expectedWithdrawAmount = 0;
 let withdrawnTotal = 0;
 /** баланс казны клана из чата (Баланс клана:) */
 let clanBalance = null;
+/** участники из /clan info */
+let clanMembersSnapshot = null;
 
 // GUI: слот 11 — и кнопка «участники», и голова игрока в списке
 let guiBusy = false;
@@ -222,6 +228,9 @@ function handleChatMessage(raw) {
 
     const clanBal = parseClanBalanceFromChat(text);
     if (clanBal != null) clanBalance = clanBal;
+
+    const members = parseClanMembersFromChat(text);
+    if (members != null) clanMembersSnapshot = members;
 
     if (!delivering || !currentOrder?.nick) return;
     const nick = currentOrder.nick;
@@ -495,6 +504,63 @@ async function safeClanBalance(waitMs = 12_000) {
     return clanBalance;
 }
 
+function allowedClanNicks(extraAllow = []) {
+    const set = new Set([String(config.username).toLowerCase()]);
+    for (const nick of extraAllow) {
+        if (nick) set.add(String(nick).toLowerCase());
+    }
+    return set;
+}
+
+async function safeClanInfo(waitMs = 12_000) {
+    if (!bot?.chat) return null;
+    clanMembersSnapshot = null;
+    const deadline = Date.now() + waitMs;
+    while (clanMembersSnapshot == null && Date.now() < deadline) {
+        if (!bot) return null;
+        await closeWindow();
+        logInfo('/clan info…');
+        bot.chat('/clan info');
+        await sleep(config.balanceCmdWaitMs);
+        if (clanMembersSnapshot == null) await antiAfkIfNeeded(bot, config, logInfo);
+    }
+    if (clanMembersSnapshot?.length) {
+        logInfo(`clan info: ${clanMembersSnapshot.join(', ')}`);
+    }
+    return clanMembersSnapshot;
+}
+
+/** /clan info → kick всех кроме лидера (+ покупатель, если передан) */
+async function purgeIntrudersFromClan(deadline, extraAllow = []) {
+    if (!bot?.chat) return;
+    const allowed = [...allowedClanNicks(extraAllow)];
+
+    while (Date.now() < deadline) {
+        await antiAfkIfNeeded(bot, config, logInfo);
+        const waitMs = Math.min(12_000, Math.max(2000, deadline - Date.now()));
+        const members = await safeClanInfo(waitMs);
+        if (!members?.length) {
+            logInfo('clan info — нет строки участников, повтор');
+            await sleep(config.clanLoopWaitMs);
+            continue;
+        }
+
+        const intruders = findClanIntruders(members, allowed);
+        if (!intruders.length) {
+            logOk(`clan info: чужих нет (${members.length} уч.)`);
+            return;
+        }
+
+        for (const name of intruders) {
+            if (Date.now() >= deadline) return;
+            logInfo(`clan: лишний ${name} — kick`);
+            await kickFromClan(name, Math.min(deadline, Date.now() + 15_000));
+            await sleep(config.clanLoopWaitMs);
+            await antiAfkIfNeeded(bot, config, logInfo);
+        }
+    }
+}
+
 // ========== бот ==========
 
 function wireBot(b) {
@@ -644,6 +710,11 @@ async function deliverClan() {
         return;
     }
 
+    // 0.5 клан на двоих — до invite только лидер
+    logInfo('clan info — должен быть только лидер…');
+    await purgeIntrudersFromClan(phaseEnd());
+    if (!active()) return;
+
     // 1. invite
     logInfo(
         `invite ${nick}, invest ${invest} (полная ${fullInvest}, уже снято ${priorWithdrawn})`,
@@ -680,6 +751,10 @@ async function deliverClan() {
         endDelivery('timeout');
         return;
     }
+
+    // 2.5 после join — лидер + покупатель, все остальные kick
+    await purgeIntrudersFromClan(phaseEnd(), [nick]);
+    if (!active()) return;
 
     // 3. права withdraw (GUI)
     logInfo('права withdraw…');
