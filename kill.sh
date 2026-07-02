@@ -6,6 +6,7 @@ pkill -f 'scripts/run/sellbot.sh'
 pkill -f 'scripts/run/sell.sh'
 pkill -f 'orchestrator.mjs'
 pkill -f 'poll.mjs'
+rm -f sellbot/.orchestrator.pid .poll.pid
 sleep 2
 
 mkdir -p logs

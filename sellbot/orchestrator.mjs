@@ -6,9 +6,10 @@ import { createTelegramBot } from './lib/telegram.mjs';
 import { loadSettings } from './settings.mjs';
 import { maskProxyUrl } from './lib/mc-proxy.mjs';
 import { audit } from '../lib/audit.mjs';
-import { acquireOrchestratorLock } from './lib/single-instance.mjs';
+import { acquirePidLock } from '../lib/pid-lock.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const ORCHESTRATOR_LOCK = join(__dirname, '.orchestrator.pid');
 
 let sendAlert = async (m) => console.log(`🔔 ${m}`);
 let isShuttingDown = false;
@@ -524,7 +525,7 @@ function handleNickUpdate(orderId, nick) {
 }
 
 async function main() {
-    acquireOrchestratorLock();
+    acquirePidLock(ORCHESTRATOR_LOCK, 'sellbot');
     await loadBotConfig();
 
     if (isMockDelivery()) {

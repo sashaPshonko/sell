@@ -10,5 +10,10 @@ fi
 
 while true; do
     node poll.mjs
+    code=$?
+    if [ "$code" -eq 2 ]; then
+        echo "[sell] poll уже запущен (pid lock) — выход"
+        exit 1
+    fi
     sleep 5
 done
