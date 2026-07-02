@@ -6,6 +6,7 @@ import { createTelegramBot } from './lib/telegram.mjs';
 import { loadSettings } from './settings.mjs';
 import { maskProxyUrl } from './lib/mc-proxy.mjs';
 import { audit } from '../lib/audit.mjs';
+import { acquireOrchestratorLock } from './lib/single-instance.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -523,12 +524,29 @@ function handleNickUpdate(orderId, nick) {
 }
 
 async function main() {
+    acquireOrchestratorLock();
     await loadBotConfig();
 
     if (isMockDelivery()) {
         console.log(
             '[sellbot] mockDelivery в bot.json — сразу delivery_ok, mineflayer не запускается',
         );
+    }
+
+    try {
+        await startWsServer(
+            {
+                onOrder: handleOrder,
+                onNickUpdate: handleNickUpdate,
+                onCancel: handleCancelOrder,
+            },
+            cfg.wsPort,
+        );
+    } catch (err) {
+        if (err.code === 'EADDRINUSE') {
+            process.exit(2);
+        }
+        throw err;
     }
 
     const tg = await createTelegramBot({
@@ -565,22 +583,6 @@ async function main() {
     });
     sendAlert = tg.sendAlert;
 
-    try {
-        await startWsServer(
-            {
-                onOrder: handleOrder,
-                onNickUpdate: handleNickUpdate,
-                onCancel: handleCancelOrder,
-            },
-            cfg.wsPort,
-        );
-    } catch (err) {
-        if (err.code === 'EADDRINUSE') {
-            process.exit(2);
-        }
-        throw err;
-    }
-
     console.log(
         '[sellbot] жду подключения sell и заказы (логи появятся при order / MOCK delivery_ok)',
     );
@@ -598,6 +600,8 @@ async function main() {
 
 main().catch(async (e) => {
     console.error(e);
-    await sendAlert(`❌ старт: ${e.message}`);
-    process.exit(1);
+    if (e?.code !== 'EADDRINUSE') {
+        await sendAlert(`❌ старт: ${e.message}`);
+    }
+    process.exit(e?.code === 'EADDRINUSE' ? 2 : 1);
 });
