@@ -1,4 +1,3 @@
-import { REPEAT_EXTRA_PCT, formatRandomBonusHintText } from './lib/pay-bonus.mjs';
 import { DELIVERY_ANARCHY } from './config.mjs';
 
 export { DELIVERY_ANARCHY };
@@ -18,43 +17,19 @@ export function twinAccountWarningLines() {
 }
 
 /**
- * @param {{ lotKk?: number, repeatEligible?: boolean }} [ctx]
+ * @param {{ lotKk?: number }} [ctx]
  * Текст после оплаты (без номера заказа — только для логов/WS)
  */
-export function buildGreetingText(ctx = null) {
+export function buildGreetingText(_ctx = null) {
     const custom = process.env.GREETING_MESSAGE?.trim();
     if (custom) return custom;
 
     const anka = DELIVERY_ANARCHY;
-    const lotKk = Number(ctx?.lotKk);
-    const repeatEligible = Boolean(ctx?.repeatEligible);
-
-    const bonusLines = [
-        '',
-        '🎁 БОНУС к выдаче:',
-        `После ника ${formatRandomBonusHintText()}.`,
-    ];
-    if (repeatEligible) {
-        bonusLines.push(
-            `🔁 У тебя повторная покупка за 24 часа — ещё +${REPEAT_EXTRA_PCT}% к лоту!`,
-        );
-    } else {
-        bonusLines.push(
-            `🔁 Купишь снова в течение 24ч — к бонусу добавим ещё +${REPEAT_EXTRA_PCT}%.`,
-        );
-    }
-    if (lotKk > 0) {
-        bonusLines.push(
-            '',
-            `📦 Лот заказа: ${lotKk}кк — итоговая выдача будет больше (лот + бонусы).`,
-        );
-    }
 
     return [
         `ЗАХОДИ НА АНАРХИЮ ${anka}`,
         ...twinAccountWarningLines(),
         askNickInChatLine(),
-        ...bonusLines,
         '',
         '✅ выдача автоматическая - бот выдаст сам',
         '❗ Валюта только на Minecraft 1.21 (FunTime).',
@@ -67,12 +42,11 @@ export function buildGreetingText(ctx = null) {
 
 /**
  * Повторная оплата в том же чате — без полного приветствия, но с напоминанием про твинк.
- * @param {{ lotKk?: number, repeatEligible?: boolean }} [ctx]
+ * @param {{ lotKk?: number }} [ctx]
  */
 export function buildNewOrderTwinHint(ctx = null) {
     const anka = DELIVERY_ANARCHY;
     const lotKk = Number(ctx?.lotKk);
-    const repeatEligible = Boolean(ctx?.repeatEligible);
 
     const lines = [
         '✅ Оплата получена.',
@@ -86,9 +60,6 @@ export function buildNewOrderTwinHint(ctx = null) {
     ];
     if (lotKk > 0) {
         lines.push('', `📦 Лот: ${lotKk}кк`);
-    }
-    if (repeatEligible) {
-        lines.push(`🔁 Повтор за 24ч — ещё +${REPEAT_EXTRA_PCT}% к лоту.`);
     }
     return lines.join('\n');
 }
@@ -281,28 +252,22 @@ function fmtBonusKk(kk, pct = 0) {
  * @param {number} [bonus.lotKk]
  * @param {number} [bonus.payAmountKk]
  * @param {number} [bonus.wheelPct]
- * @param {number} [bonus.repeatPct]
  * @param {number} [bonus.bonusWheelKk]
- * @param {number} [bonus.bonusRepeatKk]
  * @param {number} [defaultLotKk]
  */
 function resolvePayoutParts(bonus, defaultLotKk = 0) {
     const lot = Number(bonus?.lotKk ?? defaultLotKk) || 0;
     const paid = Number(bonus?.payAmountKk ?? defaultLotKk) || 0;
     const wheelPct = bonus?.wheelPct ?? 0;
-    const repeatPct = bonus?.repeatPct ?? 0;
     const wheelKk =
         bonus?.bonusWheelKk ??
         (wheelPct > 0 ? Math.round((lot * wheelPct) / 100) : 0);
-    const repeatKk =
-        bonus?.bonusRepeatKk ??
-        (repeatPct > 0 ? Math.round((lot * repeatPct) / 100) : 0);
-    return { lot, paid, wheelKk, repeatKk, wheelPct, repeatPct };
+    return { lot, paid, wheelKk, wheelPct };
 }
 
 /** @param {object} bonus @param {number} [defaultLotKk] @param {{ totalLabel?: string }} [opts] */
 function buildPayoutBreakdownLines(bonus, defaultLotKk = 0, opts = null) {
-    const { lot, paid, wheelKk, repeatKk, wheelPct, repeatPct } = resolvePayoutParts(
+    const { lot, paid, wheelKk } = resolvePayoutParts(
         bonus,
         defaultLotKk,
     );
@@ -315,12 +280,6 @@ function buildPayoutBreakdownLines(bonus, defaultLotKk = 0, opts = null) {
         lines.push(`🎲 Случайный бонус: ${fmtBonusKk(wheelKk)}`);
     }
 
-    if (repeatKk > 0) {
-        lines.push(
-            `🔁 Бонус за повторную покупку (24ч): ${fmtBonusKk(repeatKk, repeatPct)}`,
-        );
-    }
-
     return lines;
 }
 
@@ -329,9 +288,7 @@ function buildPayoutBreakdownLines(bonus, defaultLotKk = 0, opts = null) {
  * @param {number} [bonus.lotKk]
  * @param {number} [bonus.payAmountKk]
  * @param {number} [bonus.wheelPct]
- * @param {number} [bonus.repeatPct]
  * @param {number} [bonus.bonusWheelKk]
- * @param {number} [bonus.bonusRepeatKk]
  */
 export function buildDeliveryOkHint(amountKk, bonus = null) {
     const breakdown = buildPayoutBreakdownLines(bonus, amountKk, { totalLabel: 'Итого выдано' });
@@ -349,11 +306,6 @@ export function buildDeliveryOkHint(amountKk, bonus = null) {
         '⭐ Оставь отзыв — это очень помогает!',
     );
     return lines.join('\n');
-}
-
-/** Через 10с после подтверждения сделки на PlayerOK */
-export function buildRepeatPurchaseHint() {
-    return `🎁 Повторная покупка в течение 24 ч — ещё +${REPEAT_EXTRA_PCT}% к валюте.`;
 }
 
 /**

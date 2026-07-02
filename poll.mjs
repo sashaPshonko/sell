@@ -19,9 +19,8 @@ import {
     ordersInChat,
     getBuyerSession,
 } from './state.mjs';
-import { recordBuyerDelivery } from './lib/pay-bonus.mjs';
 import {
-    scheduleRepeatPromoMessage,
+    schedulePostDeliveryMessages,
     flushScheduledChatMessages,
 } from './lib/scheduled-chat.mjs';
 import { drainBotEvents, dispatchCancelOrder } from './dispatch.mjs';
@@ -91,7 +90,7 @@ const pollMs = Number(process.env.POLL_MS || 15000);
 
 async function markPlayerokDone(client, state, dealId, chatId) {
     if (process.env.AUTO_MARK_PLAYEROK === '0') {
-        scheduleRepeatPromoMessage(state, chatId, dealId);
+        schedulePostDeliveryMessages(state, chatId, dealId);
         return;
     }
     try {
@@ -102,10 +101,10 @@ async function markPlayerokDone(client, state, dealId, chatId) {
             playerokStatusAt: new Date().toISOString(),
         });
         console.log(`[sell] PlayerOK SENT: ${dealId}`);
-        scheduleRepeatPromoMessage(state, chatId, dealId);
+        schedulePostDeliveryMessages(state, chatId, dealId);
     } catch (e) {
         console.warn(`[sell] PlayerOK: ${e.message}`);
-        scheduleRepeatPromoMessage(state, chatId, dealId);
+        schedulePostDeliveryMessages(state, chatId, dealId);
     }
 }
 
@@ -219,7 +218,6 @@ async function handleBotEvents(client, state) {
                 setOrderPhase(state, ev.orderId, 'completed', {
                     gameDeliveryAt: new Date().toISOString(),
                 });
-                recordBuyerDelivery(state, order.buyerId);
                 void audit('delivery_ok', {
                     orderId: ev.orderId,
                     nick: order.nick,
@@ -234,9 +232,7 @@ async function handleBotEvents(client, state) {
                         lotKk: order.amountKk,
                         payAmountKk: payKk,
                         wheelPct: order.bonusWheelPct,
-                        repeatPct: order.bonusRepeatPct,
                         bonusWheelKk: order.bonusWheelKk,
-                        bonusRepeatKk: order.bonusRepeatKk,
                         totalPct: order.bonusTotalPct,
                     }),
                 );

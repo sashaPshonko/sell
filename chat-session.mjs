@@ -36,7 +36,7 @@ import {
 import { getQueuePosition } from './lib/delivery-queue.mjs';
 import { sendGreeting, sendChatMessage } from './chat.mjs';
 import { dispatchOrder, dispatchNickUpdate, dispatchCancelOrder } from './dispatch.mjs';
-import { applyOrderPayBonus, buyerEligibleForRepeatBonus } from './lib/pay-bonus.mjs';
+import { applyOrderPayBonus } from './lib/pay-bonus.mjs';
 import { isBuyerBanned } from './lib/banlist.mjs';
 import { cancelDealOnPlayerok } from './cancel.mjs';
 import { isBuyerOrderCancelBlocked } from './lib/order-cancel.mjs';
@@ -158,7 +158,6 @@ export async function ensureChatGreeting(client, state, chatId, messages, seller
     await sendGreeting(client, chatId, {
         orderId: firstDeal?.dealId,
         lotKk: firstDeal?.amountKk,
-        repeatEligible: buyerEligibleForRepeatBonus(state, firstDeal?.buyerId),
     });
     chat.greetingSent = true;
     chat.greetingAt = new Date().toISOString();
@@ -299,7 +298,6 @@ export async function sendTwinRemindersForNewOrders(client, state, chatId, newOr
                 chatId,
                 buildNewOrderTwinHint({
                     lotKk: order.amountKk,
-                    repeatEligible: buyerEligibleForRepeatBonus(state, order.buyerId),
                 }),
             );
             console.log(
@@ -641,9 +639,7 @@ function buildQueueStatusMessage(state, order, nick) {
             lotKk: order.amountKk,
             payAmountKk: order.payAmountKk,
             wheelPct: order.bonusWheelPct,
-            repeatPct: order.bonusRepeatPct,
             bonusWheelKk: order.bonusWheelKk,
-            bonusRepeatKk: order.bonusRepeatKk,
         });
     }
     if (q.inQueue && q.position > 1) {

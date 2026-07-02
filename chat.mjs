@@ -23,7 +23,7 @@ export async function sendChatMessage(client, chatId, text) {
 }
 
 /**
- * @param {{ orderId?: string, lotKk?: number, repeatEligible?: boolean }} [ctx]
+ * @param {{ orderId?: string, lotKk?: number }} [ctx]
  */
 export async function sendGreeting(client, chatId, ctx = null) {
     const orderId = ctx?.orderId ?? ctx;
@@ -31,7 +31,6 @@ export async function sendGreeting(client, chatId, ctx = null) {
         ctx && typeof ctx === 'object' && !Array.isArray(ctx)
             ? {
                   lotKk: ctx.lotKk,
-                  repeatEligible: ctx.repeatEligible,
               }
             : null;
     const text = buildGreetingText(greetingCtx);
