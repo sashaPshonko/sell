@@ -1,3 +1,6 @@
+import { readFileSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { SocksClient } from 'socks';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 
@@ -52,4 +55,25 @@ export function buildMcProxyConnect(proxyString) {
     };
 
     return { agent, connect };
+}
+
+const BOT_JSON_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', 'bot.json');
+
+/** Прокси из bot.json — не зависит от workerData оркестратора */
+export function readBotJsonProxy() {
+    try {
+        const arr = JSON.parse(readFileSync(BOT_JSON_PATH, 'utf-8'));
+        return String(arr[0]?.proxy ?? '').trim();
+    } catch {
+        return '';
+    }
+}
+
+export function maskProxyUrl(proxyString) {
+    try {
+        const url = new URL(String(proxyString));
+        return `${url.hostname}:${url.port}`;
+    } catch {
+        return '?';
+    }
 }

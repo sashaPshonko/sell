@@ -11,7 +11,7 @@ import {
     findClanIntruders,
 } from './lib/clan-members.mjs';
 import { createChatLogger } from './lib/chat-log.mjs';
-import { buildMcProxyConnect } from './lib/mc-proxy.mjs';
+import { buildMcProxyConnect, readBotJsonProxy, maskProxyUrl } from './lib/mc-proxy.mjs';
 import { audit } from '../lib/audit.mjs';
 
 // --- маркеры чата ---
@@ -616,11 +616,14 @@ async function connectBot() {
         };
 
         try {
-            const proxy = buildMcProxyConnect(config.proxy);
+            const proxyStr = readBotJsonProxy() || config.proxy;
+            const proxy = buildMcProxyConnect(proxyStr);
             if (proxy) {
                 botOpts.agent = proxy.agent;
                 botOpts.connect = proxy.connect;
-                logInfo('прокси из bot.json');
+                logInfo(`прокси ${maskProxyUrl(proxyStr)}`);
+            } else {
+                logInfo('прокси: нет — прямое подключение');
             }
         } catch (err) {
             connecting = false;

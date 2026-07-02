@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { startWsServer, enqueueBotEvent } from './lib/ws-server.mjs';
 import { createTelegramBot } from './lib/telegram.mjs';
 import { loadSettings } from './settings.mjs';
+import { maskProxyUrl } from './lib/mc-proxy.mjs';
 import { audit } from '../lib/audit.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -145,6 +146,11 @@ async function loadBotConfig() {
     botConfig = loaded.bot;
     cfg = loaded.settings;
     console.log(`[sellbot] бот: ${botConfig.username}, анархия ${botConfig.anarchy}`);
+    if (botConfig.proxy && botConfig.proxy !== 'off') {
+        console.log(`[sellbot] mc proxy: ${maskProxyUrl(botConfig.proxy)}`);
+    } else {
+        console.log('[sellbot] mc proxy: нет (прямое подключение)');
+    }
     if (cfg.mockDelivery) {
         console.log('[sellbot] mockDelivery в bot.json — без Minecraft');
     }
