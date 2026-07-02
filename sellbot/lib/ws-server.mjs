@@ -23,24 +23,7 @@ export function drainBotEvents() {
     return eventQueue.splice(0, eventQueue.length);
 }
 
-export function startWsServer(handlers = {}, port = 8790) {
-    if (wss) return wss;
-
-    wss = new WebSocketServer({ port });
-
-    wss.on('error', (err) => {
-        if (err.code === 'EADDRINUSE') {
-            console.error(
-                `[ws] порт ${port} занят — останови старый sellbot:\n` +
-                    `  kill $(lsof -t -i :${port})`,
-            );
-            process.exit(1);
-        }
-        throw err;
-    });
-
-    console.log(`[ws] sellbot ws://0.0.0.0:${port}`);
-
+function attachWsHandlers(handlers) {
     wss.on('connection', (ws) => {
         let role = null;
 
@@ -77,6 +60,35 @@ export function startWsServer(handlers = {}, port = 8790) {
             sellClients.delete(ws);
         });
     });
+}
 
-    return wss;
+/** @returns {Promise<WebSocketServer>} exit code 2 при EADDRINUSE */
+export function startWsServer(handlers = {}, port = 8790) {
+    if (wss) return Promise.resolve(wss);
+
+    return new Promise((resolve, reject) => {
+        const server = new WebSocketServer({ port });
+
+        server.once('listening', () => {
+            wss = server;
+            attachWsHandlers(handlers);
+            console.log(`[ws] sellbot ws://0.0.0.0:${port}`);
+            resolve(server);
+        });
+
+        server.once('error', (err) => {
+            if (err.code === 'EADDRINUSE') {
+                console.error(
+                    `[ws] порт ${port} занят — уже запущен sellbot:\n` +
+                        `  kill $(lsof -t -i :${port})\n` +
+                        `  или: bash kill.sh`,
+                );
+                const e = new Error(`EADDRINUSE:${port}`);
+                e.code = 'EADDRINUSE';
+                reject(e);
+                return;
+            }
+            reject(err);
+        });
+    });
 }

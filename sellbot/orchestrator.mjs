@@ -565,14 +565,21 @@ async function main() {
     });
     sendAlert = tg.sendAlert;
 
-    startWsServer(
-        {
-            onOrder: handleOrder,
-            onNickUpdate: handleNickUpdate,
-            onCancel: handleCancelOrder,
-        },
-        cfg.wsPort,
-    );
+    try {
+        await startWsServer(
+            {
+                onOrder: handleOrder,
+                onNickUpdate: handleNickUpdate,
+                onCancel: handleCancelOrder,
+            },
+            cfg.wsPort,
+        );
+    } catch (err) {
+        if (err.code === 'EADDRINUSE') {
+            process.exit(2);
+        }
+        throw err;
+    }
 
     console.log(
         '[sellbot] жду подключения sell и заказы (логи появятся при order / MOCK delivery_ok)',
