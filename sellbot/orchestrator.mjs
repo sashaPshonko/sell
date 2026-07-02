@@ -155,6 +155,7 @@ function workerDataPayload() {
         username: botConfig.username,
         password: botConfig.password,
         anarchy: botConfig.anarchy,
+        proxy: botConfig.proxy,
         deliveryMode: cfg.deliveryMode,
         clanInvestMultiplier: cfg.clanInvestMultiplier,
         clanPhaseTimeoutMs: cfg.clanPhaseTimeoutMs,

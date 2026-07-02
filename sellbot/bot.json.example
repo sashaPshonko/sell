@@ -20,6 +20,7 @@
     "deliverTimeoutMs": 600000,
     "telegramToken": "BOT_TOKEN_FROM_BOTFATHER",
     "telegramChatId": "123456789",
-    "telegramProxy": "off"
+    "telegramProxy": "off",
+    "proxy": "socks5://user:pass@host:50101"
   }
 ]

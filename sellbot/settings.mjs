@@ -86,6 +86,7 @@ export async function loadSettings(path = BOT_JSON) {
         password: entry.password,
         /** Анархия — только из sell/config.mjs (поле anarchy в bot.json не используется) */
         anarchy: DELIVERY_ANARCHY_NUM,
+        proxy: String(pick(entry, 'proxy', '')).trim(),
     };
 
     const settings = {

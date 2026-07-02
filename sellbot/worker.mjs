@@ -11,6 +11,7 @@ import {
     findClanIntruders,
 } from './lib/clan-members.mjs';
 import { createChatLogger } from './lib/chat-log.mjs';
+import { buildMcProxyConnect } from './lib/mc-proxy.mjs';
 import { audit } from '../lib/audit.mjs';
 
 // --- маркеры чата ---
@@ -52,6 +53,7 @@ const config = {
     balanceWaitMs: workerData.balanceWaitMs ?? 15_000,
     balanceCmdWaitMs: workerData.balanceCmdWaitMs ?? 2000,
     healthCheckObserveMs: workerData.healthCheckObserveMs ?? 8000,
+    proxy: workerData.proxy,
     afk: false,
     balance: null,
     /** как botMenu в 4narek: что ждём от следующего windowOpen */
@@ -604,14 +606,29 @@ async function connectBot() {
     logInfo('подключение…');
 
     return new Promise((resolve, reject) => {
-        const b = mineflayer.createBot({
+        const botOpts = {
             host: 'mc.funtime.su',
             port: 25565,
             username: config.username,
             password: config.password,
             version: '1.21.11',
             chatLengthLimit: 256,
-        });
+        };
+
+        try {
+            const proxy = buildMcProxyConnect(config.proxy);
+            if (proxy) {
+                botOpts.agent = proxy.agent;
+                botOpts.connect = proxy.connect;
+                logInfo('прокси из bot.json');
+            }
+        } catch (err) {
+            connecting = false;
+            reject(err);
+            return;
+        }
+
+        const b = mineflayer.createBot(botOpts);
 
         let settled = false;
         const timer = setTimeout(() => {
