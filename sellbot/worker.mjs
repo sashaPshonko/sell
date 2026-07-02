@@ -1087,6 +1087,20 @@ function cancelOrder(orderId) {
 
 logInfo('воркер (клан)');
 
+async function warmupOnStart() {
+    await sleep(2000);
+    if (delivering || currentOrder || deliverQueue.length || healthCheckActive) return;
+    try {
+        logInfo('авто-подключение…');
+        await connectBot();
+    } catch (err) {
+        logInfo(`авто-подключение: ${err.message}`);
+        process.exit(1);
+    }
+}
+
+void warmupOnStart();
+
 parentPort.on('message', (data) => {
     if (data?.type === 'health_check') void runHealthCheck();
     if (data?.type === 'deliver' && data.order) void addOrder(data.order);
