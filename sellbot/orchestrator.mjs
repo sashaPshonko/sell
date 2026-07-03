@@ -590,13 +590,24 @@ async function main() {
 
     startHealthCheckLoop();
 
-    process.on('SIGINT', async () => {
+    const shutdown = async (signal) => {
         if (isShuttingDown) return;
         isShuttingDown = true;
-        console.log('\n[sellbot] выключение…');
-        await stopWorker();
-        process.exit(0);
-    });
+        console.log(`\n[sellbot] выключение (${signal})…`);
+        const forceExit = setTimeout(() => {
+            console.warn('[sellbot] таймаут выключения — exit 1');
+            process.exit(1);
+        }, 8000);
+        try {
+            await stopWorker();
+        } finally {
+            clearTimeout(forceExit);
+            process.exit(0);
+        }
+    };
+
+    process.on('SIGINT', () => void shutdown('SIGINT'));
+    process.on('SIGTERM', () => void shutdown('SIGTERM'));
 }
 
 main().catch(async (e) => {

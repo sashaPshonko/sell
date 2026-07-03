@@ -17,6 +17,9 @@ kill $(lsof -t -i :8790) 2>/dev/null || true
 killpids '' 'scripts/run/sellbot.sh' 'run/sellbot.sh' 'scripts/run/sell.sh' 'run/sell.sh'
 sleep 1
 killpids '' orchestrator.mjs poll.mjs
+sleep 2
+killpids -INT orchestrator.mjs poll.mjs
+sleep 2
 
 if [ -f .poll.pid ]; then
     kill "$(cat .poll.pid)" 2>/dev/null || true
