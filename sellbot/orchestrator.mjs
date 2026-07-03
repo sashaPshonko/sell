@@ -1,12 +1,13 @@
 import { Worker } from 'worker_threads';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { startWsServer, enqueueBotEvent } from './lib/ws-server.mjs';
+import { startWsServer, stopWsServer, enqueueBotEvent } from './lib/ws-server.mjs';
 import { createTelegramBot } from './lib/telegram.mjs';
 import { loadSettings } from './settings.mjs';
 import { maskProxyUrl } from './lib/mc-proxy.mjs';
 import { audit } from '../lib/audit.mjs';
-import { acquirePidLock } from '../lib/pid-lock.mjs';
+import { acquirePidLock, releasePidLock } from '../lib/pid-lock.mjs';
+import { existsSync, readFileSync } from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ORCHESTRATOR_LOCK = join(__dirname, '.orchestrator.pid');
@@ -22,6 +23,10 @@ let healthCheckPaused = false;
 let healthCheckRunning = false;
 /** true пока воркер реально на проверке (до health_check ответа) */
 let healthInProgress = false;
+/** @type {import('ws').WebSocketServer | null} */
+let wssInstance = null;
+/** @type {import('node-telegram-bot-api') | null} */
+let telegramBot = null;
 /** orderId → последний заказ (для nick_update) */
 const activeOrders = new Map();
 /** Успешно выданные — не принимать повторно (cancel/retry не блокирует) */
@@ -141,6 +146,35 @@ function scheduleDeliver(order) {
     };
     // deliver → ensureBot → ready; ждать ready до deliver нельзя (deadlock)
     tryDeliver();
+}
+
+/** Мгновенный exit на kill — sellbot.sh поднимет снова через 5s */
+function hardShutdown(signal) {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    console.log(`\n[sellbot] ${signal} — завершение`);
+    workerReady = false;
+    try {
+        workerEntry?.worker?.terminate();
+    } catch { /* */ }
+    workerEntry = null;
+    try {
+        stopWsServer();
+    } catch { /* */ }
+    wssInstance = null;
+    try {
+        telegramBot?.stopPolling();
+    } catch { /* */ }
+    telegramBot = null;
+    try {
+        if (
+            existsSync(ORCHESTRATOR_LOCK) &&
+            readFileSync(ORCHESTRATOR_LOCK, 'utf8') === String(process.pid)
+        ) {
+            releasePidLock(ORCHESTRATOR_LOCK);
+        }
+    } catch { /* */ }
+    process.exit(0);
 }
 
 async function loadBotConfig() {
@@ -526,6 +560,10 @@ function handleNickUpdate(orderId, nick) {
 
 async function main() {
     acquirePidLock(ORCHESTRATOR_LOCK, 'sellbot', { processPattern: 'orchestrator.mjs' });
+    process.on('SIGINT', () => hardShutdown('SIGINT'));
+    process.on('SIGTERM', () => hardShutdown('SIGTERM'));
+    process.on('SIGHUP', () => hardShutdown('SIGHUP'));
+
     await loadBotConfig();
 
     if (isMockDelivery()) {
@@ -535,7 +573,7 @@ async function main() {
     }
 
     try {
-        await startWsServer(
+        wssInstance = await startWsServer(
             {
                 onOrder: handleOrder,
                 onNickUpdate: handleNickUpdate,
@@ -583,31 +621,13 @@ async function main() {
         },
     });
     sendAlert = tg.sendAlert;
+    telegramBot = tg.bot ?? null;
 
     console.log(
         '[sellbot] жду подключения sell и заказы (логи появятся при order / MOCK delivery_ok)',
     );
 
     startHealthCheckLoop();
-
-    const shutdown = async (signal) => {
-        if (isShuttingDown) return;
-        isShuttingDown = true;
-        console.log(`\n[sellbot] выключение (${signal})…`);
-        const forceExit = setTimeout(() => {
-            console.warn('[sellbot] таймаут выключения — exit 1');
-            process.exit(1);
-        }, 8000);
-        try {
-            await stopWorker();
-        } finally {
-            clearTimeout(forceExit);
-            process.exit(0);
-        }
-    };
-
-    process.on('SIGINT', () => void shutdown('SIGINT'));
-    process.on('SIGTERM', () => void shutdown('SIGTERM'));
 }
 
 main().catch(async (e) => {

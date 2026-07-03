@@ -92,3 +92,15 @@ export function startWsServer(handlers = {}, port = 8790) {
         });
     });
 }
+
+export function stopWsServer() {
+    if (!wss) return;
+    try {
+        for (const ws of sellClients) {
+            try { ws.close(); } catch { /* */ }
+        }
+        sellClients.clear();
+        wss.close();
+    } catch { /* */ }
+    wss = undefined;
+}
