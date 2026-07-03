@@ -525,7 +525,7 @@ function handleNickUpdate(orderId, nick) {
 }
 
 async function main() {
-    acquirePidLock(ORCHESTRATOR_LOCK, 'sellbot');
+    acquirePidLock(ORCHESTRATOR_LOCK, 'sellbot', { processPattern: 'orchestrator.mjs' });
     await loadBotConfig();
 
     if (isMockDelivery()) {

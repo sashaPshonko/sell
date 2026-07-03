@@ -90,7 +90,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const POLL_LOCK = join(__dirname, '.poll.pid');
 
 loadEnv();
-acquirePidLock(POLL_LOCK, 'sell');
+acquirePidLock(POLL_LOCK, 'sell', { processPattern: 'poll.mjs' });
 
 const once = process.argv.includes('--once');
 const pollMs = Number(process.env.POLL_MS || 15000);
