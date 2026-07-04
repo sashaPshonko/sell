@@ -18,6 +18,7 @@ import {
     configurationTransferAgeMs,
 } from './lib/configuration-transfer.mjs';
 import { isIgnorableProtocolNoise } from './lib/protocol-noise.mjs';
+import { setupChatSafeGuard } from './lib/chat-safe.mjs';
 import { audit } from '../lib/audit.mjs';
 
 // --- маркеры чата ---
@@ -106,6 +107,23 @@ let shift2FallbackAt = 0;
 
 const { logInfo, logOk, logWarn, logServerMessage } = createChatLogger(config.username);
 const configTransferLog = { info: logInfo, ok: logOk, warn: logWarn };
+
+process.on('uncaughtException', (err) => {
+    if (isIgnorableProtocolNoise(err)) {
+        logInfo(`uncaught protocol noise: ${err.message}`);
+        return;
+    }
+    console.error(`[${config.username}] uncaught:`, err);
+    process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+    if (isIgnorableProtocolNoise(reason)) {
+        logInfo(`unhandled rejection (noise): ${reason?.message ?? reason}`);
+        return;
+    }
+    console.error(`[${config.username}] unhandled rejection:`, reason);
+});
 
 function post(name, extra = {}) {
     parentPort.postMessage({ name, ...extra });
@@ -630,10 +648,11 @@ async function purgeIntrudersFromClan(deadline, extraAllow = []) {
 function wireBot(b) {
     setupConfigurationTransferFix(b, configTransferLog);
 
-    b.on('message', (msg) => {
-        const t = msg.toString();
-        logServerMessage(t);
-        handleChatMessage(t);
+    b.once('inject_allowed', () => {
+        setupChatSafeGuard(b, (text) => {
+            logServerMessage(text);
+            handleChatMessage(text);
+        });
     });
 
     b.on('windowOpen', () => void onWindowOpen());
