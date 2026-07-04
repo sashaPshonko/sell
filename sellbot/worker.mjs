@@ -17,6 +17,7 @@ import {
     isInConfigurationTransfer,
     configurationTransferAgeMs,
 } from './lib/configuration-transfer.mjs';
+import { isIgnorableProtocolNoise } from './lib/protocol-noise.mjs';
 import { audit } from '../lib/audit.mjs';
 
 // --- маркеры чата ---
@@ -154,7 +155,7 @@ function isOnAnarchyScoreboard(b) {
     return false;
 }
 
-/** Заход на анархию с ожиданием configuration transfer (как 4NAREK). */
+/** Заход на анархию с ожиданием configuration transfer (как 4NAREK, без паузы под АХ). */
 async function joinAnarchy(b, { rejoin = false } = {}) {
     const client = b ?? bot;
     if (!client?.chat) return;
@@ -187,10 +188,8 @@ async function joinAnarchy(b, { rejoin = false } = {}) {
         }
     }
 
-    const waitUntil = config.timeJoinAnarchy + 11_000;
-    if (Date.now() < waitUntil) {
-        logInfo(`joinAnarchy → пауза ${Math.ceil((waitUntil - Date.now()) / 1000)}с`);
-        while (Date.now() < waitUntil) await sleep(100);
+    while (isInConfigurationTransfer(client) && configurationTransferAgeMs() < 45_000) {
+        await sleep(100);
     }
     client.physicsEnabled = true;
 }
@@ -663,7 +662,21 @@ function wireBot(b) {
         process.exit(1);
     });
 
-    b.on('error', () => process.exit(1));
+    b.on('error', (err) => {
+        if (isIgnorableProtocolNoise(err)) {
+            logInfo(`protocol noise: ${err.message}`);
+            return;
+        }
+        process.exit(1);
+    });
+
+    b._client?.on('error', (err) => {
+        if (isIgnorableProtocolNoise(err)) {
+            logInfo(`protocol noise: ${err.message}`);
+            return;
+        }
+        process.exit(1);
+    });
 }
 
 async function connectBot() {

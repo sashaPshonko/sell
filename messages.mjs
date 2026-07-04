@@ -189,10 +189,12 @@ export function buildDeliveryFailHint(reason) {
             break;
         case 'insufficient_funds':
             lines.push(
-                '📋 Причина: на балансе бота не хватило монет для выдачи через клан.',
-                '⏳ Пополним баланс и выдадим — напиши /nick чуть позже.',
+                '📋 Причина: на балансе бота временно не хватило монет.',
+                '⏳ Пополним баланс и выдадим автоматически — ник менять не нужно.',
+                '',
+                `🎮 Оставайся на анархии ${anka} и в сети.`,
             );
-            break;
+            return lines.join('\n');
         case 'player_offline':
         case 'offline':
             lines.push(

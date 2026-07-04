@@ -419,15 +419,13 @@ async function handleBotEvents(client, state) {
                     );
                     continue;
                 }
-                markDeliveryPaused(
-                    state,
-                    ev.orderId,
-                    'awaiting_nick',
-                    clanDeliveryRetryReset({
-                        lastError: 'insufficient_funds',
-                        nick: getBuyerSession(state, chatId, buyerId).nick || order.nick,
-                    }),
-                );
+                const nick =
+                    getBuyerSession(state, chatId, buyerId).nick || order.nick;
+                setOrderPhase(state, ev.orderId, 'ws_pending', {
+                    lastError: 'insufficient_funds',
+                    pausedUntilNick: false,
+                    ...clanDeliveryRetryReset({ nick }),
+                });
                 void dispatchCancelOrder(ev.orderId);
                 await sendDeliveryHintOnce(
                     client,

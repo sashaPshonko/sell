@@ -7,6 +7,7 @@ import { loadSettings } from './settings.mjs';
 import { maskProxyUrl } from './lib/mc-proxy.mjs';
 import { audit } from '../lib/audit.mjs';
 import { acquirePidLock, releasePidLock } from '../lib/pid-lock.mjs';
+import { isIgnorableProtocolNoise } from './lib/protocol-noise.mjs';
 import { existsSync, readFileSync } from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -455,6 +456,10 @@ async function startWorker(reason = 'order') {
     });
 
     worker.on('error', async (err) => {
+        if (isIgnorableProtocolNoise(err)) {
+            console.warn('[sellbot] protocol noise:', err.message);
+            return;
+        }
         console.error('[sellbot] worker error:', err);
         await sendAlert(`❌ ${botConfig.username}: ${err.message}`);
         workerReady = false;
