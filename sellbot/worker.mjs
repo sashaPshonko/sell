@@ -12,6 +12,11 @@ import {
 } from './lib/clan-members.mjs';
 import { createChatLogger } from './lib/chat-log.mjs';
 import { buildMcProxyConnect, readBotJsonProxy, maskProxyUrl } from './lib/mc-proxy.mjs';
+import {
+    setupConfigurationTransferFix,
+    isInConfigurationTransfer,
+    configurationTransferAgeMs,
+} from './lib/configuration-transfer.mjs';
 import { audit } from '../lib/audit.mjs';
 
 // --- маркеры чата ---
@@ -58,6 +63,8 @@ const config = {
     balance: null,
     /** как botMenu в 4narek: что ждём от следующего windowOpen */
     menu: null,
+    /** timestamp входа на анархию (scoreboard) */
+    timeJoinAnarchy: 0,
 };
 
 const anarchyCmd = `/an${config.anarchy}`;
@@ -96,7 +103,8 @@ let kickDone = false;
 /** после shift×1 окно прав часто без windowOpen — когда делать shift×2 */
 let shift2FallbackAt = 0;
 
-const { logInfo, logOk, logServerMessage } = createChatLogger(config.username);
+const { logInfo, logOk, logWarn, logServerMessage } = createChatLogger(config.username);
+const configTransferLog = { info: logInfo, ok: logOk, warn: logWarn };
 
 function post(name, extra = {}) {
     parentPort.postMessage({ name, ...extra });
@@ -130,6 +138,61 @@ async function rnd(min, max) {
 
 async function rndClick() {
     await rnd(config.clanClickDelayMinMs, config.clanClickDelayMaxMs);
+}
+
+function markAnarchyJoined() {
+    if (config.timeJoinAnarchy) return;
+    config.timeJoinAnarchy = Date.now();
+    logOk(`анархия ${config.anarchy} — вход`);
+    logOk(`на анархии an${config.anarchy} → success`);
+}
+
+function isOnAnarchyScoreboard(b) {
+    for (const sb of Object.values(b?.scoreboards ?? {})) {
+        if (JSON.stringify(sb).includes(`${config.anarchy}`)) return true;
+    }
+    return false;
+}
+
+/** Заход на анархию с ожиданием configuration transfer (как 4NAREK). */
+async function joinAnarchy(b, { rejoin = false } = {}) {
+    const client = b ?? bot;
+    if (!client?.chat) return;
+
+    if (rejoin) config.timeJoinAnarchy = 0;
+
+    while (!config.timeJoinAnarchy) {
+        if (isInConfigurationTransfer(client)) {
+            const ageSec = Math.ceil(configurationTransferAgeMs() / 1000);
+            logInfo(`transfer → в configuration ${ageSec}с, жду…`);
+            if (configurationTransferAgeMs() > 45_000) {
+                logWarn('transfer → configuration timeout 45с');
+                throw new Error('configuration transfer timeout');
+            }
+            await sleep(100);
+            continue;
+        }
+        if (isOnAnarchyScoreboard(client)) {
+            markAnarchyJoined();
+            break;
+        }
+        await rnd(1000, 3000);
+        logInfo(`${anarchyCmd}… (жду входа)`);
+        client.physicsEnabled = false;
+        client.chat(anarchyCmd);
+        await rnd(3000, 5000);
+        if (isOnAnarchyScoreboard(client)) {
+            markAnarchyJoined();
+            break;
+        }
+    }
+
+    const waitUntil = config.timeJoinAnarchy + 11_000;
+    if (Date.now() < waitUntil) {
+        logInfo(`joinAnarchy → пауза ${Math.ceil((waitUntil - Date.now()) / 1000)}с`);
+        while (Date.now() < waitUntil) await sleep(100);
+    }
+    client.physicsEnabled = true;
 }
 
 function plain(text) {
@@ -566,17 +629,25 @@ async function purgeIntrudersFromClan(deadline, extraAllow = []) {
 // ========== бот ==========
 
 function wireBot(b) {
+    setupConfigurationTransferFix(b, configTransferLog);
+
     b.on('message', (msg) => {
         const t = msg.toString();
         logServerMessage(t);
         handleChatMessage(t);
     });
 
-    b.on('resourcePack', (_u, hash) => {
-        b._client?.write('resource_pack_receive', { uuid: hash.ascii, result: 0 });
+    b.on('windowOpen', () => void onWindowOpen());
+
+    b.on('scoreboardCreated', (scoreboard) => {
+        if (JSON.stringify(scoreboard).includes(`${config.anarchy}`)) {
+            markAnarchyJoined();
+        }
     });
 
-    b.on('windowOpen', () => void onWindowOpen());
+    b.on('spawn', () => {
+        b.physicsEnabled = true;
+    });
 
     b.on('kicked', (reason) => {
         post('kicked', { reason: JSON.stringify(reason) });
@@ -655,12 +726,11 @@ async function connectBot() {
 
         b.once('spawn', async () => {
             try {
-                logInfo('spawn → /l → /an');
-                await sleep(1500);
+                logInfo('spawn → /l → joinAnarchy');
+                await rnd(1000, 3000);
                 b.chat(`/l ${config.password}`);
-                await sleep(2000);
-                b.chat(anarchyCmd);
-                await sleep(11_000);
+                config.timeJoinAnarchy = 0;
+                await joinAnarchy(b);
 
                 bot = b;
                 ready = true;
@@ -966,8 +1036,8 @@ async function startDeliver(order) {
     try {
         await closeWindow();
         await antiAfkIfNeeded(bot, config, logInfo);
-        bot.chat(anarchyCmd);
-        await sleep(config.anarchyRejoinWaitMs);
+        config.timeJoinAnarchy = 0;
+        await joinAnarchy(bot, { rejoin: true });
 
         await deliverClan();
     } catch (e) {

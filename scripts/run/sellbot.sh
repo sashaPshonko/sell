@@ -40,10 +40,8 @@ while true; do
     code=$?
     CHILD=""
     if [ "$code" -eq 2 ]; then
-        echo "[sellbot] exit 2 (дубль) — чищу orchestrator и retry через 3s"
-        pkill -9 -f 'orchestrator.mjs' 2>/dev/null || true
-        rm -f .orchestrator.pid
-        sleep 3
+        echo "[sellbot] exit 2 — занят lock, retry через 5s"
+        sleep 5
         continue
     fi
     echo "[sellbot] orchestrator exit $code — перезапуск через 5s"
