@@ -29,6 +29,7 @@ const CLAN_WITHDRAW_MID = ' снял $';
 const CLAN_WITHDRAW_TAIL = ' из казны';
 const CLAN_OFFLINE_HEAD = '[⚔] Ошибка: Игрок';
 const CLAN_OFFLINE_TAIL = ' не в сети!';
+const CLAN_OTHER_CLAN_MARKER = 'состоит в другом клане';
 const AFK_MARKER = 'Данная команда недоступна в режиме AFK';
 const CAPTCHA_MARKER = 'BotFilter >> Введите номер с картинки в чат';
 
@@ -90,6 +91,7 @@ let playerJoined = false;
 let moneyInvested = false;
 let playerWithdrew = false;
 let playerOffline = false;
+let playerInOtherClan = false;
 /** сколько должен снять игрок; ждём полную сумму, не первый withdraw */
 let expectedWithdrawAmount = 0;
 let withdrawnTotal = 0;
@@ -246,6 +248,7 @@ function resetDeliveryFlags() {
     moneyInvested = false;
     playerWithdrew = false;
     playerOffline = false;
+    playerInOtherClan = false;
     clanJoinedForCurrent = false;
     expectedWithdrawAmount = 0;
     withdrawnTotal = 0;
@@ -302,6 +305,12 @@ function handleChatMessage(raw) {
     if (text.includes(AFK_MARKER)) {
         config.afk = true;
         logInfo('сервер: режим AFK');
+        return;
+    }
+
+    if (delivering && text.includes(CLAN_OTHER_CLAN_MARKER)) {
+        playerInOtherClan = true;
+        logInfo(`в другом клане: ${currentOrder?.nick || '?'}`);
         return;
     }
 
@@ -844,6 +853,7 @@ async function deliverClan() {
     resetDeliveryFlags();
     let end = phaseEnd();
     while (active() && Date.now() < orderEnd && Date.now() < end && !inviteSent) {
+        if (playerInOtherClan) { endDelivery('player_in_other_clan'); return; }
         if (playerOffline) { endDelivery('offline'); return; }
         await antiAfkIfNeeded(bot, config, logInfo);
         if (config.afk) { await sleep(config.clanLoopWaitMs); continue; }
@@ -1026,6 +1036,8 @@ function endDelivery(result, queued) {
         post('delivery_ok', { orderId });
     } else if (result === 'offline') {
         post('player_offline', { orderId });
+    } else if (result === 'player_in_other_clan') {
+        post('player_in_other_clan', { orderId, nick });
     } else if (result === 'insufficient_funds') {
         post('insufficient_funds', { orderId });
     } else if (result === 'banned') {

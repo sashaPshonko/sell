@@ -391,6 +391,7 @@ async function startWorker(reason = 'order') {
                 delivery_stalled: 'delivery_stalled',
                 invalid_nick: 'invalid_nick',
                 player_offline: 'player_offline',
+                player_in_other_clan: 'player_in_other_clan',
                 insufficient_funds: 'insufficient_funds',
                 clan_invite_sent: 'clan_invite_sent',
                 clan_invested: 'clan_invested',
@@ -430,6 +431,11 @@ async function startWorker(reason = 'order') {
                     );
                 } else if (evType === 'player_offline') {
                     await sendAlert(`⚠️ Оффлайн: ${short}… — пусть шлёт /nick на анархии`);
+                } else if (evType === 'player_in_other_clan') {
+                    await sendAlert(
+                        `⚠️ ${order?.nick || '?'}: уже в другом клане (заказ ${short}…)\n` +
+                            'Пусть выйдет из клана (/clan leave) и снова /nick',
+                    );
                 } else if (evType === 'insufficient_funds') {
                     await sendAlert(
                         `💸 ${botConfig.username}: недостаточно денег в казне/балансе (заказ ${short}…)\n` +

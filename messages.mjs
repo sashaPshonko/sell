@@ -203,6 +203,14 @@ export function buildDeliveryFailHint(reason) {
                 `🎮 Зайди на анархию ${anka} и будь в сети.`,
             );
             break;
+        case 'player_in_other_clan':
+            lines.push(
+                '📋 Причина: твой ник уже состоит в другом клане на сервере.',
+                '',
+                '🎮 Выйди из текущего клана в игре (/clan leave),',
+                `зайди на анархию ${anka} и будь в сети.`,
+            );
+            break;
         default:
             return buildRetryNickHint();
     }

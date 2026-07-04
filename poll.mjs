@@ -412,6 +412,31 @@ async function handleBotEvents(client, state) {
                     getOrder(state, ev.orderId) || order,
                     () => buildDeliveryFailHint('player_offline'),
                 );
+            } else if (ev.type === 'player_in_other_clan') {
+                if (!shouldProcessBotRetryEvent(order)) {
+                    console.log(
+                        `[sell] other_clan ${ev.orderId.slice(0, 8)}… игнор (заказ уже закрыт)`,
+                    );
+                    continue;
+                }
+                markDeliveryPaused(
+                    state,
+                    ev.orderId,
+                    'awaiting_nick',
+                    clanDeliveryRetryReset({
+                        lastError: 'player_in_other_clan',
+                        nick: getBuyerSession(state, chatId, buyerId).nick || order.nick,
+                    }),
+                );
+                void dispatchCancelOrder(ev.orderId);
+                await sendDeliveryHintOnce(
+                    client,
+                    state,
+                    chatId,
+                    ev.orderId,
+                    getOrder(state, ev.orderId) || order,
+                    () => buildDeliveryFailHint('player_in_other_clan'),
+                );
             } else if (ev.type === 'insufficient_funds') {
                 if (!shouldProcessBotRetryEvent(order)) {
                     console.log(
