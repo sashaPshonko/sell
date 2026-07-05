@@ -37,6 +37,21 @@ export function createClient() {
         'x-timezone-offset': process.env.TIMEZONE_OFFSET || '-300',
     };
 
+    function gqlErrorMessage(json, statusText) {
+        const err = json?.errors?.[0];
+        if (!err) return statusText;
+        if (typeof err.message === 'string') return err.message;
+        return String(err.message ?? statusText);
+    }
+
+    function isPersistedQueryNotFound(json) {
+        return json?.errors?.some((e) => {
+            const msg = String(e?.message ?? '');
+            const code = e?.extensions?.code ?? e?.extensions?.exception?.code;
+            return msg.includes('PersistedQueryNotFound') || code === 'PERSISTED_QUERY_NOT_FOUND';
+        });
+    }
+
     async function request(opts) {
         const headers = {
             ...baseHeaders,
@@ -71,9 +86,31 @@ export function createClient() {
         } catch {
             throw new Error(`PlayerOK: не JSON (${res.status}): ${text.slice(0, 200)}`);
         }
+
+        if (
+            opts.persisted &&
+            opts.fallbackBody &&
+            isPersistedQueryNotFound(json)
+        ) {
+            const retryRes = await fetch(GQL_URL, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(opts.fallbackBody),
+            });
+            const retryText = await retryRes.text();
+            try {
+                json = JSON.parse(retryText);
+            } catch {
+                throw new Error(`PlayerOK: не JSON (${retryRes.status}): ${retryText.slice(0, 200)}`);
+            }
+            if (!retryRes.ok || json.errors?.length) {
+                throw new Error(`PlayerOK GraphQL: ${gqlErrorMessage(json, retryRes.statusText)}`);
+            }
+            return json.data;
+        }
+
         if (!res.ok || json.errors?.length) {
-            const err = json.errors?.[0]?.message || res.statusText;
-            throw new Error(`PlayerOK GraphQL: ${err}`);
+            throw new Error(`PlayerOK GraphQL: ${gqlErrorMessage(json, res.statusText)}`);
         }
         return json.data;
     }
@@ -127,12 +164,18 @@ export function createClient() {
                 hasSupportAccess: process.env.CHAT_HAS_SUPPORT_ACCESS === '1',
                 showForbiddenImage: process.env.CHAT_SHOW_FORBIDDEN_IMAGE !== '0',
             };
+            const query = await loadQuery('CHAT_MESSAGES_QUERY_FILE', './queries/chatMessages.graphql');
+            const fallbackBody = { operationName: 'chatMessages', variables, query };
+            const reqOpts = {
+                gqlOp: 'chatMessages',
+                gqlPath: '/chats/[id]',
+                referer: `https://playerok.com/chats/${chatId}`,
+                fallbackBody,
+            };
 
             if (hash) {
                 return request({
-                    gqlOp: 'chatMessages',
-                    gqlPath: '/chats/[id]',
-                    referer: `https://playerok.com/chats/${chatId}`,
+                    ...reqOpts,
                     persisted: {
                         operationName: 'chatMessages',
                         hash,
@@ -141,11 +184,9 @@ export function createClient() {
                 });
             }
 
-            const query = await loadQuery('CHAT_MESSAGES_QUERY_FILE', './queries/chatMessages.graphql');
             return request({
-                gqlOp: 'chatMessages',
-                gqlPath: '/chats/[id]',
-                body: { operationName: 'chatMessages', variables, query },
+                ...reqOpts,
+                body: fallbackBody,
             });
         },
 

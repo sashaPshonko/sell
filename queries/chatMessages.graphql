@@ -1,8 +1,18 @@
 # Если CHAT_MESSAGES_HASH в .env пустой — используется этот запрос (POST).
 # При ошибке «Cannot query field…» замени файл телом из DevTools (Payload → query).
 
-query chatMessages($pagination: PaginationInput!, $filter: ChatMessageFilter!) {
-  chatMessages(pagination: $pagination, filter: $filter) {
+query chatMessages(
+  $pagination: PaginationInput!
+  $filter: ChatMessageFilter!
+  $hasSupportAccess: Boolean
+  $showForbiddenImage: Boolean
+) {
+  chatMessages(
+    pagination: $pagination
+    filter: $filter
+    hasSupportAccess: $hasSupportAccess
+    showForbiddenImage: $showForbiddenImage
+  ) {
     edges {
       node {
         id
