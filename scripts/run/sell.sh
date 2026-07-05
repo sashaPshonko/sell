@@ -18,5 +18,9 @@ while true; do
         echo "[sell] poll уже запущен (pid lock) — выход"
         exit 1
     fi
+    if [ "$code" -eq 3 ]; then
+        echo "[sell] фatal: auth/query — wrapper останавливается (не перезапускаю)"
+        exit 1
+    fi
     sleep 5
 done

@@ -10,6 +10,7 @@ killpids() {
 }
 
 echo "[stop] останавливаю sell + sellbot…"
+echo "[stop] pkill poll.mjs не хватит — нужен scripts/run/sell.sh (while-обёртка перезапускает poll)"
 
 kill $(lsof -t -i :8790) 2>/dev/null || true
 

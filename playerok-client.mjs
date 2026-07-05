@@ -1,5 +1,4 @@
 import { readFile } from 'fs/promises';
-import { createHash } from 'crypto';
 
 const GQL_URL = 'https://playerok.com/graphql';
 
@@ -45,11 +44,16 @@ export function createClient() {
         return String(err.message ?? statusText);
     }
 
-    function isPersistedQueryNotFound(json) {
+    function needsChatMessagesPostFallback(json) {
         return json?.errors?.some((e) => {
             const msg = String(e?.message ?? '');
             const code = e?.extensions?.code ?? e?.extensions?.exception?.code;
-            return msg.includes('PersistedQueryNotFound') || code === 'PERSISTED_QUERY_NOT_FOUND';
+            return (
+                msg.includes('PersistedQueryNotFound') ||
+                code === 'PERSISTED_QUERY_NOT_FOUND' ||
+                msg.includes('provided sha does not match query') ||
+                msg.includes('Unknown type "PaginationInput"')
+            );
         });
     }
 
@@ -88,26 +92,11 @@ export function createClient() {
             throw new Error(`PlayerOK: не JSON (${res.status}): ${text.slice(0, 200)}`);
         }
 
-        if (
-            opts.persisted &&
-            opts.fallbackBody &&
-            isPersistedQueryNotFound(json)
-        ) {
-            const apqBody = {
-                ...opts.fallbackBody,
-                extensions: {
-                    persistedQuery: {
-                        version: 1,
-                        sha256Hash:
-                            opts.persisted.hash ||
-                            sha256Query(opts.fallbackBody.query),
-                    },
-                },
-            };
+        if (opts.persisted && opts.fallbackBody && needsChatMessagesPostFallback(json)) {
             const retryRes = await fetch(GQL_URL, {
                 method: 'POST',
                 headers,
-                body: JSON.stringify(apqBody),
+                body: JSON.stringify(opts.fallbackBody),
             });
             const retryText = await retryRes.text();
             try {
@@ -174,24 +163,28 @@ export function createClient() {
                 filter: { chatId },
             };
             const query = await loadQuery('CHAT_MESSAGES_QUERY_FILE', './queries/chatMessages.graphql');
-            const hash =
-                process.env.CHAT_MESSAGES_HASH?.trim() || sha256Query(query);
-            const fallbackBody = { operationName: 'chatMessages', variables, query };
+            const body = { operationName: 'chatMessages', variables, query };
             const reqOpts = {
                 gqlOp: 'chatMessages',
                 gqlPath: '/chats/[id]',
                 referer: `https://playerok.com/chats/${chatId}`,
-                fallbackBody,
+                fallbackBody: body,
             };
 
-            return request({
-                ...reqOpts,
-                persisted: {
-                    operationName: 'chatMessages',
-                    hash,
-                    variables,
-                },
-            });
+            // Persisted GET (быстрее), при ошибке — POST с query из файла.
+            const hash = process.env.CHAT_MESSAGES_HASH?.trim();
+            if (hash) {
+                return request({
+                    ...reqOpts,
+                    persisted: {
+                        operationName: 'chatMessages',
+                        hash,
+                        variables,
+                    },
+                });
+            }
+
+            return request({ ...reqOpts, body });
         },
 
         /** Лоты продавца (профиль → products). Hash из DevTools: operationName=items */
@@ -279,8 +272,4 @@ async function loadQuery(envKey, defaultPath) {
             `Нет файла запроса ${path}. Сними из DevTools (Copy → Copy as cURL / Payload) или задай ${envKey} в .env`,
         );
     }
-}
-
-function sha256Query(query) {
-    return createHash('sha256').update(query).digest('hex');
 }
