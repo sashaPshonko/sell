@@ -1,18 +1,6 @@
-# Если CHAT_MESSAGES_HASH в .env пустой — используется этот запрос (POST).
-# При ошибке «Cannot query field…» замени файл телом из DevTools (Payload → query).
-
-query chatMessages(
-  $pagination: PaginationInput!
-  $filter: ChatMessageFilter!
-  $hasSupportAccess: Boolean
-  $showForbiddenImage: Boolean
-) {
-  chatMessages(
-    pagination: $pagination
-    filter: $filter
-    hasSupportAccess: $hasSupportAccess
-    showForbiddenImage: $showForbiddenImage
-  ) {
+# POST-fallback и APQ-регистрация. Тип Pagination! (не PaginationInput).
+query chatMessages($pagination: Pagination!, $filter: ChatMessageFilter!) {
+  chatMessages(pagination: $pagination, filter: $filter) {
     edges {
       node {
         id

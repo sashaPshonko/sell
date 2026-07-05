@@ -1,4 +1,5 @@
 import { readFile } from 'fs/promises';
+import { createHash } from 'crypto';
 
 const GQL_URL = 'https://playerok.com/graphql';
 
@@ -92,10 +93,21 @@ export function createClient() {
             opts.fallbackBody &&
             isPersistedQueryNotFound(json)
         ) {
+            const apqBody = {
+                ...opts.fallbackBody,
+                extensions: {
+                    persistedQuery: {
+                        version: 1,
+                        sha256Hash:
+                            opts.persisted.hash ||
+                            sha256Query(opts.fallbackBody.query),
+                    },
+                },
+            };
             const retryRes = await fetch(GQL_URL, {
                 method: 'POST',
                 headers,
-                body: JSON.stringify(opts.fallbackBody),
+                body: JSON.stringify(apqBody),
             });
             const retryText = await retryRes.text();
             try {
@@ -156,15 +168,14 @@ export function createClient() {
             first = Number(process.env.CHAT_MESSAGES_FIRST || 20),
             after = null,
         ) {
-            const hash = process.env.CHAT_MESSAGES_HASH;
             const pagination = after ? { first, after } : { first };
             const variables = {
                 pagination,
                 filter: { chatId },
-                hasSupportAccess: process.env.CHAT_HAS_SUPPORT_ACCESS === '1',
-                showForbiddenImage: process.env.CHAT_SHOW_FORBIDDEN_IMAGE !== '0',
             };
             const query = await loadQuery('CHAT_MESSAGES_QUERY_FILE', './queries/chatMessages.graphql');
+            const hash =
+                process.env.CHAT_MESSAGES_HASH?.trim() || sha256Query(query);
             const fallbackBody = { operationName: 'chatMessages', variables, query };
             const reqOpts = {
                 gqlOp: 'chatMessages',
@@ -173,20 +184,13 @@ export function createClient() {
                 fallbackBody,
             };
 
-            if (hash) {
-                return request({
-                    ...reqOpts,
-                    persisted: {
-                        operationName: 'chatMessages',
-                        hash,
-                        variables,
-                    },
-                });
-            }
-
             return request({
                 ...reqOpts,
-                body: fallbackBody,
+                persisted: {
+                    operationName: 'chatMessages',
+                    hash,
+                    variables,
+                },
             });
         },
 
@@ -214,7 +218,7 @@ export function createClient() {
         async sellerItems(userId, { first = 16, after = null, username = null } = {}) {
             const hash =
                 process.env.ITEMS_HASH ||
-                'bacca5d020eef37b4ff7a2253ad33ecd8b7e144b9ef854c20051f42ebcd04d82';
+                '63eefcfd813442882ad846360d925279bc376e8bc85a577ebefbee0f9c78b557';
             const pagination = after ? { first, after } : { first };
             const profileUser =
                 username?.trim() ||
@@ -275,4 +279,8 @@ async function loadQuery(envKey, defaultPath) {
             `Нет файла запроса ${path}. Сними из DevTools (Copy → Copy as cURL / Payload) или задай ${envKey} в .env`,
         );
     }
+}
+
+function sha256Query(query) {
+    return createHash('sha256').update(query).digest('hex');
 }
