@@ -52,7 +52,8 @@ export function createClient() {
                 msg.includes('PersistedQueryNotFound') ||
                 code === 'PERSISTED_QUERY_NOT_FOUND' ||
                 msg.includes('provided sha does not match query') ||
-                msg.includes('Unknown type "PaginationInput"')
+                msg.includes('Unknown type "PaginationInput"') ||
+                msg.includes('hasSupportAccess')
             );
         });
     }
@@ -161,6 +162,8 @@ export function createClient() {
             const variables = {
                 pagination,
                 filter: { chatId },
+                hasSupportAccess: process.env.CHAT_HAS_SUPPORT_ACCESS === '1',
+                showForbiddenImage: process.env.CHAT_SHOW_FORBIDDEN_IMAGE !== '0',
             };
             const query = await loadQuery('CHAT_MESSAGES_QUERY_FILE', './queries/chatMessages.graphql');
             const body = { operationName: 'chatMessages', variables, query };
