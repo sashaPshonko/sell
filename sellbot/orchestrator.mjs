@@ -8,6 +8,11 @@ import { maskProxyUrl } from './lib/mc-proxy.mjs';
 import { audit } from '../lib/audit.mjs';
 import { acquirePidLock, releasePidLock } from '../lib/pid-lock.mjs';
 import { isIgnorableProtocolNoise } from './lib/protocol-noise.mjs';
+import {
+    isRetryableDeliveryFailure,
+    MAX_DELIVERY_RETRIES,
+    DELIVERY_RETRY_DELAY_MS,
+} from './lib/delivery-retry.mjs';
 import { existsSync, readFileSync } from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -32,6 +37,13 @@ let telegramBot = null;
 const activeOrders = new Map();
 /** Успешно выданные — не принимать повторно (cancel/retry не блокирует) */
 const closedOrderIds = new Set();
+/** orderId → число автоповторов выдачи */
+const deliveryRetryCounts = new Map();
+/** orderId с запланированным повтором (не дублировать после crash) */
+const retryScheduled = new Set();
+/** @type {Map<string, NodeJS.Timeout>} */
+const retryTimers = new Map();
+let pendingCrashReschedule = false;
 
 function forwardToSell(ev) {
     void audit('ws_bot_event', ev);
@@ -147,6 +159,62 @@ function scheduleDeliver(order) {
     };
     // deliver → ensureBot → ready; ждать ready до deliver нельзя (deadlock)
     tryDeliver();
+}
+
+function clearDeliveryRetry(orderId) {
+    deliveryRetryCounts.delete(orderId);
+    retryScheduled.delete(orderId);
+    const t = retryTimers.get(orderId);
+    if (t) {
+        clearTimeout(t);
+        retryTimers.delete(orderId);
+    }
+}
+
+function scheduleDeliveryRetry(order, reason) {
+    const orderId = order.orderId;
+    if (!orderId || closedOrderIds.has(orderId)) return;
+
+    const attempt = (deliveryRetryCounts.get(orderId) || 0) + 1;
+    if (attempt > MAX_DELIVERY_RETRIES) {
+        clearDeliveryRetry(orderId);
+        console.warn(
+            `[sellbot] автоповтор исчерпан ${orderId.slice(0, 8)}… (${reason})`,
+        );
+        forwardToSell({ type: 'delivery_failed', orderId, reason: 'max_retries' });
+        void sendAlert(
+            `❌ Выдача ${orderId.slice(0, 8)}…: повторы исчерпаны\n` +
+                `Покупатель может снова: /nick ник`,
+        );
+        return;
+    }
+
+    deliveryRetryCounts.set(orderId, attempt);
+    retryScheduled.add(orderId);
+
+    const existing = retryTimers.get(orderId);
+    if (existing) clearTimeout(existing);
+
+    const delayMs = DELIVERY_RETRY_DELAY_MS;
+    console.log(
+        `[sellbot] автоповтор ${orderId.slice(0, 8)}… #${attempt}/${MAX_DELIVERY_RETRIES} ` +
+            `через ${Math.round(delayMs / 1000)}с (${reason})`,
+    );
+    void sendAlert(
+        `🔄 Повтор выдачи ${orderId.slice(0, 8)}… (${attempt}/${MAX_DELIVERY_RETRIES})\n` +
+            `Причина: ${reason}`,
+    );
+
+    const timer = setTimeout(() => {
+        retryTimers.delete(orderId);
+        if (!activeOrders.has(orderId) || closedOrderIds.has(orderId)) return;
+        if (!workerEntry) {
+            void startWorker('retry').then(() => scheduleDeliver(order));
+        } else {
+            scheduleDeliver(order);
+        }
+    }, delayMs);
+    retryTimers.set(orderId, timer);
 }
 
 /** Мгновенный exit на kill — sellbot.sh поднимет снова через 5s */
@@ -286,6 +354,13 @@ async function startWorker(reason = 'order') {
             if (message?.name === 'ready') {
                 workerReady = true;
                 console.log('[sellbot] бот на анархии, готов к выдаче (клан)');
+                if (pendingCrashReschedule) {
+                    pendingCrashReschedule = false;
+                    for (const order of activeOrders.values()) {
+                        if (retryScheduled.has(order.orderId)) continue;
+                        scheduleDeliveryRetry(order, 'worker_crash');
+                    }
+                }
                 return;
             }
 
@@ -405,6 +480,17 @@ async function startWorker(reason = 'order') {
             }[message.name];
 
             if (evType) {
+                if (
+                    evType === 'delivery_failed' &&
+                    isRetryableDeliveryFailure(message.reason)
+                ) {
+                    const order = activeOrders.get(orderId);
+                    if (order) {
+                        scheduleDeliveryRetry(order, message.reason || 'unknown');
+                    }
+                    return;
+                }
+
                 const ev = { type: evType, orderId };
                 if (message.reason) ev.reason = message.reason;
                 if (message.queued != null) ev.queued = message.queued;
@@ -423,6 +509,7 @@ async function startWorker(reason = 'order') {
                 const order = activeOrders.get(orderId);
 
                 if (evType === 'delivery_ok') {
+                    clearDeliveryRetry(orderId);
                     closedOrderIds.add(orderId);
                     activeOrders.delete(orderId);
                     await sendAlert(`✅ Выдано: заказ ${short}…`);
@@ -484,6 +571,9 @@ async function startWorker(reason = 'order') {
             console.log(`[sellbot] воркер выключен (code ${code}), ждём заказ`);
             return;
         }
+        if (activeOrders.size > 0) {
+            pendingCrashReschedule = true;
+        }
         console.warn(`[sellbot] воркер exit ${code} → перезапуск через 15с`);
         setTimeout(() => startWorker('restart'), 15_000);
     });
@@ -539,6 +629,7 @@ async function handleOrder(order) {
 
 function handleCancelOrder(orderId) {
     // cancel — снять с воркера; closedOrderIds только после delivery_ok (иначе retry /nick мёртв)
+    clearDeliveryRetry(orderId);
     activeOrders.delete(orderId);
     safePostToWorker({ type: 'cancel_order', orderId });
     console.log(`[sellbot] отмена заказа ${orderId.slice(0, 8)}…`);

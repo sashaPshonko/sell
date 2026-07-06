@@ -26,6 +26,7 @@ import {
 import { drainBotEvents, dispatchCancelOrder } from './dispatch.mjs';
 import { setDeliveryQueueSnapshot } from './lib/delivery-queue.mjs';
 import { cancelClosedOrdersOnSellbot } from './lib/sellbot-cancel.mjs';
+import { isRetryableDeliveryFailure } from './sellbot/lib/delivery-retry.mjs';
 import { isOrderFulfilled, clanDeliveryRetryReset } from './lib/playerok-deal-sync.mjs';
 import { sendChatMessage } from './chat.mjs';
 import {
@@ -316,6 +317,12 @@ async function handleBotEvents(client, state) {
                     continue;
                 }
                 const reason = ev.reason || 'failed';
+                if (isRetryableDeliveryFailure(reason)) {
+                    console.log(
+                        `[sell] fail ${ev.orderId.slice(0, 8)}… retryable — sellbot повторит (${reason})`,
+                    );
+                    continue;
+                }
                 if (reason === 'invalid' || reason === 'invalid_nick') {
                     const session = getBuyerSession(state, chatId, buyerId);
                     delete session.nick;

@@ -20,6 +20,7 @@ import {
 import { isIgnorableProtocolNoise } from './lib/protocol-noise.mjs';
 import { setupChatSafeGuard } from './lib/chat-safe.mjs';
 import { audit } from '../lib/audit.mjs';
+import { isRetryableDeliveryFailure } from './lib/delivery-retry.mjs';
 
 // --- маркеры чата ---
 const CLAN_INVITE_OK = '[⚔] Вы отправили приглашение в клан игроку';
@@ -728,6 +729,7 @@ function wireBot(b) {
     });
 
     b.on('kicked', (reason) => {
+        abortInFlightRetryable('kicked');
         post('kicked', { reason: JSON.stringify(reason) });
         shutdown('kicked');
         process.exit(1);
@@ -735,6 +737,7 @@ function wireBot(b) {
 
     b.on('end', () => {
         if (bot === b) {
+            abortInFlightRetryable('disconnected');
             bot = null;
             ready = false;
         }
@@ -746,6 +749,7 @@ function wireBot(b) {
             logInfo(`protocol noise: ${err.message}`);
             return;
         }
+        abortInFlightRetryable('disconnected');
         process.exit(1);
     });
 
@@ -754,6 +758,7 @@ function wireBot(b) {
             logInfo(`protocol noise: ${err.message}`);
             return;
         }
+        abortInFlightRetryable('disconnected');
         process.exit(1);
     });
 }
@@ -1079,7 +1084,19 @@ async function deliverClan() {
 
 const FATAL = new Set(['banned', 'captcha']);
 
-function endDelivery(result, queued) {
+function abortInFlightRetryable(reason) {
+    if (!delivering || !currentOrder) return;
+    endDelivery(reason, deliverQueue.length, { skipNextOrder: true });
+}
+
+function failQueuedOrder(order, reason) {
+    const i = deliverQueue.findIndex((o) => o.orderId === order.orderId);
+    if (i >= 0) deliverQueue.splice(i, 1);
+    postQueueStatus();
+    post('delivery_failed', { orderId: order.orderId, reason });
+}
+
+function endDelivery(result, queued, { skipNextOrder = false } = {}) {
     if (!currentOrder) return;
     const { orderId, nick, amount: amountKk } = currentOrder;
     const q = queued ?? deliverQueue.length;
@@ -1120,15 +1137,17 @@ function endDelivery(result, queued) {
             queued: q,
             playerWithdrawn,
         });
+    } else if (isRetryableDeliveryFailure(result)) {
+        post('delivery_failed', { orderId, reason: result, playerWithdrawn });
     } else {
-        post('delivery_failed', { orderId, reason: result || 'unknown' });
+        post('delivery_failed', { orderId, reason: result || 'unknown', playerWithdrawn });
     }
 
     if (FATAL.has(result)) {
         deliverQueue.length = 0;
         return;
     }
-    nextOrder();
+    if (!skipNextOrder) nextOrder();
 }
 
 async function startDeliver(order) {
@@ -1233,7 +1252,8 @@ async function addOrder(order) {
         await connectBot();
         nextOrder();
     } catch (e) {
-        post('connect_failed', { reason: e.message });
+        logInfo(`connect: ${e.message}`);
+        failQueuedOrder(order, 'connect_failed');
     }
 }
 
