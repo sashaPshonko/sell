@@ -14,12 +14,12 @@ export const DEFAULTS = {
     /** 200кк → /clan invest 200000000 */
     clanInvestMultiplier: 1_000_000,
     clanPhaseTimeoutMs: 60_000,
-    /** withdraw после invest: если в очереди только текущий клиент */
+    /** withdraw solo: invest подтверждён, очередь пустая */
     clanWithdrawSoloTimeoutMs: 300_000,
     clanLoopWaitMs: 2000,
     /** после /clan invest — ждём строку в чате, не шлём повтор раньше */
     clanInvestWaitMs: 15_000,
-    /** ≥90% — доп. ожидание полного снятия; по grace-таймауту выдача ок */
+    /** ≥90% — на конце фазы выдача ок; clanWithdrawGraceMs — legacy, не используется */
     clanWithdrawMinRatio: 0.9,
     clanWithdrawGraceMs: 60_000,
     /** после частичного withdraw — минимум столько ждём остаток (даже если <90%) */

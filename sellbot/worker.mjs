@@ -247,14 +247,38 @@ function bumpWithdrawRemainderWait(reason) {
     logInfo(`остаток в казне — ждём ${Math.round(ms / 1000)}с (${reason})`);
 }
 
-function withdrawRemainderPending(now = Date.now()) {
-    return withdrawRemainderUntil > 0 && now < withdrawRemainderUntil;
+function postWithdrawRemainderHint() {
+    if (!currentOrder || expectedWithdrawAmount <= 0) return;
+    if (withdrawnTotal >= expectedWithdrawAmount) return;
+    post('clan_withdraw_partial', {
+        orderId: currentOrder.orderId,
+        nick: currentOrder.nick,
+        withdrawn: withdrawnTotal,
+        full: expectedWithdrawAmount,
+    });
 }
 
-/** withdraw: дольше ждём, если деньги уже в казне и за нами никого в очереди */
+function logWithdrawGraceWait(phaseDeadline, queued) {
+    const remain = expectedWithdrawAmount - withdrawnTotal;
+    const secLeft = Math.max(0, Math.round((phaseDeadline - Date.now()) / 1000));
+    logInfo(
+        `≥${Math.round((config.clanWithdrawMinRatio ?? 0.9) * 100)}% — ждём доснять ${remain} до конца фазы (${secLeft}с${queued ? ', очередь' : ', solo'})`,
+    );
+    postWithdrawRemainderHint();
+}
+
+/** не завершать withdraw раньше конца фазы (60с при очереди / 5мин solo) и мин. 30с на остаток */
+function withdrawPhaseEndAt(phaseDeadline, now = Date.now()) {
+    if (withdrawRemainderUntil > now) {
+        return Math.max(phaseDeadline, withdrawRemainderUntil);
+    }
+    return phaseDeadline;
+}
+
+/** withdraw: solo — 5 мин; при очереди — clanPhaseTimeoutMs (60с). В обоих случаях ≥90% ждём до конца фазы. */
 function withdrawPhaseTimeoutMs() {
-    const solo = deliverQueue.length === 0;
-    if (moneyInvested && solo) {
+    const queued = deliverQueue.length > 0;
+    if (moneyInvested && !queued) {
         return config.clanWithdrawSoloTimeoutMs;
     }
     return config.clanPhaseTimeoutMs;
@@ -381,12 +405,7 @@ function handleChatMessage(raw) {
             logOk(`withdraw: ${nick}`);
         } else {
             bumpWithdrawRemainderWait(`${withdrawnTotal}/${expectedWithdrawAmount}`);
-            post('clan_withdraw_partial', {
-                orderId: currentOrder.orderId,
-                nick,
-                withdrawn: withdrawnTotal,
-                full: expectedWithdrawAmount,
-            });
+            postWithdrawRemainderHint();
         }
         return;
     }
@@ -974,7 +993,7 @@ async function deliverClan() {
         logInfo('invest пропуск — игрок уже снял полную сумму');
     }
 
-    // 5. withdraw — полная сумма; ≥90% → доп. время; после частичного — мин. 30с на остаток
+    // 5. withdraw — полная сумма; ≥90% ждём до конца фазы; после частичного — мин. 30с на остаток
     expectedWithdrawAmount = fullInvest;
     withdrawnTotal = priorWithdrawn;
     playerWithdrew = priorWithdrawn >= fullInvest;
@@ -982,13 +1001,18 @@ async function deliverClan() {
     if (priorWithdrawn > 0 && priorWithdrawn < fullInvest) {
         bumpWithdrawRemainderWait(`уже снято ${priorWithdrawn}/${fullInvest}`);
     }
+    const withdrawQueued = deliverQueue.length > 0;
     const withdrawMs = withdrawPhaseTimeoutMs();
     logInfo(
         `ждём withdraw ${nick} (${withdrawnTotal}/${expectedWithdrawAmount}), таймаут ${Math.round(withdrawMs / 1000)}с` +
-            (withdrawMs > config.clanPhaseTimeoutMs ? ' (solo, деньги в казне)' : ''),
+            (withdrawQueued ? ' (очередь — до конца фазы)' : ' (solo — до конца фазы)'),
     );
     const phaseDeadline = Date.now() + withdrawMs;
-    let graceDeadline = null;
+    let gracePhaseNotified = false;
+    if (hasWithdrawGraceEligible(withdrawnTotal, expectedWithdrawAmount)) {
+        gracePhaseNotified = true;
+        logWithdrawGraceWait(phaseDeadline, withdrawQueued);
+    }
     lastAfkCheck = 0;
     while (active() && !playerWithdrew) {
         const now = Date.now();
@@ -1005,21 +1029,18 @@ async function deliverClan() {
             logOk(`withdraw: ${nick}`);
             break;
         }
-        if (hasWithdrawGraceEligible(withdrawnTotal, expectedWithdrawAmount)) {
-            if (graceDeadline == null) {
-                graceDeadline = now + config.clanWithdrawGraceMs;
-                logInfo(
-                    `≥${Math.round((config.clanWithdrawMinRatio ?? 0.9) * 100)}% — ждём полное снятие (${Math.round(config.clanWithdrawGraceMs / 1000)}с)`,
-                );
-            }
-            if (now >= graceDeadline && !withdrawRemainderPending(now)) {
+        const graceEligible = hasWithdrawGraceEligible(withdrawnTotal, expectedWithdrawAmount);
+        if (graceEligible && !gracePhaseNotified) {
+            gracePhaseNotified = true;
+            logWithdrawGraceWait(phaseDeadline, withdrawQueued);
+        }
+        if (now >= withdrawPhaseEndAt(phaseDeadline, now)) {
+            if (graceEligible) {
                 playerWithdrew = true;
                 logOk(
-                    `withdraw ≥${Math.round((config.clanWithdrawMinRatio ?? 0.9) * 100)}% (grace): ${nick}`,
+                    `withdraw ≥${Math.round((config.clanWithdrawMinRatio ?? 0.9) * 100)}% (конец фазы${withdrawQueued ? ', очередь' : ''}): ${nick}`,
                 );
-                break;
             }
-        } else if (now >= phaseDeadline && !withdrawRemainderPending(now)) {
             break;
         }
         if (Date.now() - lastAfkCheck >= AFK_WAIT_MS) {
