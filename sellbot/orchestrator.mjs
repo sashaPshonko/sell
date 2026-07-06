@@ -220,6 +220,10 @@ function workerDataPayload() {
         deliverTimeoutMs: cfg.deliverTimeoutMs,
         balanceWaitMs: cfg.balanceWaitMs,
         balanceCmdWaitMs: cfg.balanceCmdWaitMs,
+        clanInfoWaitMs: cfg.clanInfoWaitMs,
+        clanInfoCmdWaitMs: cfg.clanInfoCmdWaitMs,
+        clanBalanceWaitMs: cfg.clanBalanceWaitMs,
+        clanBalanceCmdWaitMs: cfg.clanBalanceCmdWaitMs,
         healthCheckObserveMs: cfg.healthCheckObserveMs,
     };
 }

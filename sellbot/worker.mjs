@@ -32,6 +32,7 @@ const CLAN_OFFLINE_TAIL = ' не в сети!';
 const CLAN_OTHER_CLAN_MARKER = 'состоит в другом клане';
 const AFK_MARKER = 'Данная команда недоступна в режиме AFK';
 const CAPTCHA_MARKER = 'BotFilter >> Введите номер с картинки в чат';
+const ANARCHY_ALREADY_ON_MARKER = 'Вы уже подключены к этому серверу!';
 
 const LMB = 0;
 const SHIFT = 1;
@@ -61,6 +62,10 @@ const config = {
     deliverTimeoutMs: workerData.deliverTimeoutMs ?? 600_000,
     balanceWaitMs: workerData.balanceWaitMs ?? 15_000,
     balanceCmdWaitMs: workerData.balanceCmdWaitMs ?? 2000,
+    clanInfoWaitMs: workerData.clanInfoWaitMs ?? 30_000,
+    clanInfoCmdWaitMs: workerData.clanInfoCmdWaitMs ?? 5000,
+    clanBalanceWaitMs: workerData.clanBalanceWaitMs ?? 30_000,
+    clanBalanceCmdWaitMs: workerData.clanBalanceCmdWaitMs ?? 5000,
     healthCheckObserveMs: workerData.healthCheckObserveMs ?? 8000,
     proxy: workerData.proxy,
     afk: false,
@@ -351,6 +356,11 @@ function handleChatMessage(raw) {
         return;
     }
 
+    if (text.includes(ANARCHY_ALREADY_ON_MARKER)) {
+        markAnarchyJoined();
+        return;
+    }
+
     if (delivering && text.includes(CLAN_OTHER_CLAN_MARKER)) {
         playerInOtherClan = true;
         logInfo(`в другом клане: ${currentOrder?.nick || '?'}`);
@@ -598,7 +608,7 @@ async function kickAndSweepClan(nick, deadline) {
 
 // ========== баланс ==========
 
-async function safeBalance(waitMs = config.balanceWaitMs) {
+async function safeBalance(waitMs = config.balanceWaitMs, cmdWaitMs = config.balanceCmdWaitMs) {
     if (!bot?.chat) return null;
     config.balance = null;
     const deadline = Date.now() + waitMs;
@@ -607,26 +617,27 @@ async function safeBalance(waitMs = config.balanceWaitMs) {
         if (!bot) return null;
         await antiAfkIfNeeded(bot, config, logInfo);
         bot.chat('/balance');
-        await sleep(config.balanceCmdWaitMs);
+        await sleep(cmdWaitMs);
     }
     if (config.balance != null) logInfo(`баланс: ${config.balance}`);
     return config.balance;
 }
 
-async function safeClanBalance(waitMs = 12_000) {
+async function safeClanBalance(waitMs = config.clanBalanceWaitMs) {
     if (!bot?.chat) return null;
     clanBalance = null;
     const deadline = Date.now() + waitMs;
+    const cmdPause = config.clanBalanceCmdWaitMs;
     let triedBalance = false;
     while (clanBalance == null && Date.now() < deadline) {
         if (!bot) return null;
         await closeWindow();
         bot.chat('/clan money');
-        await sleep(config.balanceCmdWaitMs);
+        await sleep(cmdPause);
         if (clanBalance == null && !triedBalance) {
             triedBalance = true;
             bot.chat('/clan balance');
-            await sleep(config.balanceCmdWaitMs);
+            await sleep(cmdPause);
         }
         if (clanBalance == null) await antiAfkIfNeeded(bot, config, logInfo);
     }
@@ -642,16 +653,17 @@ function allowedClanNicks(extraAllow = []) {
     return set;
 }
 
-async function safeClanInfo(waitMs = 12_000) {
+async function safeClanInfo(waitMs = config.clanInfoWaitMs) {
     if (!bot?.chat) return null;
     clanMembersSnapshot = null;
     const deadline = Date.now() + waitMs;
+    const cmdPause = config.clanInfoCmdWaitMs;
     while (clanMembersSnapshot == null && Date.now() < deadline) {
         if (!bot) return null;
         await closeWindow();
         logInfo('/clan info…');
         bot.chat('/clan info');
-        await sleep(config.balanceCmdWaitMs);
+        await sleep(cmdPause);
         if (clanMembersSnapshot == null) await antiAfkIfNeeded(bot, config, logInfo);
     }
     if (clanMembersSnapshot?.length) {
@@ -667,7 +679,7 @@ async function purgeIntrudersFromClan(deadline, extraAllow = []) {
 
     while (Date.now() < deadline) {
         await antiAfkIfNeeded(bot, config, logInfo);
-        const waitMs = Math.min(12_000, Math.max(2000, deadline - Date.now()));
+        const waitMs = Math.min(config.clanInfoWaitMs, Math.max(2000, deadline - Date.now()));
         const members = await safeClanInfo(waitMs);
         if (!members?.length) {
             logInfo('clan info — нет строки участников, повтор');
@@ -867,7 +879,10 @@ async function deliverClan() {
 
     // 0. баланс
     if (investThisRound > 0) {
-        const balance = await safeBalance();
+        const balance = await safeBalance(
+            config.clanBalanceWaitMs,
+            config.clanBalanceCmdWaitMs,
+        );
         if (!active()) return;
         if (balance == null || balance < investThisRound) {
             logInfo(`мало денег: ${balance ?? '?'} < ${invest}`);

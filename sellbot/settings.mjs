@@ -40,6 +40,12 @@ export const DEFAULTS = {
     balanceMin: 1_000_000_000,
     balanceWaitMs: 15_000,
     balanceCmdWaitMs: 2000,
+    /** /clan info — ждём ответ дольше (после transfer) */
+    clanInfoWaitMs: 30_000,
+    clanInfoCmdWaitMs: 5000,
+    /** /clan money|balance и /balance в начале выдачи */
+    clanBalanceWaitMs: 30_000,
+    clanBalanceCmdWaitMs: 5000,
     /** Единственная строка: покупатель не на анархии / не в сети на сервере (legacy /pay) */
     playerOfflineMarker: '[✘] Ошибка! Указанный игрок не найден!',
     /** Не хватает монет на балансе бота */
@@ -130,6 +136,12 @@ export async function loadSettings(path = BOT_JSON) {
         balanceMin: Number(pick(entry, 'balanceMin', DEFAULTS.balanceMin)),
         balanceWaitMs: Number(pick(entry, 'balanceWaitMs', DEFAULTS.balanceWaitMs)),
         balanceCmdWaitMs: Number(pick(entry, 'balanceCmdWaitMs', DEFAULTS.balanceCmdWaitMs)),
+        clanInfoWaitMs: Number(pick(entry, 'clanInfoWaitMs', DEFAULTS.clanInfoWaitMs)),
+        clanInfoCmdWaitMs: Number(pick(entry, 'clanInfoCmdWaitMs', DEFAULTS.clanInfoCmdWaitMs)),
+        clanBalanceWaitMs: Number(pick(entry, 'clanBalanceWaitMs', DEFAULTS.clanBalanceWaitMs)),
+        clanBalanceCmdWaitMs: Number(
+            pick(entry, 'clanBalanceCmdWaitMs', DEFAULTS.clanBalanceCmdWaitMs),
+        ),
         playerOfflineMarker: String(
             pick(entry, 'playerOfflineMarker', DEFAULTS.playerOfflineMarker),
         ).trim(),
