@@ -28,6 +28,72 @@ export function configurationTransferAgeMs() {
     return Date.now() - configTransferStartedAt;
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+export async function waitUntilConfigurationIdle(bot, maxMs = 45_000) {
+    const deadline = Date.now() + maxMs;
+    while (isInConfigurationTransfer(bot) && Date.now() < deadline) {
+        await sleep(100);
+    }
+    if (isInConfigurationTransfer(bot)) {
+        throw new Error('configuration transfer timeout');
+    }
+}
+
+/** После /an scoreboard = вход, но transfer может стартовать чуть позже — ждём только его, не фикс. паузу. */
+export async function waitForPostJoinConfiguration(
+    bot,
+    { anarchyCmdSentAt = 0, maxMs = 45_000, armMs = 3_000 } = {},
+) {
+    if (isInConfigurationTransfer(bot)) {
+        await waitUntilConfigurationIdle(bot, maxMs);
+        return;
+    }
+    if (!anarchyCmdSentAt) return;
+
+    const deadline = Date.now() + maxMs;
+
+    await new Promise((resolve, reject) => {
+        const client = bot?._client;
+        if (!client) {
+            resolve();
+            return;
+        }
+
+        let settled = false;
+        const finish = (err) => {
+            if (settled) return;
+            settled = true;
+            client.removeListener('start_configuration', onStart);
+            clearInterval(poll);
+            if (err) reject(err);
+            else resolve();
+        };
+
+        const onStart = () => {
+            void waitUntilConfigurationIdle(bot, Math.max(0, deadline - Date.now()))
+                .then(() => finish())
+                .catch(finish);
+        };
+
+        client.on('start_configuration', onStart);
+
+        const poll = setInterval(() => {
+            if (isInConfigurationTransfer(bot)) {
+                onStart();
+                return;
+            }
+            if (Date.now() - anarchyCmdSentAt >= armMs) {
+                finish();
+                return;
+            }
+            if (Date.now() >= deadline) {
+                finish(new Error('configuration transfer timeout'));
+            }
+        }, 50);
+    });
+}
+
 export function setupConfigurationTransferFix(bot, log) {
     const client = bot._client;
     if (!client) return;

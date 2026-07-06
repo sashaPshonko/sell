@@ -16,6 +16,8 @@ import {
     setupConfigurationTransferFix,
     isInConfigurationTransfer,
     configurationTransferAgeMs,
+    waitUntilConfigurationIdle,
+    waitForPostJoinConfiguration,
 } from './lib/configuration-transfer.mjs';
 import { isIgnorableProtocolNoise } from './lib/protocol-noise.mjs';
 import { setupChatSafeGuard } from './lib/chat-safe.mjs';
@@ -177,19 +179,14 @@ function markAnarchyJoined() {
     logOk(`на анархии an${config.anarchy} → success`);
 }
 
-function isOnAnarchyScoreboard(b) {
-    for (const sb of Object.values(b?.scoreboards ?? {})) {
-        if (JSON.stringify(sb).includes(`${config.anarchy}`)) return true;
-    }
-    return false;
-}
-
-/** Заход на анархию с ожиданием configuration transfer (как 4NAREK, без паузы под АХ). */
+/** Заход на анархию — как 4NAREK (scoreboard = вход), без 11с паузы под АХ. */
 async function joinAnarchy(b, { rejoin = false } = {}) {
     const client = b ?? bot;
     if (!client?.chat) return;
 
     if (rejoin) config.timeJoinAnarchy = 0;
+
+    let anarchyCmdSentAt = 0;
 
     while (!config.timeJoinAnarchy) {
         if (isInConfigurationTransfer(client)) {
@@ -202,24 +199,15 @@ async function joinAnarchy(b, { rejoin = false } = {}) {
             await sleep(100);
             continue;
         }
-        if (isOnAnarchyScoreboard(client)) {
-            markAnarchyJoined();
-            break;
-        }
         await rnd(1000, 3000);
         logInfo(`${anarchyCmd}… (жду входа)`);
         client.physicsEnabled = false;
         client.chat(anarchyCmd);
+        anarchyCmdSentAt = Date.now();
         await rnd(3000, 5000);
-        if (isOnAnarchyScoreboard(client)) {
-            markAnarchyJoined();
-            break;
-        }
     }
 
-    while (isInConfigurationTransfer(client) && configurationTransferAgeMs() < 45_000) {
-        await sleep(100);
-    }
+    await waitForPostJoinConfiguration(client, { anarchyCmdSentAt });
     client.physicsEnabled = true;
 }
 
@@ -611,6 +599,7 @@ async function kickAndSweepClan(nick, deadline) {
 
 async function safeBalance(waitMs = config.balanceWaitMs, cmdWaitMs = config.balanceCmdWaitMs) {
     if (!bot?.chat) return null;
+    await waitUntilConfigurationIdle(bot);
     config.balance = null;
     const deadline = Date.now() + waitMs;
     logInfo('/balance…');
@@ -626,6 +615,7 @@ async function safeBalance(waitMs = config.balanceWaitMs, cmdWaitMs = config.bal
 
 async function safeClanBalance(waitMs = config.clanBalanceWaitMs) {
     if (!bot?.chat) return null;
+    await waitUntilConfigurationIdle(bot);
     clanBalance = null;
     const deadline = Date.now() + waitMs;
     const cmdPause = config.clanBalanceCmdWaitMs;
@@ -656,6 +646,7 @@ function allowedClanNicks(extraAllow = []) {
 
 async function safeClanInfo(waitMs = config.clanInfoWaitMs) {
     if (!bot?.chat) return null;
+    await waitUntilConfigurationIdle(bot);
     clanMembersSnapshot = null;
     const deadline = Date.now() + waitMs;
     const cmdPause = config.clanInfoCmdWaitMs;
