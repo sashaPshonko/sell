@@ -51,6 +51,7 @@ const config = {
     clanInvestWaitMs: workerData.clanInvestWaitMs ?? 15_000,
     clanWithdrawMinRatio: workerData.clanWithdrawMinRatio ?? 0.9,
     clanWithdrawGraceMs: workerData.clanWithdrawGraceMs ?? 60_000,
+    clanWithdrawRemainderMs: workerData.clanWithdrawRemainderMs ?? 30_000,
     clanClickDelayMinMs: workerData.clanClickDelayMinMs ?? 1500,
     clanClickDelayMaxMs: workerData.clanClickDelayMaxMs ?? 4500,
     clanMembersMenuSlot: workerData.clanMembersMenuSlot ?? 11,
@@ -95,6 +96,8 @@ let playerInOtherClan = false;
 /** сколько должен снять игрок; ждём полную сумму, не первый withdraw */
 let expectedWithdrawAmount = 0;
 let withdrawnTotal = 0;
+/** не кикать / не принимать grace, пока игрок может снять остаток из казны */
+let withdrawRemainderUntil = 0;
 /** баланс казны клана из чата (Баланс клана:) */
 let clanBalance = null;
 /** участники из /clan info */
@@ -233,6 +236,21 @@ function hasWithdrawGraceEligible(withdrawn, expected) {
     return withdrawn >= Math.floor(expected * ratio);
 }
 
+function resetWithdrawRemainderWait() {
+    withdrawRemainderUntil = 0;
+}
+
+/** после частичного снятия — дать время добрать копейки из казны */
+function bumpWithdrawRemainderWait(reason) {
+    const ms = config.clanWithdrawRemainderMs ?? 30_000;
+    withdrawRemainderUntil = Date.now() + ms;
+    logInfo(`остаток в казне — ждём ${Math.round(ms / 1000)}с (${reason})`);
+}
+
+function withdrawRemainderPending(now = Date.now()) {
+    return withdrawRemainderUntil > 0 && now < withdrawRemainderUntil;
+}
+
 /** withdraw: дольше ждём, если деньги уже в казне и за нами никого в очереди */
 function withdrawPhaseTimeoutMs() {
     const solo = deliverQueue.length === 0;
@@ -252,6 +270,7 @@ function resetDeliveryFlags() {
     clanJoinedForCurrent = false;
     expectedWithdrawAmount = 0;
     withdrawnTotal = 0;
+    resetWithdrawRemainderWait();
 }
 
 function resetGui() {
@@ -361,6 +380,7 @@ function handleChatMessage(raw) {
             playerWithdrew = true;
             logOk(`withdraw: ${nick}`);
         } else {
+            bumpWithdrawRemainderWait(`${withdrawnTotal}/${expectedWithdrawAmount}`);
             post('clan_withdraw_partial', {
                 orderId: currentOrder.orderId,
                 nick,
@@ -954,10 +974,14 @@ async function deliverClan() {
         logInfo('invest пропуск — игрок уже снял полную сумму');
     }
 
-    // 5. withdraw — полная сумма; ≥90% → доп. время; по grace-таймауту тоже ок
+    // 5. withdraw — полная сумма; ≥90% → доп. время; после частичного — мин. 30с на остаток
     expectedWithdrawAmount = fullInvest;
     withdrawnTotal = priorWithdrawn;
     playerWithdrew = priorWithdrawn >= fullInvest;
+    resetWithdrawRemainderWait();
+    if (priorWithdrawn > 0 && priorWithdrawn < fullInvest) {
+        bumpWithdrawRemainderWait(`уже снято ${priorWithdrawn}/${fullInvest}`);
+    }
     const withdrawMs = withdrawPhaseTimeoutMs();
     logInfo(
         `ждём withdraw ${nick} (${withdrawnTotal}/${expectedWithdrawAmount}), таймаут ${Math.round(withdrawMs / 1000)}с` +
@@ -984,16 +1008,18 @@ async function deliverClan() {
         if (hasWithdrawGraceEligible(withdrawnTotal, expectedWithdrawAmount)) {
             if (graceDeadline == null) {
                 graceDeadline = now + config.clanWithdrawGraceMs;
-                logInfo(`≥90% — ждём полное снятие (${config.clanWithdrawGraceMs}ms)`);
+                logInfo(
+                    `≥${Math.round((config.clanWithdrawMinRatio ?? 0.9) * 100)}% — ждём полное снятие (${Math.round(config.clanWithdrawGraceMs / 1000)}с)`,
+                );
             }
-            if (now >= graceDeadline) {
+            if (now >= graceDeadline && !withdrawRemainderPending(now)) {
                 playerWithdrew = true;
                 logOk(
                     `withdraw ≥${Math.round((config.clanWithdrawMinRatio ?? 0.9) * 100)}% (grace): ${nick}`,
                 );
                 break;
             }
-        } else if (now >= phaseDeadline) {
+        } else if (now >= phaseDeadline && !withdrawRemainderPending(now)) {
             break;
         }
         if (Date.now() - lastAfkCheck >= AFK_WAIT_MS) {

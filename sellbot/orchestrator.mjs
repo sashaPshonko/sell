@@ -207,6 +207,7 @@ function workerDataPayload() {
         clanInvestWaitMs: cfg.clanInvestWaitMs,
         clanWithdrawMinRatio: cfg.clanWithdrawMinRatio,
         clanWithdrawGraceMs: cfg.clanWithdrawGraceMs,
+        clanWithdrawRemainderMs: cfg.clanWithdrawRemainderMs,
         clanClickDelayMinMs: cfg.clanClickDelayMinMs,
         clanClickDelayMaxMs: cfg.clanClickDelayMaxMs,
         clanMembersMenuSlot: cfg.clanMembersMenuSlot,

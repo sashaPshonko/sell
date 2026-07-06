@@ -22,6 +22,8 @@ export const DEFAULTS = {
     /** ≥90% — доп. ожидание полного снятия; по grace-таймауту выдача ок */
     clanWithdrawMinRatio: 0.9,
     clanWithdrawGraceMs: 60_000,
+    /** после частичного withdraw — минимум столько ждём остаток (даже если <90%) */
+    clanWithdrawRemainderMs: 30_000,
     clanClickDelayMinMs: 1500,
     clanClickDelayMaxMs: 4500,
     clanMembersMenuSlot: 11,
@@ -106,6 +108,9 @@ export async function loadSettings(path = BOT_JSON) {
         ),
         clanWithdrawGraceMs: Number(
             pick(entry, 'clanWithdrawGraceMs', DEFAULTS.clanWithdrawGraceMs),
+        ),
+        clanWithdrawRemainderMs: Number(
+            pick(entry, 'clanWithdrawRemainderMs', DEFAULTS.clanWithdrawRemainderMs),
         ),
         clanClickDelayMinMs: Number(pick(entry, 'clanClickDelayMinMs', DEFAULTS.clanClickDelayMinMs)),
         clanClickDelayMaxMs: Number(pick(entry, 'clanClickDelayMaxMs', DEFAULTS.clanClickDelayMaxMs)),
