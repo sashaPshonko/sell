@@ -4,13 +4,15 @@ const GQL_URL = 'https://playerok.com/graphql';
 
 const DEFAULT_HEADERS = {
     accept: '*/*',
+    'accept-language': process.env.ACCEPT_LANGUAGE || 'ru-RU,ru;q=0.7',
     'content-type': 'application/json',
     'apollo-require-preflight': 'true',
     'apollographql-client-name': 'web',
     origin: 'https://playerok.com',
     referer: 'https://playerok.com/chats',
     'user-agent':
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        process.env.PLAYEROK_USER_AGENT ||
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
 };
 
 /** Если задан PLAYEROK_COOKIES — используем его целиком; иначе собираем минимальный набор. */
@@ -36,7 +38,7 @@ export function createClient() {
     const baseHeaders = {
         ...DEFAULT_HEADERS,
         cookie: buildCookie(token),
-        'x-timezone-offset': process.env.TIMEZONE_OFFSET || '-300',
+        'x-timezone-offset': process.env.TIMEZONE_OFFSET || '-180',
     };
 
     function gqlErrorMessage(json, statusText) {
