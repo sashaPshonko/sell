@@ -35,6 +35,18 @@ export function discountedPriceRub(itemOrPrice) {
     return Number.isFinite(n) ? Math.round(n) : null;
 }
 
+/** Slug лота: хвост uuid + kk из названия (для старых заказов без itemSlug). */
+export function guessItemSlug(order) {
+    if (order?.itemSlug) return order.itemSlug;
+    const itemId = order?.itemId;
+    const name = order?.itemName;
+    if (!itemId || !name) return null;
+    const tail = String(itemId).split('-').pop();
+    const kk = parseAmountKk(name);
+    if (!tail || kk == null) return null;
+    return `${tail}-${Math.round(kk)}kk-momentalno-bonus`;
+}
+
 export function parseServer(itemName) {
     if (!itemName) return null;
     const n = normalizeItemName(itemName);

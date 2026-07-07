@@ -9,7 +9,7 @@ import { assertPlayerokAuth } from '../lib/check-auth.mjs';
 import { createClient } from '../playerok-client.mjs';
 import { publishItemOnPlayerok } from '../publish.mjs';
 import { isMarkedProfileLot } from '../lib/profile-upsell.mjs';
-import { discountedPriceRub } from '../parse.mjs';
+import { discountedPriceRub, guessItemSlug } from '../parse.mjs';
 
 loadEnv();
 
@@ -17,11 +17,16 @@ const args = process.argv.slice(2);
 let itemId = null;
 let priceRub = null;
 let slug = null;
+let itemName = null;
 
 for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--slug' && args[i + 1]) {
         slug = args[++i].trim();
+        continue;
+    }
+    if (a === '--name' && args[i + 1]) {
+        itemName = args[++i].trim();
         continue;
     }
     if (!itemId && !a.startsWith('-')) {
@@ -35,13 +40,20 @@ for (let i = 0; i < args.length; i++) {
 
 if (!itemId && !slug) {
     console.error('Использование:');
-    console.error('  npm run test-publish -- <itemId> [priceRub]');
+    console.error('  npm run test-publish -- <itemId> [priceRub] [--name "270КК 🎁"]');
     console.error('  npm run test-publish -- --slug <slug>');
     process.exit(1);
 }
 
 await assertPlayerokAuth();
 const client = createClient();
+
+if (!slug && itemId) {
+    slug = guessItemSlug({ itemId, itemName });
+    if (slug) {
+        console.log(`[test-publish] slug угадан: ${slug}`);
+    }
+}
 
 let itemMeta = null;
 if (slug) {
@@ -62,7 +74,7 @@ if (slug) {
     );
 }
 
-const profileLot = isMarkedProfileLot(itemMeta?.name);
+const profileLot = isMarkedProfileLot(itemMeta?.name ?? itemName);
 
 await publishItemOnPlayerok(client, itemId, priceRub, { profileLot, slug });
 console.log('[test-publish] готово');

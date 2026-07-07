@@ -3,7 +3,7 @@
  */
 import { setOrderPhase, getOrder, saveState } from './state.mjs';
 import { isMarkedProfileLot } from './lib/profile-upsell.mjs';
-import { discountedPriceRub } from './parse.mjs';
+import { discountedPriceRub, guessItemSlug } from './parse.mjs';
 
 const pending = new Map();
 
@@ -136,7 +136,8 @@ function buildPublishVariables(itemId, priorityStatuses) {
     return { input };
 }
 
-const STATUS_REJECTED_RE = /нельзя обновить статус/i;
+const STATUS_REJECTED_RE =
+    /нельзя обновить статус|слишком много попыток/i;
 
 async function loadItemMeta(client, { itemId, slug } = {}) {
     if (!slug || typeof client?.itemBySlug !== 'function') return null;
@@ -155,15 +156,18 @@ export async function publishItemOnPlayerok(
     client,
     itemId,
     priceRub = null,
-    { profileLot = false, slug = null } = {},
+    { profileLot = false, slug = null, itemName = null } = {},
 ) {
+    if (!slug) slug = guessItemSlug({ itemId, itemName });
     const file = process.env.PUBLISH_ITEM_MUTATION_FILE || './captures/publish-item.graphql';
     const op = process.env.PUBLISH_ITEM_OPERATION || 'publishItem';
     const gqlPath = process.env.PUBLISH_ITEM_GQL_PATH || '/products/[slug]';
     const referer = slug ? `https://playerok.com/products/${slug}` : null;
 
     const itemMeta = await loadItemMeta(client, { itemId, slug });
+    let publishItemId = itemId;
     if (itemMeta) {
+        publishItemId = itemMeta.id || itemId;
         const salePrice = discountedPriceRub(itemMeta);
         console.log(
             `[sell] лот ${itemMeta.slug || slug}: status=${itemMeta.status} ` +
@@ -181,7 +185,7 @@ export async function publishItemOnPlayerok(
         }
     }
 
-    const { list } = await fetchPriorityStatusList(client, itemId, priceRub, referer);
+    const { list } = await fetchPriorityStatusList(client, publishItemId, priceRub, referer);
     const candidates = listPublishPriorityCandidates(
         { itemPriorityStatuses: list },
         { profileLot },
@@ -199,8 +203,8 @@ export async function publishItemOnPlayerok(
         const hit = list.find((s) => s.id === statusId);
         const label = hit?.name ? `${hit.name} (${statusId.slice(0, 8)}…)` : statusId.slice(0, 8) + '…';
         try {
-            const variables = buildPublishVariables(itemId, [statusId]);
-            console.log(`[sell] PlayerOK publishItem itemId=${itemId}… status=${label}`);
+            const variables = buildPublishVariables(publishItemId, [statusId]);
+            console.log(`[sell] PlayerOK publishItem itemId=${publishItemId}… status=${label}`);
             const data = await client.runMutationFromFile(
                 'PUBLISH_ITEM_MUTATION_FILE',
                 file,
@@ -259,12 +263,17 @@ export function scheduleRepublishItem(client, state, order, { delayOverrideMs } 
 
     const timer = setTimeout(async () => {
         pending.delete(dealId);
-        const profileLot = isMarkedProfileLot(order.itemName);
-        const slug = order.itemSlug || null;
+        const fresh = getOrder(state, dealId) || order;
+        const slug = fresh.itemSlug || guessItemSlug(fresh);
+        if (!fresh.itemSlug && slug) {
+            console.log(`[sell] itemSlug угадан из заказа: ${slug}`);
+            setOrderPhase(state, dealId, fresh.phase || 'new', { itemSlug: slug });
+        }
         try {
-            await publishItemOnPlayerok(client, order.itemId, order.itemPriceRub, {
-                profileLot,
+            await publishItemOnPlayerok(client, fresh.itemId, fresh.itemPriceRub, {
+                profileLot: isMarkedProfileLot(fresh.itemName),
                 slug,
+                itemName: fresh.itemName,
             });
             setOrderPhase(state, dealId, getOrder(state, dealId)?.phase || 'new', {
                 republishedAt: new Date().toISOString(),
