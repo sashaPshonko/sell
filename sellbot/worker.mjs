@@ -891,10 +891,18 @@ async function deliverClan() {
         return;
     }
 
-    // 0.5 клан на двоих — до invite только лидер
-    logInfo('clan info — должен быть только лидер…');
-    await purgeIntrudersFromClan(phaseEnd());
+    // 0.5 clan info — как balance: сначала смотрим состав, потом invite
+    const members = await safeClanInfo(config.clanInfoWaitMs);
     if (!active()) return;
+    if (members?.length) {
+        const intruders = findClanIntruders(members, [...allowedClanNicks()]);
+        for (const name of intruders) {
+            if (!active()) return;
+            logInfo(`clan info: лишний ${name} — kick`);
+            await kickFromClan(name, phaseEnd());
+            await sleep(config.clanLoopWaitMs);
+        }
+    }
 
     // 1. invite
     logInfo(
