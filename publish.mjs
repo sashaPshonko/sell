@@ -2,7 +2,7 @@
  * Перевыставление лота на PlayerOK после оплаты (publishItem).
  */
 import { setOrderPhase, getOrder, saveState } from './state.mjs';
-import { isMarkedProfileLot } from './lib/profile-upsell.mjs';
+import { isMarkedProfileLot, isSearchPremiumLot } from './lib/profile-upsell.mjs';
 import { resolveCompletedItemForOrder } from './lib/completed-republish.mjs';
 import { discountedPriceRub, guessItemSlug, parseAmountKk } from './parse.mjs';
 
@@ -91,6 +91,10 @@ export function listPublishPriorityCandidates(data, { profileLot = false } = {})
         }
         for (const s of list) {
             if (s.type === 'PREMIUM' || s.price > 0) add(s);
+        }
+        // Для лотов в поиске (·) не откатываемся на «Обычный» — только платная премка.
+        if (!profileLot) {
+            return ordered.map((s) => s.id);
         }
     }
     for (const s of list) {
@@ -197,9 +201,8 @@ export async function publishItemOnPlayerok(
         throw new Error(`нет подходящего priorityStatus (${formatStatusList(list)})`);
     }
 
-    console.log(
-        `[sell] статусы лота (${profileLot ? '🎁 обычный' : 'премиум'}): ${formatStatusList(list)}`,
-    );
+    const lotKind = profileLot ? '🎁 обычный' : isSearchPremiumLot(itemName) ? '· премиум' : 'премиум';
+    console.log(`[sell] статусы лота (${lotKind}): ${formatStatusList(list)}`);
 
     let lastErr;
     for (const statusId of candidates) {
@@ -278,6 +281,11 @@ export function scheduleRepublishItem(client, state, order, { delayOverrideMs } 
         let itemName = fresh.itemName;
 
         const completed = await resolveCompletedItemForOrder(client, fresh);
+        if (!completed?.id && fresh.itemId) {
+            console.warn(
+                `[sell] completed miss для ${fresh.itemId.slice(0, 8)}…, publish по заказу`,
+            );
+        }
         if (completed?.id) {
             itemId = completed.id;
             slug = completed.slug || slug;
