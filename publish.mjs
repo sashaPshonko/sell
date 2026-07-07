@@ -10,9 +10,9 @@ function publishEnabled() {
     return process.env.AUTO_PUBLISH_ITEM !== '0';
 }
 
-/** Только лоты с 🎁 в названии → перевыставление со статусом «Обычный». */
+/** Любой лот с itemId; 🎁 → бесплатный «Обычный», остальные → премиум из API. */
 export function shouldRepublishOrder(order) {
-    return Boolean(order?.itemId && isMarkedProfileLot(order.itemName));
+    return Boolean(order?.itemId);
 }
 
 function publishDelayMs() {
@@ -48,9 +48,11 @@ function formatStatusList(list) {
 }
 
 /**
- * Кандидаты на publishItem — сначала «Обычный» / бесплатный, не зашитый UUID.
+ * Кандидаты на publishItem.
+ * profileLot (🎁) — сначала «Обычный» / бесплатный.
+ * Обычный лот в поиске — сначала «Премиум» / платный.
  */
-export function listPublishPriorityCandidates(data) {
+export function listPublishPriorityCandidates(data, { profileLot = false } = {}) {
     const raw = data?.itemPriorityStatuses;
     if (!Array.isArray(raw) || !raw.length) return [];
 
@@ -65,11 +67,20 @@ export function listPublishPriorityCandidates(data) {
         ordered.push(s);
     };
 
-    for (const s of list) {
-        if (/обычн/i.test(s.name || '')) add(s);
-    }
-    for (const s of list) {
-        if (s.type === 'DEFAULT' || s.price === 0) add(s);
+    if (profileLot) {
+        for (const s of list) {
+            if (/обычн/i.test(s.name || '')) add(s);
+        }
+        for (const s of list) {
+            if (s.type === 'DEFAULT' || s.price === 0) add(s);
+        }
+    } else {
+        for (const s of list) {
+            if (/премиум/i.test(s.name || '')) add(s);
+        }
+        for (const s of list) {
+            if (s.type === 'PREMIUM' || s.price > 0) add(s);
+        }
     }
     for (const s of list) {
         add(s);
@@ -105,29 +116,41 @@ function buildPublishVariables(itemId, priorityStatuses) {
         return JSON.parse(varsRaw.replaceAll('ITEM_ID', itemId));
     }
 
-    return {
-        input: {
-            transactionProviderId: process.env.PUBLISH_TRANSACTION_PROVIDER || 'LOCAL',
-            priorityStatuses,
-            itemId,
-        },
+    const input = {
+        transactionProviderId: process.env.PUBLISH_TRANSACTION_PROVIDER || 'LOCAL',
+        priorityStatuses,
+        itemId,
     };
+    if (process.env.PUBLISH_TRANSACTION_PROVIDER_DATA !== '0') {
+        input.transactionProviderData = { paymentMethodId: null };
+    }
+    return { input };
 }
 
 const STATUS_REJECTED_RE = /нельзя обновить статус/i;
 
-export async function publishItemOnPlayerok(client, itemId, priceRub = null) {
+export async function publishItemOnPlayerok(
+    client,
+    itemId,
+    priceRub = null,
+    { profileLot = false } = {},
+) {
     const file = process.env.PUBLISH_ITEM_MUTATION_FILE || './captures/publish-item.graphql';
     const op = process.env.PUBLISH_ITEM_OPERATION || 'publishItem';
     const gqlPath = process.env.PUBLISH_ITEM_GQL_PATH || '/products/[slug]';
 
     const { list } = await fetchPriorityStatusList(client, itemId, priceRub);
-    const candidates = listPublishPriorityCandidates({ itemPriorityStatuses: list });
+    const candidates = listPublishPriorityCandidates(
+        { itemPriorityStatuses: list },
+        { profileLot },
+    );
     if (!candidates.length) {
         throw new Error(`нет подходящего priorityStatus (${formatStatusList(list)})`);
     }
 
-    console.log(`[sell] статусы лота: ${formatStatusList(list)}`);
+    console.log(
+        `[sell] статусы лота (${profileLot ? '🎁 обычный' : 'премиум'}): ${formatStatusList(list)}`,
+    );
 
     let lastErr;
     for (const statusId of candidates) {
@@ -166,7 +189,7 @@ export function scheduleRepublishItem(client, state, order) {
     if (!publishEnabled()) return;
     if (!shouldRepublishOrder(order)) {
         console.log(
-            `[sell] перевыставление пропуск: ${order?.itemName || '?'} (нет itemId или нет 🎁)`,
+            `[sell] перевыставление пропуск: ${order?.itemName || '?'} (нет itemId)`,
         );
         return;
     }
@@ -189,7 +212,10 @@ export function scheduleRepublishItem(client, state, order) {
     const timer = setTimeout(async () => {
         pending.delete(dealId);
         try {
-            await publishItemOnPlayerok(client, order.itemId, order.itemPriceRub);
+            const profileLot = isMarkedProfileLot(order.itemName);
+            await publishItemOnPlayerok(client, order.itemId, order.itemPriceRub, {
+                profileLot,
+            });
             setOrderPhase(state, dealId, getOrder(state, dealId)?.phase || 'new', {
                 republishedAt: new Date().toISOString(),
                 republishError: null,
