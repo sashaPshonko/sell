@@ -3,7 +3,8 @@
  */
 import { setOrderPhase, getOrder, saveState } from './state.mjs';
 import { isMarkedProfileLot } from './lib/profile-upsell.mjs';
-import { discountedPriceRub, guessItemSlug } from './parse.mjs';
+import { resolveCompletedItemForOrder } from './lib/completed-republish.mjs';
+import { discountedPriceRub, guessItemSlug, parseAmountKk } from './parse.mjs';
 
 const pending = new Map();
 
@@ -11,9 +12,10 @@ function publishEnabled() {
     return process.env.AUTO_PUBLISH_ITEM !== '0';
 }
 
-/** Любой лот с itemId; 🎁 → бесплатный «Обычный», остальные → премиум из API. */
+/** kk + цена из заказа — ищем лот в completed-list. */
 export function shouldRepublishOrder(order) {
-    return Boolean(order?.itemId);
+    const kk = order?.amountKk ?? parseAmountKk(order?.itemName);
+    return Boolean(kk && order?.itemPriceRub != null);
 }
 
 function publishDelayMs() {
@@ -142,21 +144,7 @@ const STATUS_REJECTED_RE =
 async function loadItemMeta(client, { itemId, slug } = {}) {
     if (!slug || typeof client?.itemBySlug !== 'function') return null;
     const data = await client.itemBySlug(slug);
-    let item = data?.item ?? null;
-    if (typeof client?.findCompletedItemBySlug === 'function') {
-        try {
-            const completed = await client.findCompletedItemBySlug(slug);
-            if (completed?.id) {
-                console.log(
-                    `[sell] completed item ${slug}: id=${completed.id} status=${completed.status || '?'}`,
-                );
-                // Для перевыставления берём более свежую карточку из completed-list, если совпал slug.
-                item = { ...item, ...completed };
-            }
-        } catch (e) {
-            console.warn(`[sell] completed item lookup ${slug}: ${String(e.message || e)}`);
-        }
-    }
+    const item = data?.item ?? null;
     if (!item) return null;
     if (itemId && item.id && item.id !== itemId) {
         console.warn(
@@ -255,7 +243,7 @@ export function scheduleRepublishItem(client, state, order, { delayOverrideMs } 
     if (!publishEnabled()) return;
     if (!shouldRepublishOrder(order)) {
         console.log(
-            `[sell] перевыставление пропуск: ${order?.itemName || '?'} (нет itemId)`,
+            `[sell] перевыставление пропуск: ${order?.itemName || '?'} (нет kk/цены)`,
         );
         return;
     }
@@ -284,16 +272,30 @@ export function scheduleRepublishItem(client, state, order, { delayOverrideMs } 
     const timer = setTimeout(async () => {
         pending.delete(dealId);
         const fresh = getOrder(state, dealId) || order;
-        const slug = fresh.itemSlug || guessItemSlug(fresh);
-        if (!fresh.itemSlug && slug) {
+        let itemId = fresh.itemId;
+        let slug = fresh.itemSlug || guessItemSlug(fresh);
+        let priceRub = fresh.itemPriceRub;
+        let itemName = fresh.itemName;
+
+        const completed = await resolveCompletedItemForOrder(client, fresh);
+        if (completed?.id) {
+            itemId = completed.id;
+            slug = completed.slug || slug;
+            priceRub = discountedPriceRub(completed) ?? priceRub;
+            itemName = completed.name || itemName;
+            setOrderPhase(state, dealId, fresh.phase || 'new', {
+                itemSlug: slug || fresh.itemSlug || null,
+            });
+        } else if (!fresh.itemSlug && slug) {
             console.log(`[sell] itemSlug угадан из заказа: ${slug}`);
             setOrderPhase(state, dealId, fresh.phase || 'new', { itemSlug: slug });
         }
+
         try {
-            await publishItemOnPlayerok(client, fresh.itemId, fresh.itemPriceRub, {
-                profileLot: isMarkedProfileLot(fresh.itemName),
+            await publishItemOnPlayerok(client, itemId, priceRub, {
+                profileLot: isMarkedProfileLot(itemName),
                 slug,
-                itemName: fresh.itemName,
+                itemName,
             });
             setOrderPhase(state, dealId, getOrder(state, dealId)?.phase || 'new', {
                 republishedAt: new Date().toISOString(),
