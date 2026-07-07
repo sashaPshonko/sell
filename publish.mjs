@@ -28,9 +28,9 @@ function publishMaxRetries() {
     return Number(process.env.PUBLISH_MAX_RETRIES || 5);
 }
 
-/** paid — сразу после оплаты. sent — после выдачи (по умолчанию). */
+/** paid — сразу после оплаты (по умолчанию). sent — после выдачи. */
 export function republishWhen() {
-    const v = (process.env.REPUBLISH_WHEN || 'sent').trim().toLowerCase();
+    const v = (process.env.REPUBLISH_WHEN || 'paid').trim().toLowerCase();
     return v === 'paid' ? 'paid' : 'sent';
 }
 

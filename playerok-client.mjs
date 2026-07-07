@@ -13,8 +13,10 @@ const DEFAULT_HEADERS = {
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
 };
 
-/** Минимальные cookies — работают с VPS; полная строка с __ddg9_ привязана к IP дома */
+/** Если задан PLAYEROK_COOKIES — используем его целиком; иначе собираем минимальный набор. */
 function buildCookie(token) {
+    const raw = process.env.PLAYEROK_COOKIES?.trim();
+    if (raw) return raw;
     const auid = process.env.PLAYEROK_AUID?.trim();
     const ddg1 = process.env.PLAYEROK_DDG1?.trim();
     const parts = [
