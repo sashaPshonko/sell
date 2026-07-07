@@ -180,7 +180,8 @@ export async function publishItemOnPlayerok(
                 `mayBePublished=false (status=${itemMeta.status}) — рано перевыставлять`,
             );
         }
-        if (!profileLot && itemMeta.name) {
+        if (itemMeta.name) {
+            // Всегда пересчитываем по фактическому item.name, чтобы auto и test шли одинаково.
             profileLot = isMarkedProfileLot(itemMeta.name);
         }
     }
@@ -205,6 +206,11 @@ export async function publishItemOnPlayerok(
         try {
             const variables = buildPublishVariables(publishItemId, [statusId]);
             console.log(`[sell] PlayerOK publishItem itemId=${publishItemId}… status=${label}`);
+            console.log(
+                `[sell] publish payload: referer=${referer || '-'} ` +
+                    `price=${priceRub ?? 0} profileLot=${profileLot} ` +
+                    `statusId=${statusId}`,
+            );
             const data = await client.runMutationFromFile(
                 'PUBLISH_ITEM_MUTATION_FILE',
                 file,
