@@ -121,21 +121,48 @@ export function createClient() {
         return json.data;
     }
 
-    return {
-        async viewer() {
-            const query = `query viewer {
+    let viewerCache = null;
+
+    function extractItemNodes(itemsData) {
+        const conn = itemsData?.items;
+        if (!conn) return [];
+        if (Array.isArray(conn.edges)) {
+            return conn.edges
+                .map((e) => e?.node)
+                .filter(Boolean);
+        }
+        if (Array.isArray(conn.nodes)) {
+            return conn.nodes.filter(Boolean);
+        }
+        return [];
+    }
+
+    async function resolveViewer() {
+        if (viewerCache?.id) return viewerCache;
+        const v = await request({
+            gqlOp: 'viewer',
+            gqlPath: '/chats',
+            body: {
+                operationName: 'viewer',
+                variables: {},
+                query: `query viewer {
   viewer {
     id
     username
     canPublishItems
     balance { available value }
   }
-}`;
-            return request({
-                gqlOp: 'viewer',
-                gqlPath: '/chats',
-                body: { operationName: 'viewer', variables: {}, query },
-            });
+}`,
+            },
+        });
+        viewerCache = v?.viewer ?? null;
+        return viewerCache;
+    }
+
+    return {
+        async viewer() {
+            const viewer = await resolveViewer();
+            return { viewer };
         },
 
         async userChats(userId, first = 15) {
@@ -268,6 +295,48 @@ export function createClient() {
                     },
                 },
             });
+        },
+
+        async sellerCompletedItems(userId, { first = 16, after = null, username = null } = {}) {
+            const hash =
+                process.env.ITEMS_COMPLETED_HASH ||
+                'bacca5d020eef37b4ff7a2253ad33ecd8b7e144b9ef854c20051f42ebcd04d82';
+            const pagination = after ? { first, after } : { first };
+            const profileUser =
+                username?.trim() ||
+                process.env.PLAYEROK_USERNAME?.trim() ||
+                null;
+            const referer = profileUser
+                ? `https://playerok.com/profile/${profileUser}/products/completed`
+                : 'https://playerok.com/profile/products/completed';
+            return request({
+                gqlOp: 'items',
+                gqlPath: '/profile/[username]/products/completed',
+                referer,
+                persisted: {
+                    operationName: 'items',
+                    hash,
+                    variables: {
+                        pagination,
+                        filter: {
+                            userId,
+                            status: ['DECLINED', 'BLOCKED', 'EXPIRED', 'SOLD', 'DRAFT', 'DISCONTINUED'],
+                            withOfficial: false,
+                        },
+                        showForbiddenImage: true,
+                    },
+                },
+            });
+        },
+
+        async findCompletedItemBySlug(slug, { first = 32 } = {}) {
+            const v = await resolveViewer();
+            const userId = process.env.PLAYEROK_USER_ID?.trim() || v?.id;
+            if (!userId) return null;
+            const username = process.env.PLAYEROK_USERNAME?.trim() || v?.username || null;
+            const data = await this.sellerCompletedItems(userId, { first, username });
+            const nodes = extractItemNodes(data);
+            return nodes.find((n) => n?.slug === slug) || null;
         },
 
         async runMutationFromFile(

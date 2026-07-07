@@ -142,7 +142,21 @@ const STATUS_REJECTED_RE =
 async function loadItemMeta(client, { itemId, slug } = {}) {
     if (!slug || typeof client?.itemBySlug !== 'function') return null;
     const data = await client.itemBySlug(slug);
-    const item = data?.item ?? null;
+    let item = data?.item ?? null;
+    if (typeof client?.findCompletedItemBySlug === 'function') {
+        try {
+            const completed = await client.findCompletedItemBySlug(slug);
+            if (completed?.id) {
+                console.log(
+                    `[sell] completed item ${slug}: id=${completed.id} status=${completed.status || '?'}`,
+                );
+                // Для перевыставления берём более свежую карточку из completed-list, если совпал slug.
+                item = { ...item, ...completed };
+            }
+        } catch (e) {
+            console.warn(`[sell] completed item lookup ${slug}: ${String(e.message || e)}`);
+        }
+    }
     if (!item) return null;
     if (itemId && item.id && item.id !== itemId) {
         console.warn(
