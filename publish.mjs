@@ -3,6 +3,7 @@
  */
 import { setOrderPhase, getOrder, saveState } from './state.mjs';
 import { isMarkedProfileLot } from './lib/profile-upsell.mjs';
+import { discountedPriceRub } from './parse.mjs';
 
 const pending = new Map();
 
@@ -17,6 +18,14 @@ export function shouldRepublishOrder(order) {
 
 function publishDelayMs() {
     return Number(process.env.PUBLISH_DELAY_MS || 10_000);
+}
+
+function publishRetryMs() {
+    return Number(process.env.PUBLISH_RETRY_MS || 60_000);
+}
+
+function publishMaxRetries() {
+    return Number(process.env.PUBLISH_MAX_RETRIES || 5);
 }
 
 /** paid — сразу после оплаты. sent — после выдачи (по умолчанию). */
@@ -95,11 +104,11 @@ export function pickPriorityStatusIds(data) {
     return ids.length ? [ids[0]] : null;
 }
 
-async function fetchPriorityStatusList(client, itemId, priceRub) {
+async function fetchPriorityStatusList(client, itemId, priceRub, referer = null) {
     if (typeof client?.itemPriorityStatuses !== 'function') {
         throw new Error('itemPriorityStatuses недоступен в playerok-client');
     }
-    const data = await client.itemPriorityStatuses(itemId, priceRub ?? 0);
+    const data = await client.itemPriorityStatuses(itemId, priceRub ?? 0, referer);
     const list =
         data?.itemPriorityStatuses?.map(normalizeStatusEntry).filter(Boolean) ?? [];
     if (!list.length) {
@@ -129,17 +138,50 @@ function buildPublishVariables(itemId, priorityStatuses) {
 
 const STATUS_REJECTED_RE = /нельзя обновить статус/i;
 
+async function loadItemMeta(client, { itemId, slug } = {}) {
+    if (!slug || typeof client?.itemBySlug !== 'function') return null;
+    const data = await client.itemBySlug(slug);
+    const item = data?.item ?? null;
+    if (!item) return null;
+    if (itemId && item.id && item.id !== itemId) {
+        console.warn(
+            `[sell] slug ${slug}: itemId ${item.id} ≠ ожидаемый ${itemId}`,
+        );
+    }
+    return item;
+}
+
 export async function publishItemOnPlayerok(
     client,
     itemId,
     priceRub = null,
-    { profileLot = false } = {},
+    { profileLot = false, slug = null } = {},
 ) {
     const file = process.env.PUBLISH_ITEM_MUTATION_FILE || './captures/publish-item.graphql';
     const op = process.env.PUBLISH_ITEM_OPERATION || 'publishItem';
     const gqlPath = process.env.PUBLISH_ITEM_GQL_PATH || '/products/[slug]';
+    const referer = slug ? `https://playerok.com/products/${slug}` : null;
 
-    const { list } = await fetchPriorityStatusList(client, itemId, priceRub);
+    const itemMeta = await loadItemMeta(client, { itemId, slug });
+    if (itemMeta) {
+        const salePrice = discountedPriceRub(itemMeta);
+        console.log(
+            `[sell] лот ${itemMeta.slug || slug}: status=${itemMeta.status} ` +
+                `mayBePublished=${itemMeta.mayBePublished} ` +
+                `price=${salePrice} rawPrice=${itemMeta.rawPrice ?? '?'}`,
+        );
+        if (salePrice != null) priceRub = salePrice;
+        if (itemMeta.mayBePublished === false) {
+            throw new Error(
+                `mayBePublished=false (status=${itemMeta.status}) — рано перевыставлять`,
+            );
+        }
+        if (!profileLot && itemMeta.name) {
+            profileLot = isMarkedProfileLot(itemMeta.name);
+        }
+    }
+
+    const { list } = await fetchPriorityStatusList(client, itemId, priceRub, referer);
     const candidates = listPublishPriorityCandidates(
         { itemPriorityStatuses: list },
         { profileLot },
@@ -185,7 +227,7 @@ export async function publishItemOnPlayerok(
 }
 
 /** Через N мс после оплаты / выдачи — один раз на заказ */
-export function scheduleRepublishItem(client, state, order) {
+export function scheduleRepublishItem(client, state, order, { delayOverrideMs } = {}) {
     if (!publishEnabled()) return;
     if (!shouldRepublishOrder(order)) {
         console.log(
@@ -198,34 +240,72 @@ export function scheduleRepublishItem(client, state, order) {
     const existing = getOrder(state, dealId);
     if (existing?.republishedAt) return;
     if (pending.has(dealId)) return;
-    if (existing?.republishScheduled && !existing?.republishError) return;
+    if (existing?.republishScheduled && !existing?.republishError && !delayOverrideMs) return;
 
-    const delayMs = publishDelayMs();
+    const delayMs = delayOverrideMs ?? publishDelayMs();
+    const maxRetries = publishMaxRetries();
+    const retryMs = publishRetryMs();
+    const attempt = Number(existing?.republishAttempts || 0);
+
     setOrderPhase(state, dealId, existing?.phase || order.phase || 'new', {
         republishScheduled: true,
+        republishAttempts: attempt,
     });
 
     console.log(
-        `[sell] перевыставление через ${delayMs / 1000}с: ${dealId.slice(0, 8)}… item=${order.itemId.slice(0, 8)}…`,
+        `[sell] перевыставление через ${delayMs / 1000}с: ${dealId.slice(0, 8)}… ` +
+            `item=${order.itemId.slice(0, 8)}… (попытка ${attempt + 1}/${maxRetries})`,
     );
 
     const timer = setTimeout(async () => {
         pending.delete(dealId);
+        const profileLot = isMarkedProfileLot(order.itemName);
+        const slug = order.itemSlug || null;
         try {
-            const profileLot = isMarkedProfileLot(order.itemName);
             await publishItemOnPlayerok(client, order.itemId, order.itemPriceRub, {
                 profileLot,
+                slug,
             });
             setOrderPhase(state, dealId, getOrder(state, dealId)?.phase || 'new', {
                 republishedAt: new Date().toISOString(),
                 republishError: null,
+                republishAttempts: attempt + 1,
             });
             console.log(`[sell] лот перевыставлен: ${order.itemName || order.itemId}`);
         } catch (e) {
-            console.warn(`[sell] publishItem ${dealId.slice(0, 8)}…: ${e.message}`);
+            const msg = String(e.message || e);
+            const retryable =
+                STATUS_REJECTED_RE.test(msg) ||
+                /mayBePublished=false/i.test(msg) ||
+                /рано перевыставлять/i.test(msg);
+            const nextAttempt = attempt + 1;
+            if (retryable && nextAttempt < maxRetries) {
+                console.warn(
+                    `[sell] publishItem ${dealId.slice(0, 8)}…: ${msg} → повтор через ${retryMs / 1000}с`,
+                );
+                setOrderPhase(state, dealId, getOrder(state, dealId)?.phase || 'new', {
+                    republishScheduled: true,
+                    republishError: msg,
+                    republishAttempts: nextAttempt,
+                });
+                await saveState(state);
+                const retryOrder = {
+                    ...order,
+                    ...(getOrder(state, dealId) || {}),
+                    republishAttempts: nextAttempt,
+                };
+                const retryTimer = setTimeout(() => {
+                    pending.delete(dealId);
+                    scheduleRepublishItem(client, state, retryOrder, { delayOverrideMs: retryMs });
+                }, retryMs);
+                pending.set(dealId, retryTimer);
+                return;
+            }
+            console.warn(`[sell] publishItem ${dealId.slice(0, 8)}…: ${msg}`);
             setOrderPhase(state, dealId, getOrder(state, dealId)?.phase || 'new', {
                 republishScheduled: false,
-                republishError: e.message,
+                republishError: msg,
+                republishAttempts: nextAttempt,
             });
         }
         await saveState(state);

@@ -191,6 +191,29 @@ export function createClient() {
         },
 
         /** Лоты продавца (профиль → products). Hash из DevTools: operationName=items */
+        /** Карточка лота по slug (цена, mayBePublished). */
+        async itemBySlug(slug, referer = null) {
+            const hash =
+                process.env.ITEM_QUERY_HASH ||
+                '014b7824712618664cdfd3223504f52f785a46b06561dd9e9c0e9d2e4d8262c6';
+            const productReferer =
+                referer || `https://playerok.com/products/${String(slug).replace(/^\//, '')}`;
+            return request({
+                gqlOp: 'item',
+                gqlPath: '/products/[slug]',
+                referer: productReferer,
+                persisted: {
+                    operationName: 'item',
+                    hash,
+                    variables: {
+                        slug,
+                        hasSupportAccess: false,
+                        showForbiddenImage: true,
+                    },
+                },
+            });
+        },
+
         /** Премки для перевыставления (перед publishItem). */
         async itemPriorityStatuses(itemId, price, referer = null) {
             const hash =

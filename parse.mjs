@@ -24,6 +24,17 @@ export function parseAmountKk(itemName) {
     return m ? Number(m[1].replace(',', '.')) : null;
 }
 
+/** Цена со скидкой (price), не rawPrice. */
+export function discountedPriceRub(itemOrPrice) {
+    if (itemOrPrice == null) return null;
+    if (typeof itemOrPrice === 'object') {
+        const p = itemOrPrice.price;
+        return p != null ? Math.round(Number(p)) : null;
+    }
+    const n = Number(itemOrPrice);
+    return Number.isFinite(n) ? Math.round(n) : null;
+}
+
 export function parseServer(itemName) {
     if (!itemName) return null;
     const n = normalizeItemName(itemName);
@@ -50,7 +61,8 @@ function buildCurrencyDeal(msg) {
         buyerId: msg.deal.user?.id,
         itemId: item?.id,
         itemName: name,
-        itemPriceRub: item?.price != null ? Math.round(Number(item.price)) : null,
+        itemPriceRub: discountedPriceRub(item),
+        itemSlug: item?.slug || null,
         amountKk,
         server: parseServer(name),
         paidAt: msg.createdAt,
