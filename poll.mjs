@@ -635,16 +635,17 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
     syncChatOrdersFromPlayerok(state, chatId, dealTimeline);
     await rejectBannedBuyerOrdersInChat(client, state, chatId);
 
-    if (newlyRegistered.length) {
-        await sendPremiumRefundUpsellForOrders(client, state, chatId, newlyRegistered);
-    }
-
+    // Republish до profile-upsell refund: иначе ·-лоты отменяются и isActionableOrder=false.
     if (republishWhen() === 'paid') {
         for (const order of newlyRegistered) {
             if (isBuyerBanned(state, order.buyerId)) continue;
             if (!isActionableOrder(order)) continue;
             scheduleRepublishItem(client, state, order);
         }
+    }
+
+    if (newlyRegistered.length) {
+        await sendPremiumRefundUpsellForOrders(client, state, chatId, newlyRegistered);
     }
     const openDeals = filterActionableDeals(state, deals).filter(
         (d) => !isBuyerBanned(state, d.buyerId),
