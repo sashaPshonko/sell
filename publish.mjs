@@ -15,9 +15,6 @@ export function shouldRepublishOrder(order) {
     return Boolean(order?.itemId && isMarkedProfileLot(order.itemName));
 }
 
-/** PlayerOK: «Обычный», type DEFAULT, price 0 (не «Премиум» за 25₽). */
-const DEFAULT_PRIORITY_STATUS_ID = '1efbe5bc-99a7-68e5-4534-85dad913b981';
-
 function publishDelayMs() {
     return Number(process.env.PUBLISH_DELAY_MS || 10_000);
 }
@@ -28,75 +25,78 @@ export function republishWhen() {
     return v === 'paid' ? 'paid' : 'sent';
 }
 
-function defaultPriorityStatusIds() {
-    const priRaw = process.env.PUBLISH_PRIORITY_STATUSES?.trim();
-    if (priRaw) return JSON.parse(priRaw);
-    const preferId = process.env.PUBLISH_PRIORITY_STATUS_ID?.trim();
-    return [preferId || DEFAULT_PRIORITY_STATUS_ID];
-}
-
 function normalizeStatusEntry(entry) {
     if (!entry) return null;
+    if (typeof entry === 'string') {
+        return { id: entry, price: 0, name: null, type: null };
+    }
     const id = entry.id || entry.status?.id || entry.statusId;
     if (!id) return null;
     const price = entry.price ?? entry.statusPrice ?? entry.cost ?? 0;
     return {
         id: String(id),
         price: Number(price) || 0,
-        name: entry.name || null,
-        type: entry.type || null,
+        name: entry.name || entry.status?.name || null,
+        type: entry.type || entry.status?.type || null,
     };
 }
 
+function formatStatusList(list) {
+    return list
+        .map((s) => `${s.name || s.type || '?'}:${s.id.slice(0, 8)}… ₽${s.price}`)
+        .join(', ');
+}
+
 /**
- * Как в UI: «Обычный» (DEFAULT, price 0), не «Премиум» (PREMIUM).
- * Явный PUBLISH_PRIORITY_STATUS_ID → иначе DEFAULT/price 0 → иначе fallback id.
+ * Кандидаты на publishItem — сначала «Обычный» / бесплатный, не зашитый UUID.
  */
-export function pickPriorityStatusIds(data) {
+export function listPublishPriorityCandidates(data) {
     const raw = data?.itemPriorityStatuses;
-    if (!Array.isArray(raw) || !raw.length) return null;
+    if (!Array.isArray(raw) || !raw.length) return [];
 
     const list = raw.map(normalizeStatusEntry).filter(Boolean);
-    if (!list.length) return null;
+    if (!list.length) return [];
 
-    const preferId =
-        process.env.PUBLISH_PRIORITY_STATUS_ID?.trim() || DEFAULT_PRIORITY_STATUS_ID;
-    const preferred = list.find((s) => s.id === preferId);
-    if (preferred) return [preferred.id];
+    const ordered = [];
+    const seen = new Set();
+    const add = (s) => {
+        if (!s?.id || seen.has(s.id)) return;
+        seen.add(s.id);
+        ordered.push(s);
+    };
 
-    const ordinary = list.find((s) => s.type === 'DEFAULT' || s.price === 0);
-    if (ordinary) return [ordinary.id];
+    for (const s of list) {
+        if (/обычн/i.test(s.name || '')) add(s);
+    }
+    for (const s of list) {
+        if (s.type === 'DEFAULT' || s.price === 0) add(s);
+    }
+    for (const s of list) {
+        add(s);
+    }
 
-    return null;
+    return ordered.map((s) => s.id);
 }
 
-function formatStatusLog(ids, list) {
-    const id = ids[0];
-    const hit = list?.find((s) => s.id === id);
-    return hit?.name ? `${hit.name} (${id})` : id;
+/** @deprecated используй listPublishPriorityCandidates */
+export function pickPriorityStatusIds(data) {
+    const ids = listPublishPriorityCandidates(data);
+    return ids.length ? [ids[0]] : null;
 }
 
-async function resolvePriorityStatusIds(client, itemId, priceRub) {
+async function fetchPriorityStatusList(client, itemId, priceRub) {
     if (typeof client?.itemPriorityStatuses !== 'function') {
-        return defaultPriorityStatusIds();
+        throw new Error('itemPriorityStatuses недоступен в playerok-client');
     }
-    let statusList = null;
-    try {
-        const data = await client.itemPriorityStatuses(itemId, priceRub ?? 0);
-        statusList = data?.itemPriorityStatuses
-            ?.map(normalizeStatusEntry)
-            .filter(Boolean);
-        const picked = pickPriorityStatusIds(data);
-        if (picked?.length) {
-            console.log(`[sell] статус: ${formatStatusLog(picked, statusList)}`);
-            return picked;
-        }
-    } catch (e) {
-        console.warn(`[sell] itemPriorityStatuses: ${e.message}`);
+    const data = await client.itemPriorityStatuses(itemId, priceRub ?? 0);
+    const list =
+        data?.itemPriorityStatuses?.map(normalizeStatusEntry).filter(Boolean) ?? [];
+    if (!list.length) {
+        throw new Error(
+            `itemPriorityStatuses пуст (itemId=${itemId}, price=${priceRub ?? 0})`,
+        );
     }
-    const fallback = defaultPriorityStatusIds();
-    console.log(`[sell] статус (fallback): ${formatStatusLog(fallback, statusList)}`);
-    return fallback;
+    return { data, list };
 }
 
 function buildPublishVariables(itemId, priorityStatuses) {
@@ -114,27 +114,51 @@ function buildPublishVariables(itemId, priorityStatuses) {
     };
 }
 
+const STATUS_REJECTED_RE = /нельзя обновить статус/i;
+
 export async function publishItemOnPlayerok(client, itemId, priceRub = null) {
     const file = process.env.PUBLISH_ITEM_MUTATION_FILE || './captures/publish-item.graphql';
     const op = process.env.PUBLISH_ITEM_OPERATION || 'publishItem';
     const gqlPath = process.env.PUBLISH_ITEM_GQL_PATH || '/products/[slug]';
 
-    const priorityStatuses = await resolvePriorityStatusIds(client, itemId, priceRub);
-    const variables = buildPublishVariables(itemId, priorityStatuses);
-
-    console.log(`[sell] PlayerOK publishItem itemId=${itemId}…`);
-    const data = await client.runMutationFromFile(
-        'PUBLISH_ITEM_MUTATION_FILE',
-        file,
-        variables,
-        op,
-        gqlPath,
-    );
-    const item = data?.publishItem;
-    if (item?.status) {
-        console.log(`[sell] publishItem ok: status=${item.status} slug=${item.slug || '?'}`);
+    const { list } = await fetchPriorityStatusList(client, itemId, priceRub);
+    const candidates = listPublishPriorityCandidates({ itemPriorityStatuses: list });
+    if (!candidates.length) {
+        throw new Error(`нет подходящего priorityStatus (${formatStatusList(list)})`);
     }
-    return data;
+
+    console.log(`[sell] статусы лота: ${formatStatusList(list)}`);
+
+    let lastErr;
+    for (const statusId of candidates) {
+        const hit = list.find((s) => s.id === statusId);
+        const label = hit?.name ? `${hit.name} (${statusId.slice(0, 8)}…)` : statusId.slice(0, 8) + '…';
+        try {
+            const variables = buildPublishVariables(itemId, [statusId]);
+            console.log(`[sell] PlayerOK publishItem itemId=${itemId}… status=${label}`);
+            const data = await client.runMutationFromFile(
+                'PUBLISH_ITEM_MUTATION_FILE',
+                file,
+                variables,
+                op,
+                gqlPath,
+            );
+            const item = data?.publishItem;
+            if (item?.status) {
+                console.log(
+                    `[sell] publishItem ok: status=${item.status} slug=${item.slug || '?'}`,
+                );
+            }
+            return data;
+        } catch (e) {
+            lastErr = e;
+            const msg = String(e.message || e);
+            if (!STATUS_REJECTED_RE.test(msg)) throw e;
+            console.warn(`[sell] publishItem status ${label}: ${msg}`);
+        }
+    }
+
+    throw lastErr || new Error('publishItem: все статусы отклонены');
 }
 
 /** Через N мс после оплаты / выдачи — один раз на заказ */
