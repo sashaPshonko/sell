@@ -327,7 +327,12 @@ export function buildPremiumRefundUpsellHint(opts = {}) {
     const url = String(opts.url || '').trim();
     const marker = opts.emoji || '🎁';
 
-    return `Деньги вернули. Бери ${marker} — ${upsellKk}кк по этой же цене:\n${url}`;
+    return (
+        `Деньги вернули. Бери ${marker} — ${upsellKk}кк по этой же цене:\n` +
+        `${url}\n` +
+        `\n` +
+        `P.S мне выгодно продавать предложения без премки, поэтому так`
+    );
 }
 
 /** Нет конкретного лота-аналога — подсказка про 🎁 на профиле (без ссылки). */
