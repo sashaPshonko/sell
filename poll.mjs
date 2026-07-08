@@ -236,13 +236,17 @@ async function handleBotEvents(client, state) {
                 await sendChatMessage(
                     client,
                     chatId,
-                    buildDeliveryOkHint(order.amountKk, {
-                        lotKk: order.amountKk,
-                        payAmountKk: payKk,
-                        wheelPct: order.bonusWheelPct,
-                        bonusWheelKk: order.bonusWheelKk,
-                        totalPct: order.bonusTotalPct,
-                    }),
+                    buildDeliveryOkHint(
+                        order.amountKk,
+                        {
+                            lotKk: order.amountKk,
+                            payAmountKk: payKk,
+                            wheelPct: order.bonusWheelPct,
+                            bonusWheelKk: order.bonusWheelKk,
+                            totalPct: order.bonusTotalPct,
+                        },
+                        { orderId: ev.orderId, lotKk: order.amountKk },
+                    ),
                 );
                 setOrderPhase(state, ev.orderId, 'completed', {
                     buyerNotifiedAt: new Date().toISOString(),

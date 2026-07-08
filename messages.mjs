@@ -300,7 +300,7 @@ function buildPayoutBreakdownLines(bonus, defaultLotKk = 0, opts = null) {
  * @param {number} [bonus.wheelPct]
  * @param {number} [bonus.bonusWheelKk]
  */
-export function buildDeliveryOkHint(amountKk, bonus = null) {
+export function buildDeliveryOkHint(amountKk, bonus = null, opts = {}) {
     const breakdown = buildPayoutBreakdownLines(bonus, amountKk, { totalLabel: 'Итого выдано' });
     const lines = ['✅ Валюта выдана!', ''];
 
@@ -310,9 +310,15 @@ export function buildDeliveryOkHint(amountKk, bonus = null) {
         lines.push('🎮 Приятной игры!');
     }
 
+    const orderId = String(opts.orderId || '').trim();
+    const lotKk = opts.lotKk != null ? Math.round(Number(opts.lotKk)) : Math.round(Number(amountKk) || 0);
+    const orderTag = orderId
+        ? `${lotKk}кк · #${orderId.slice(0, 8)}`
+        : `${lotKk}кк`;
+
     lines.push(
         '',
-        '⭐ Пожалуйста, подтверди заказ на PlayerOK.',
+        `⭐ Подтверди на PlayerOK заказ: ${orderTag}`,
         '⭐ Оставь отзыв — это очень помогает!',
     );
     return lines.join('\n');

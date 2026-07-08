@@ -183,13 +183,33 @@ export async function sendPremiumRefundUpsellForOrders(client, state, chatId, ne
     const sellerUserId = state.sellerUserId;
     const sellerUsername = state.sellerUsername ?? null;
     const messagedBuyers = new Set();
+    const chatOrders = ordersInChat(state, chatId);
+    const sortedNew = [...newOrders].sort(
+        (a, b) => Date.parse(a.paidAt || 0) - Date.parse(b.paidAt || 0),
+    );
 
-    for (const order of newOrders) {
+    for (const order of sortedNew) {
         if (!order || !isActionableOrder(order)) continue;
         if (!playerokNeedsDelivery(order.playerokStatus)) continue;
         if (order.premiumRefundUpsellSentAt) continue;
         if (isMarkedProfileLot(order.itemName)) continue;
         if (isBuyerBanned(state, order.buyerId)) continue;
+
+        const paidAtMs = order.paidAt ? Date.parse(order.paidAt) : 0;
+        const hasNewerProfileLot = [...sortedNew, ...chatOrders].some((o) => {
+            if (!o || o.orderId === order.orderId) return false;
+            if (o.buyerId !== order.buyerId) return false;
+            if (!isMarkedProfileLot(o.itemName)) return false;
+            if (o.phase === 'cancelled') return false;
+            const oPaid = o.paidAt ? Date.parse(o.paidAt) : 0;
+            return oPaid > paidAtMs;
+        });
+        if (hasNewerProfileLot) {
+            console.log(
+                `[sell] profile-upsell ${order.orderId.slice(0, 8)}…: пропуск — уже есть более новый 🎁-лот`,
+            );
+            continue;
+        }
 
         let match = null;
         if (sellerUserId) {
@@ -310,7 +330,7 @@ export async function sendTwinRemindersForNewOrders(client, state, chatId, newOr
 }
 
 /**
- * /cancel — отменить незавершённые заказы покупателя, оплаченные не позже этого /cancel.
+ * /cancel — отменить один последний незавершённый заказ покупателя (оплаченный не позже /cancel).
  */
 export async function applyCancelCommands(
     client,
@@ -344,12 +364,19 @@ export async function applyCancelCommands(
         let cancelled = 0;
         let blocked = 0;
         let playerokCancelled = 0;
+        const eligible = [];
         for (const order of ordersInChat(state, chatId)) {
             if (order.buyerId !== buyerId) continue;
             if (order.phase === 'completed' || order.phase === 'cancelled') continue;
             const paidAtMs = order.paidAt ? Date.parse(order.paidAt) : 0;
             if (paidAtMs > msgAt) continue;
+            eligible.push(order);
+        }
+        eligible.sort(
+            (a, b) => Date.parse(b.paidAt || 0) - Date.parse(a.paidAt || 0),
+        );
 
+        for (const order of eligible.slice(0, 1)) {
             if (isBuyerOrderCancelBlocked(order)) {
                 blocked += 1;
                 console.log(
@@ -381,7 +408,9 @@ export async function applyCancelCommands(
             }
 
             cancelled += 1;
-            console.log(`[sell] ${order.orderId.slice(0, 8)}…: отменён покупателем`);
+            console.log(
+                `[sell] ${order.orderId.slice(0, 8)}…: отменён покупателем (${order.amountKk}кк)`,
+            );
         }
 
         if (cancelled > 0 && !replied) {
