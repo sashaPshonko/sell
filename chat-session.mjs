@@ -632,12 +632,24 @@ export async function applyNickCommandUpdates(
                     && !o.pausedUntilNick,
             );
             if (active) {
+                // Уже в выдаче / казне — статус очереди или «жди withdraw»
+                active.queueStatusSentAt = undefined;
+                await notifyDeliveryQueueStatus(client, state, chatId, active, u.nick);
                 await notifyClanWithdrawWaitHint(client, state, chatId, active, u.nick);
             }
         }
 
         if (!queuedForDelivery && client && nickApplied) {
-            if (buyerHasPendingOrder(state, chatId, buyerId)) {
+            const waiting = buyerOrders.find(
+                (o) =>
+                    !isOrderFulfilled(o)
+                    && (o.phase === 'dispatched' || o.phase === 'ws_pending')
+                    && !o.pausedUntilNick,
+            );
+            if (waiting) {
+                waiting.queueStatusSentAt = undefined;
+                await notifyDeliveryQueueStatus(client, state, chatId, waiting, u.nick);
+            } else if (buyerHasPendingOrder(state, chatId, buyerId)) {
                 console.log(
                     `[sell] ник ${u.nick} (${u.via}) — открытый заказ, выдачу ждём flush (${
                         buyerOrders
@@ -663,7 +675,7 @@ export async function applyNickCommandUpdates(
 function buildQueueStatusMessage(state, order, nick) {
     const payKk = order.payAmountKk ?? order.amountKk;
     const q = getQueuePosition(order.orderId, state);
-    if (q.isActive) {
+    if (q.isActive || (q.inQueue && q.position === 1)) {
         return buildDispatchingHint(nick, order.amountKk, {
             lotKk: order.amountKk,
             payAmountKk: order.payAmountKk,
@@ -674,22 +686,36 @@ function buildQueueStatusMessage(state, order, nick) {
     if (q.inQueue && q.position > 1) {
         return buildNickQueueWaitingHint(q.position, payKk);
     }
+    // Ещё нет в очереди (редко) — всё равно не молчим
+    if (q.total > 0) {
+        return buildNickQueueWaitingHint(q.total + 1, payKk);
+    }
     return buildNickDeliveryActiveHint(nick, payKk);
 }
 
 /** Статус очереди — /nick или перед dispatch */
 async function notifyDeliveryQueueStatus(client, state, chatId, order, nick) {
     if (!client || !order || order.queueStatusSentAt) return;
-    if (!isActionableOrder(order) && order.phase !== 'dispatched' && order.phase !== 'ws_pending') {
+    if (isOrderFulfilled(order)) return;
+    if (
+        !isActionableOrder(order)
+        && order.phase !== 'dispatched'
+        && order.phase !== 'ws_pending'
+    ) {
         return;
     }
     if (order.playerokStatus && !playerokNeedsDelivery(order.playerokStatus)) return;
 
     try {
-        await sendChatMessage(client, chatId, buildQueueStatusMessage(state, order, nick));
+        const text = buildQueueStatusMessage(state, order, nick);
+        await sendChatMessage(client, chatId, text);
         setOrderPhase(state, order.orderId, order.phase, {
             queueStatusSentAt: new Date().toISOString(),
         });
+        const q = getQueuePosition(order.orderId, state);
+        console.log(
+            `[sell] очередь → ${order.orderId.slice(0, 8)}… pos=${q.position}/${q.total} phase=${order.phase}`,
+        );
     } catch (e) {
         console.warn(`[sell] очередь: ${e.message}`);
     }
@@ -698,8 +724,16 @@ async function notifyDeliveryQueueStatus(client, state, chatId, order, nick) {
 /** Одно сообщение — только для этого заказа (не для всех открытых в чате). */
 async function notifyDispatchingForOrder(client, state, chatId, order, nick) {
     if (!order || order.dispatchAckSentAt) return;
-    if (!isActionableOrder(order)) return;
+    if (isOrderFulfilled(order)) return;
     if (order.playerokStatus && !playerokNeedsDelivery(order.playerokStatus)) return;
+    // Сразу после flush phase уже dispatched — isActionableOrder=false, но статус всё равно шлём
+    if (
+        !isActionableOrder(order)
+        && order.phase !== 'dispatched'
+        && order.phase !== 'ws_pending'
+    ) {
+        return;
+    }
 
     await notifyDeliveryQueueStatus(client, state, chatId, order, nick);
     if (!getOrder(state, order.orderId)?.queueStatusSentAt) return;
