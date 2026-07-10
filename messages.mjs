@@ -325,6 +325,16 @@ export function buildDeliveryOkHint(amountKk, bonus = null, opts = {}) {
 }
 
 /**
+ * Ссылка на лот-аналог: пустая строка + стрелки с пробелами (URL кликабельный).
+ * @param {string} url
+ */
+export function formatUpsellLinkLine(url) {
+    const u = String(url || '').trim();
+    if (!u) return '';
+    return `\n\n➡️ ${u} ⬅️`;
+}
+
+/**
  * Автовозврат прошёл — коротко ссылка на 🎁-лот.
  * @param {{ upsellKk?: number, url?: string, emoji?: string }} opts
  */
@@ -334,9 +344,9 @@ export function buildPremiumRefundUpsellHint(opts = {}) {
     const marker = opts.emoji || '🎁';
 
     return (
-        `Деньги вернули. Бери ${marker} — ${upsellKk}кк по этой же цене:\n` +
-        `${url}\n` +
-        `\n` +
+        `Деньги вернули. Бери ${marker} — ${upsellKk}кк по этой же цене:` +
+        formatUpsellLinkLine(url) +
+        `\n\n` +
         `P.S мне выгодно продавать предложения без премки, поэтому так`
     );
 }
@@ -363,11 +373,10 @@ export function buildProfileUpsellHint(opts) {
     const compareBit =
         baseKk != null && baseKk > 0 && upsellKk > baseKk ? ` (сейчас ${baseKk}кк)` : '';
 
-    const lines = [
-        `💡 На профиле: ${upsellKk}кк ${priceBit}${compareBit} — пролистай вниз, в названии лота ${marker}`,
-    ];
-    if (url) lines.push(url);
-    return lines.join('\n');
+    let text =
+        `💡 На профиле: ${upsellKk}кк ${priceBit}${compareBit} — пролистай вниз, в названии лота ${marker}`;
+    if (url) text += formatUpsellLinkLine(url);
+    return text;
 }
 
 export function buildOrderAlreadyDoneHint() {
