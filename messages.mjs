@@ -379,6 +379,18 @@ export function buildProfileUpsellHint(opts) {
     return text;
 }
 
+/**
+ * Повтор через 40с — ссылка и коротко по-человечески.
+ * @param {{ upsellKk: number, url: string }} opts
+ */
+export function buildProfileUpsellRepeatHint(opts) {
+    const upsellKk = Math.round(Number(opts.upsellKk) || 0);
+    const url = String(opts.url || '').trim();
+    if (!url) return '';
+
+    return `${url}\n\nкупи вот это. тут ${upsellKk}кк по этой же цене`;
+}
+
 export function buildOrderAlreadyDoneHint() {
     return [
         '✅ Заказ уже выполнен — валюта выдана.',
