@@ -326,8 +326,9 @@ async function afkTick() {
 
 function handleChatMessage(raw) {
     const text = plain(raw);
+    const lower = text.toLowerCase();
 
-    if (text.includes('вы забанены')) {
+    if (lower.includes('вы забанены')) {
         if (healthCheckActive) return finishHealth('banned');
         parentPort.postMessage(`${config.username} - забанен`);
         endDelivery('banned');

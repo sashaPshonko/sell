@@ -482,11 +482,17 @@ async function handleBotEvents(client, state) {
                 }
                 const nick =
                     getBuyerSession(state, chatId, buyerId).nick || order.nick;
-                setOrderPhase(state, ev.orderId, 'ws_pending', {
-                    lastError: 'insufficient_funds',
-                    pausedUntilNick: false,
-                    ...clanDeliveryRetryReset({ nick }),
-                });
+                // Пауза до нового /nick — без ws_pending и без автоповторов выдачи
+                markDeliveryPaused(
+                    state,
+                    ev.orderId,
+                    'awaiting_nick',
+                    {
+                        lastError: 'insufficient_funds',
+                        nick,
+                        // не сбрасываем deliveryHintSentAt — иначе спам одной и той же подсказки
+                    },
+                );
                 void dispatchCancelOrder(ev.orderId);
                 await sendDeliveryHintOnce(
                     client,
@@ -497,7 +503,7 @@ async function handleBotEvents(client, state) {
                     () => buildDeliveryFailHint('insufficient_funds'),
                 );
                 console.warn(
-                    `[sell] insufficient_funds ${ev.orderId} — пополни баланс бота`,
+                    `[sell] insufficient_funds ${ev.orderId} — пополни баланс бота (без автоповтора)`,
                 );
             }
         } catch (e) {

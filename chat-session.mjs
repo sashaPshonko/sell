@@ -975,6 +975,10 @@ export function chatHasPendingOrders(state, chatId) {
 export async function retryWsPendingOrders(state) {
     for (const order of Object.values(state.orders)) {
         if (order.phase !== 'ws_pending' || !order.nick) continue;
+        // Нехватку баланса не ретраим автоматически — только после нового /nick
+        if (order.lastError === 'insufficient_funds' || order.pausedUntilNick) {
+            continue;
+        }
         const oid = order.orderId || order.dealId;
         if (!canDispatchToSellbot(order)) {
             console.log(
