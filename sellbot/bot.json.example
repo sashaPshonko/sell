@@ -21,9 +21,6 @@
     "telegramToken": "BOT_TOKEN_FROM_BOTFATHER",
     "telegramChatId": "123456789",
     "telegramProxy": "off",
-    "telegramAutoXray": true,
-    "telegramXrayCmd": "node xray.mjs",
-    "proxy": "socks5://user:pass@host:50101",
-    "proxyVia": "socks5://127.0.0.1:1080"
+    "proxy": "socks5://user:pass@host:50101"
   }
 ]

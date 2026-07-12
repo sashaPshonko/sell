@@ -11,12 +11,7 @@ import {
     findClanIntruders,
 } from './lib/clan-members.mjs';
 import { createChatLogger } from './lib/chat-log.mjs';
-import {
-    buildMcProxyConnect,
-    readBotJsonProxy,
-    readBotJsonProxyVia,
-    maskProxyUrl,
-} from './lib/mc-proxy.mjs';
+import { buildMcProxyConnect, readBotJsonProxy, maskProxyUrl } from './lib/mc-proxy.mjs';
 import {
     setupConfigurationTransferFix,
     isInConfigurationTransfer,
@@ -76,7 +71,6 @@ const config = {
     clanBalanceCmdWaitMs: workerData.clanBalanceCmdWaitMs ?? 5000,
     healthCheckObserveMs: workerData.healthCheckObserveMs ?? 8000,
     proxy: workerData.proxy,
-    proxyVia: workerData.proxyVia,
     afk: false,
     balance: null,
     /** как botMenu в 4narek: что ждём от следующего windowOpen */
@@ -782,14 +776,11 @@ async function connectBot() {
 
         try {
             const proxyStr = readBotJsonProxy() || config.proxy;
-            const viaStr = readBotJsonProxyVia() || config.proxyVia;
-            const proxy = buildMcProxyConnect(proxyStr, viaStr);
+            const proxy = buildMcProxyConnect(proxyStr);
             if (proxy) {
                 botOpts.agent = proxy.agent;
                 botOpts.connect = proxy.connect;
-                const viaBit =
-                    viaStr && viaStr !== 'off' ? ` via ${maskProxyUrl(viaStr)}` : '';
-                logInfo(`прокси ${maskProxyUrl(proxyStr)}${viaBit}`);
+                logInfo(`прокси ${maskProxyUrl(proxyStr)}`);
             } else {
                 logInfo('прокси: нет — прямое подключение');
             }

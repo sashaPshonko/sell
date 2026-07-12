@@ -5,7 +5,6 @@ import { startWsServer, stopWsServer, enqueueBotEvent } from './lib/ws-server.mj
 import { createTelegramBot } from './lib/telegram.mjs';
 import { loadSettings } from './settings.mjs';
 import { maskProxyUrl } from './lib/mc-proxy.mjs';
-import { ensureMcProxyVia } from './lib/ensure-xray.mjs';
 import { audit } from '../lib/audit.mjs';
 import { acquirePidLock, releasePidLock } from '../lib/pid-lock.mjs';
 import { isIgnorableProtocolNoise } from './lib/protocol-noise.mjs';
@@ -253,11 +252,7 @@ async function loadBotConfig() {
     cfg = loaded.settings;
     console.log(`[sellbot] бот: ${botConfig.username}, анархия ${botConfig.anarchy}`);
     if (botConfig.proxy && botConfig.proxy !== 'off') {
-        const via =
-            botConfig.proxyVia && botConfig.proxyVia !== 'off'
-                ? ` via ${maskProxyUrl(botConfig.proxyVia)}`
-                : '';
-        console.log(`[sellbot] mc proxy: ${maskProxyUrl(botConfig.proxy)}${via}`);
+        console.log(`[sellbot] mc proxy: ${maskProxyUrl(botConfig.proxy)}`);
     } else {
         console.log('[sellbot] mc proxy: нет (прямое подключение)');
     }
@@ -272,7 +267,6 @@ function workerDataPayload() {
         password: botConfig.password,
         anarchy: botConfig.anarchy,
         proxy: botConfig.proxy,
-        proxyVia: botConfig.proxyVia,
         deliveryMode: cfg.deliveryMode,
         clanInvestMultiplier: cfg.clanInvestMultiplier,
         clanPhaseTimeoutMs: cfg.clanPhaseTimeoutMs,
@@ -678,13 +672,6 @@ async function main() {
     process.on('SIGHUP', () => hardShutdown('SIGHUP'));
 
     await loadBotConfig();
-
-    if (!(await ensureMcProxyVia(cfg.proxyVia))) {
-        console.error(
-            '[sellbot] proxyVia (локальный :1080) не поднялся — проверь vless.url и node xray.mjs',
-        );
-        process.exit(1);
-    }
 
     if (isMockDelivery()) {
         console.log(
