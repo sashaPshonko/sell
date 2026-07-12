@@ -24,15 +24,50 @@ export function parseAmountKk(itemName) {
     return m ? Number(m[1].replace(',', '.')) : null;
 }
 
-/** Цена со скидкой (price), не rawPrice. */
+/** Цена, которую платит покупатель: всегда `price` (не rawPrice). */
 export function discountedPriceRub(itemOrPrice) {
     if (itemOrPrice == null) return null;
     if (typeof itemOrPrice === 'object') {
-        const p = itemOrPrice.price;
-        return p != null ? Math.round(Number(p)) : null;
+        return listingBuyerPriceRub(itemOrPrice);
     }
     const n = Number(itemOrPrice);
     return Number.isFinite(n) ? Math.round(n) : null;
+}
+
+/**
+ * Цена лота для покупателя:
+ * - есть скидка (price < rawPrice) → берём price (со скидкой)
+ * - скидки нет → берём price/rawPrice (полная, они совпадают)
+ */
+export function listingBuyerPriceRub(item) {
+    if (item == null || typeof item !== 'object') return null;
+    const sale =
+        item.price != null && Number.isFinite(Number(item.price))
+            ? Math.round(Number(item.price))
+            : null;
+    const raw =
+        item.rawPrice != null && Number.isFinite(Number(item.rawPrice))
+            ? Math.round(Number(item.rawPrice))
+            : null;
+    if (sale != null && raw != null && sale < raw) return sale;
+    if (sale != null) return sale;
+    return raw;
+}
+
+export function listingRawPriceRub(item) {
+    if (item == null || typeof item !== 'object' || item.rawPrice == null) return null;
+    const n = Math.round(Number(item.rawPrice));
+    return Number.isFinite(n) ? n : null;
+}
+
+/** true если на лоте висит скидка (price < rawPrice). */
+export function listingHasDiscount(item) {
+    const sale =
+        item?.price != null && Number.isFinite(Number(item.price))
+            ? Math.round(Number(item.price))
+            : null;
+    const raw = listingRawPriceRub(item);
+    return sale != null && raw != null && sale < raw;
 }
 
 /** Slug лота: хвост uuid + kk из названия (для старых заказов без itemSlug). */

@@ -237,7 +237,17 @@ export async function sendPremiumRefundUpsellForOrders(client, state, chatId, ne
 
         const baseKk = Math.round(Number(order.amountKk) || 0);
         const upsellKk = Math.round(Number(match?.kk) || 0);
+        const orderPrice = Math.round(Number(order.itemPriceRub) || 0);
+        const matchPrice = Math.round(Number(match?.priceRub) || 0);
         if (!match?.url || upsellKk <= baseKk || baseKk <= 0) {
+            continue;
+        }
+        // Страховка: не возвращать ради 🎁 дороже оплаченного (скидка vs raw)
+        if (orderPrice <= 0 || matchPrice <= 0 || matchPrice !== orderPrice) {
+            console.warn(
+                `[sell] profile-upsell ${order.orderId.slice(0, 8)}…: пропуск — цена ` +
+                    `заказ ${orderPrice || '?'}₽ ≠ 🎁 ${matchPrice || '?'}₽`,
+            );
             continue;
         }
 
@@ -285,6 +295,7 @@ export async function sendPremiumRefundUpsellForOrders(client, state, chatId, ne
                     upsellKk,
                     url: match.url,
                     emoji: match.emoji ?? profileUpsellEmoji(),
+                    priceRub: matchPrice,
                 }),
             );
         } catch (e) {

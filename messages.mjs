@@ -344,15 +344,18 @@ export function formatUpsellLinkLine(url) {
 
 /**
  * Автовозврат прошёл — коротко ссылка на 🎁-лот.
- * @param {{ upsellKk?: number, url?: string, emoji?: string }} opts
+ * @param {{ upsellKk?: number, url?: string, emoji?: string, priceRub?: number }} opts
  */
 export function buildPremiumRefundUpsellHint(opts = {}) {
     const upsellKk = Math.round(Number(opts.upsellKk) || 0);
     const url = String(opts.url || '').trim();
     const marker = opts.emoji || '🎁';
+    const priceRub = opts.priceRub != null ? Math.round(Number(opts.priceRub)) : null;
+    const priceBit =
+        priceRub != null && priceRub > 0 ? `за ${priceRub} ₽` : 'по этой же цене';
 
     return (
-        `Деньги вернули. Бери ${marker} — ${upsellKk}кк по этой же цене:` +
+        `Деньги вернули. Бери ${marker} — ${upsellKk}кк ${priceBit}:` +
         formatUpsellLinkLine(url) +
         `\n\n` +
         `P.S мне выгодно продавать предложения без премки, поэтому так`
