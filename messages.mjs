@@ -391,7 +391,7 @@ export function buildProfileUpsellHint(opts) {
 }
 
 /**
- * Повтор через 40с — ссылка и коротко по-человечески.
+ * Повтор через 40с — та же ссылка, коротко по-человечески.
  * @param {{ upsellKk: number, url: string }} opts
  */
 export function buildProfileUpsellRepeatHint(opts) {
