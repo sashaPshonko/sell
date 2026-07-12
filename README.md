@@ -29,3 +29,7 @@ cp sellbot/bot.json.example sellbot/bot.json   # ник, пароль, анар�
 Тест без Minecraft: `"mockDelivery": true` в `bot.json`.
 
 Telegram — в `sellbot/bot.json`: `telegramToken`, `telegramChatId` (или напиши боту `/start` и перезапусти — подтянет из getUpdates). `telegramProxy`: `"off"` или SOCKS.
+
+Minecraft-прокси: `proxy` — внешний SOCKS. Если VPS не достучится до прокси напрямую — `proxyVia`: `"socks5://127.0.0.1:1080"`. Цепочка: VPS → xray → proxy → MC.
+
+Xray поднимается сам при старте sellbot (`node sellbot/xray.mjs`, ссылка в `sellbot/vless.url`). Вручную: `cd sellbot && node xray.mjs` / `node xray-check.mjs`.

@@ -56,8 +56,9 @@ export const DEFAULTS = {
     telegramSkip: false,
     /** `off` — напрямую; иначе `socks5h://127.0.0.1:1080` и т.п. */
     telegramProxy: 'off',
-    telegramAutoXray: false,
-    telegramXrayCmd: '',
+    /** Если telegramProxy → :1080 и порт закрыт — поднять xray.mjs */
+    telegramAutoXray: true,
+    telegramXrayCmd: 'node xray.mjs',
 };
 
 function parseMarkers(value, fallback) {
@@ -95,6 +96,8 @@ export async function loadSettings(path = BOT_JSON) {
         /** Анархия — только из sell/config.mjs (поле anarchy в bot.json не используется) */
         anarchy: DELIVERY_ANARCHY_NUM,
         proxy: String(pick(entry, 'proxy', '')).trim(),
+        /** Локальный SOCKS (xray) перед внешним proxy; `off` — напрямую к proxy */
+        proxyVia: String(pick(entry, 'proxyVia', '')).trim(),
     };
 
     const settings = {

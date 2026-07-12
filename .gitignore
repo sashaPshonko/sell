@@ -15,4 +15,8 @@ captures/env.generated
 logs/
 *.log
 
+sellbot/.xray-runtime/
+sellbot/.vless-applied.stamp
+sellbot/.orchestrator.pid
+
 .DS_Store

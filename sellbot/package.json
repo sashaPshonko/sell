@@ -5,6 +5,8 @@
   "scripts": {
     "start": "node orchestrator.mjs",
     "start:mock": "node orchestrator.mjs",
+    "xray": "node xray.mjs",
+    "xray:check": "node xray-check.mjs",
     "test-order": "node scripts/send-test-order.mjs"
   },
   "dependencies": {

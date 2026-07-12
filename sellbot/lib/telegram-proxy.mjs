@@ -1,14 +1,27 @@
 import net from 'net';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { access, unlink } from 'fs/promises';
-import { constants } from 'fs';
+import { unlink } from 'fs/promises';
+import { constants, existsSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 
 const execAsync = promisify(exec);
 const XRAY_LOCK = '/tmp/sellbot-telegram-proxy.lock';
+const SELLBOT_DIR = dirname(fileURLToPath(import.meta.url)).replace(/\/lib$/, '');
+const DEFAULT_XRAY_CMD = 'node xray.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function resolveXrayCwd() {
+    if (existsSync(join(SELLBOT_DIR, 'xray.mjs'))) return SELLBOT_DIR;
+    if (existsSync(join(process.cwd(), 'xray.mjs'))) return process.cwd();
+    if (existsSync(join(process.cwd(), 'sellbot', 'xray.mjs'))) {
+        return join(process.cwd(), 'sellbot');
+    }
+    return SELLBOT_DIR;
+}
 
 /** tg.proxy / tg.telegramProxy: `off` | socks5h://... | http://... */
 export function resolveTelegramProxyUrl(tg = {}) {
@@ -47,12 +60,11 @@ export function isTelegramProxyReachable(proxyUrl, timeoutMs = 2000) {
 }
 
 async function runXrayCommand(tg) {
-    const cmd = (tg.xrayCmd ?? tg.telegramXrayCmd)?.trim();
-    if (!cmd) {
-        throw new Error('задай telegramXrayCmd в bot.json');
-    }
-    console.log(`[Telegram] запуск прокси: ${cmd}`);
+    const cmd = (tg.xrayCmd ?? tg.telegramXrayCmd)?.trim() || DEFAULT_XRAY_CMD;
+    const cwd = resolveXrayCwd();
+    console.log(`[Telegram] запуск прокси: ${cmd} (cwd=${cwd})`);
     const { stdout, stderr } = await execAsync(cmd, {
+        cwd,
         timeout: 180_000,
         maxBuffer: 10 * 1024 * 1024,
     });
@@ -75,14 +87,6 @@ export async function ensureTelegramProxy(tg = {}) {
     const autoXray = tg.autoXray ?? tg.telegramAutoXray;
     if (!autoXray) {
         console.error(`[Telegram] прокси недоступен: ${proxyUrl}`);
-        return false;
-    }
-
-    const xrayCmd = (tg.xrayCmd ?? tg.telegramXrayCmd)?.trim();
-    if (!xrayCmd) {
-        console.error(
-            `[Telegram] прокси ${proxyUrl} недоступен. Подними SOCKS или telegramProxy: "off" в bot.json`,
-        );
         return false;
     }
 
