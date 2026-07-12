@@ -33,6 +33,8 @@ const CLAN_WITHDRAW_TAIL = ' из казны';
 const CLAN_OFFLINE_HEAD = '[⚔] Ошибка: Игрок';
 const CLAN_OFFLINE_TAIL = ' не в сети!';
 const CLAN_OTHER_CLAN_MARKER = 'состоит в другом клане';
+/** [⚔] Кланы: Nick отклонил Ваше приглашение в клан. */
+const CLAN_INVITE_DECLINED_MARKER = 'отклонил Ваше приглашение в клан';
 const AFK_MARKER = 'Данная команда недоступна в режиме AFK';
 const CAPTCHA_MARKER = 'BotFilter >> Введите номер с картинки в чат';
 const ANARCHY_ALREADY_ON_MARKER = 'Вы уже подключены к этому серверу!';
@@ -101,6 +103,7 @@ let moneyInvested = false;
 let playerWithdrew = false;
 let playerOffline = false;
 let playerInOtherClan = false;
+let inviteDeclined = false;
 /** сколько должен снять игрок; ждём полную сумму, не первый withdraw */
 let expectedWithdrawAmount = 0;
 let withdrawnTotal = 0;
@@ -285,6 +288,7 @@ function resetDeliveryFlags() {
     playerWithdrew = false;
     playerOffline = false;
     playerInOtherClan = false;
+    inviteDeclined = false;
     clanJoinedForCurrent = false;
     expectedWithdrawAmount = 0;
     withdrawnTotal = 0;
@@ -371,6 +375,15 @@ function handleChatMessage(raw) {
     if (text.includes(CLAN_INVITE_OK)) {
         inviteSent = true;
         logOk('invite отправлен');
+        return;
+    }
+
+    if (
+        text.includes(CLAN_INVITE_DECLINED_MARKER) &&
+        nickIn(text, nick)
+    ) {
+        inviteDeclined = true;
+        logInfo(`invite отклонён: ${nick}`);
         return;
     }
 
@@ -929,6 +942,7 @@ async function deliverClan() {
     let lastAfkCheck = 0;
     while (active() && Date.now() < end && !playerJoined) {
         if (playerOffline) { endDelivery('offline'); return; }
+        if (inviteDeclined) { endDelivery('invite_declined'); return; }
         if (Date.now() - lastAfkCheck >= AFK_WAIT_MS) {
             await afkTick();
             lastAfkCheck = Date.now();
@@ -1116,6 +1130,8 @@ function endDelivery(result, queued, { skipNextOrder = false } = {}) {
         post('player_offline', { orderId });
     } else if (result === 'player_in_other_clan') {
         post('player_in_other_clan', { orderId, nick });
+    } else if (result === 'invite_declined') {
+        post('invite_declined', { orderId, nick });
     } else if (result === 'insufficient_funds') {
         post('insufficient_funds', { orderId });
     } else if (result === 'banned') {

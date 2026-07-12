@@ -32,6 +32,7 @@ import {
     resolveProfileUpsell,
     profileUpsellEmoji,
     isMarkedProfileLot,
+    buyerHasPriorSuccessfulDelivery,
 } from './lib/profile-upsell.mjs';
 import { getQueuePosition } from './lib/delivery-queue.mjs';
 import { sendGreeting, sendChatMessage } from './chat.mjs';
@@ -173,7 +174,9 @@ export async function ensureChatGreeting(client, state, chatId, messages, seller
 
 /**
  * Лот без 🎁 — если на профиле есть 🎁-аналог (больше kk, те же ₽):
- * отмена на PlayerOK + ссылка. Без успешного автовозврата — обычная выдача.
+ * повторным покупателям — отмена на PlayerOK + ссылка;
+ * первой покупке — обычная выдача, ссылку кинем после delivery.
+ * Без успешного автовозврата — обычная выдача.
  * @param {object[]} newOrders — заказы из registerDealOrders
  */
 export async function sendPremiumRefundUpsellForOrders(client, state, chatId, newOrders) {
@@ -194,6 +197,13 @@ export async function sendPremiumRefundUpsellForOrders(client, state, chatId, ne
         if (order.premiumRefundUpsellSentAt) continue;
         if (isMarkedProfileLot(order.itemName)) continue;
         if (isBuyerBanned(state, order.buyerId)) continue;
+
+        if (!buyerHasPriorSuccessfulDelivery(state, order.buyerId, order.orderId)) {
+            console.log(
+                `[sell] profile-upsell ${order.orderId.slice(0, 8)}…: первая покупка — выдача, ссылка после`,
+            );
+            continue;
+        }
 
         const paidAtMs = order.paidAt ? Date.parse(order.paidAt) : 0;
         const hasNewerProfileLot = [...sortedNew, ...chatOrders].some((o) => {

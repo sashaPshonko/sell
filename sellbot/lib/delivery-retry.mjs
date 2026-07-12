@@ -13,6 +13,7 @@ export const TERMINAL_DELIVERY_REASONS = new Set([
     'invalid',
     'invalid_nick',
     'player_in_other_clan',
+    'invite_declined',
     'insufficient_funds',
     'banned',
     'captcha',

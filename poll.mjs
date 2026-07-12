@@ -448,6 +448,31 @@ async function handleBotEvents(client, state) {
                     getOrder(state, ev.orderId) || order,
                     () => buildDeliveryFailHint('player_in_other_clan'),
                 );
+            } else if (ev.type === 'invite_declined') {
+                if (!shouldProcessBotRetryEvent(order)) {
+                    console.log(
+                        `[sell] invite_declined ${ev.orderId.slice(0, 8)}… игнор (заказ уже закрыт)`,
+                    );
+                    continue;
+                }
+                markDeliveryPaused(
+                    state,
+                    ev.orderId,
+                    'awaiting_nick',
+                    clanDeliveryRetryReset({
+                        lastError: 'invite_declined',
+                        nick: getBuyerSession(state, chatId, buyerId).nick || order.nick,
+                    }),
+                );
+                void dispatchCancelOrder(ev.orderId);
+                await sendDeliveryHintOnce(
+                    client,
+                    state,
+                    chatId,
+                    ev.orderId,
+                    getOrder(state, ev.orderId) || order,
+                    () => buildDeliveryFailHint('invite_declined'),
+                );
             } else if (ev.type === 'insufficient_funds') {
                 if (!shouldProcessBotRetryEvent(order)) {
                     console.log(

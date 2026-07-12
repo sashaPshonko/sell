@@ -211,6 +211,14 @@ export function buildDeliveryFailHint(reason) {
                 `зайди на анархию ${anka} и будь в сети.`,
             );
             break;
+        case 'invite_declined':
+            lines.push(
+                '📋 Причина: ты отклонил приглашение в клан — нужно было принять.',
+                '',
+                `🎮 Будь на анархии ${anka} в сети и прими invite,`,
+                'когда бот пришлёт его снова.',
+            );
+            break;
         default:
             return buildRetryNickHint();
     }

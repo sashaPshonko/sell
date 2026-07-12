@@ -472,6 +472,7 @@ async function startWorker(reason = 'order') {
                 invalid_nick: 'invalid_nick',
                 player_offline: 'player_offline',
                 player_in_other_clan: 'player_in_other_clan',
+                invite_declined: 'invite_declined',
                 insufficient_funds: 'insufficient_funds',
                 clan_invite_sent: 'clan_invite_sent',
                 clan_invested: 'clan_invested',
@@ -527,6 +528,10 @@ async function startWorker(reason = 'order') {
                     await sendAlert(
                         `⚠️ ${order?.nick || '?'}: уже в другом клане (заказ ${short}…)\n` +
                             'Пусть выйдет из клана (/clan leave) и снова /nick',
+                    );
+                } else if (evType === 'invite_declined') {
+                    console.log(
+                        `[sellbot] invite declined → ${order?.nick || '?'} (${short}…)`,
                     );
                 } else if (evType === 'insufficient_funds') {
                     await sendAlert(
