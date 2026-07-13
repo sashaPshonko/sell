@@ -12,12 +12,29 @@ function flattenChatFallback(raw) {
         }
     }
     if (typeof raw !== 'object') return String(raw);
-    let out = raw.text ?? '';
+
+    // FunTime иногда шлёт chat как NBT { type, value }
+    if (raw.type === 'string' && raw.value != null) return String(raw.value);
+    if (raw.type === 'compound' && raw.value != null) return flattenChatFallback(raw.value);
+    if (raw.type === 'list' && raw.value != null) {
+        const items = raw.value.value ?? raw.value;
+        if (Array.isArray(items)) return items.map(flattenChatFallback).join('');
+    }
+
+    let out = '';
+    if (raw.text != null) out += flattenChatFallback(raw.text);
     if (Array.isArray(raw.extra)) {
         for (const part of raw.extra) out += flattenChatFallback(part);
     }
     if (raw.translate && Array.isArray(raw.with)) {
         for (const part of raw.with) out += flattenChatFallback(part);
+    }
+    // NBT compound.value.text / extra
+    if (raw.value && typeof raw.value === 'object' && !Array.isArray(raw.value)) {
+        if (raw.value.text != null) out += flattenChatFallback(raw.value.text);
+        if (Array.isArray(raw.value.extra)) {
+            for (const part of raw.value.extra) out += flattenChatFallback(part);
+        }
     }
     return out;
 }

@@ -331,6 +331,7 @@ async function stopWorker() {
 
 async function startWorker(reason = 'order') {
     if (workerEntry?.worker || isShuttingDown) return;
+    await loadBotConfig();
     console.log(`[sellbot] запуск воркера (${reason})…`);
 
     const worker = new Worker(join(__dirname, 'worker.mjs'), {
@@ -590,6 +591,7 @@ async function handleOrder(order) {
         console.log(`[sellbot] игнор закрытого заказа ${oid.slice(0, 8)}…`);
         return;
     }
+    await loadBotConfig();
     activeOrders.set(oid, order);
     console.log(
         `[sellbot] заказ ${order.orderId} | ${order.nick || '?'} | ${order.amount ?? '?'}kk`,

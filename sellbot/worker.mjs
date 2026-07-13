@@ -36,7 +36,6 @@ const CLAN_OTHER_CLAN_MARKER = 'состоит в другом клане';
 /** [⚔] Кланы: Nick отклонил Ваше приглашение в клан. */
 const CLAN_INVITE_DECLINED_MARKER = 'отклонил Ваше приглашение в клан';
 const AFK_MARKER = 'Данная команда недоступна в режиме AFK';
-const CAPTCHA_MARKER = 'BotFilter >> Введите номер с картинки в чат';
 const ANARCHY_ALREADY_ON_MARKER = 'Вы уже подключены к этому серверу!';
 
 const LMB = 0;
@@ -326,17 +325,18 @@ async function afkTick() {
 
 function handleChatMessage(raw) {
     const text = plain(raw);
-    const lower = text.toLowerCase();
 
-    if (lower.includes('вы забанены')) {
+    // как в 4narek-old: всегда toLowerCase — сервер шлёт «ВЫ ЗАБАНЕНЫ!»
+    if (text.toLowerCase().includes('вы забанены')) {
         if (healthCheckActive) return finishHealth('banned');
         parentPort.postMessage(`${config.username} - забанен`);
+        parentPort.postMessage({ name: 'banned' });
         endDelivery('banned');
         shutdown('banned');
         return;
     }
 
-    if (text.includes(CAPTCHA_MARKER)) {
+    if (text.toLowerCase().includes('botfilter >> введите номер с картинки')) {
         if (healthCheckActive) return finishHealth('captcha');
         parentPort.postMessage(`${config.username} - ввести капчу`);
         endDelivery('captcha');
