@@ -5,8 +5,6 @@
     "anarchy": 221,
     "payAmountMultiplier": 1000000,
     "paySuffix": "",
-    "telegramToken": "8779973341:AAFoPjPiop1Pndoit4Cdv8dUJ6UWu-9CzC4",
-    "telegramChatId": "",
     "telegramProxy": "off",
     "proxy": "socks5://privetnitron:jacb9eSh7e@85.120.131.218:50101"
   }

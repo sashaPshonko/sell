@@ -409,7 +409,7 @@ async function startWorker(reason = 'order') {
                 if (bal < min) {
                     await sendAlert(
                         `⚠️ ${botConfig.username}: мало баланса!\n` +
-                            `${bal.toLocaleString('ru-RU')} < ${min.toLocaleString('ru-RU')}`,
+                            `${bal.toLocaleString('ru-RU')} < ${min.toLocaleString('ru-RU')} (150кк)`,
                     );
                 }
                 return;
@@ -431,6 +431,10 @@ async function startWorker(reason = 'order') {
                             : '';
                     console.log(`[sellbot] health: ок${balNote}`);
                     if (bal != null && Number.isFinite(bal) && bal < min) {
+                        await sendAlert(
+                            `⚠️ ${botConfig.username}: мало баланса!\n` +
+                                `${bal.toLocaleString('ru-RU')} < ${min.toLocaleString('ru-RU')} (150кк)`,
+                        );
                         return;
                     }
                     await sendAlert(`✅ ${botConfig.username}: проверка анархии ок${balNote}`);
@@ -712,8 +716,6 @@ async function main() {
 
     const tg = await createTelegramBot({
         telegram: {
-            token: cfg.telegramToken,
-            chatId: cfg.telegramChatId,
             skip: cfg.telegramSkip,
             proxy: cfg.telegramProxy,
             autoXray: cfg.telegramAutoXray,

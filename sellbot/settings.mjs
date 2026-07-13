@@ -3,6 +3,7 @@ import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { DELIVERY_ANARCHY_NUM } from '../config.mjs';
+import { SELLBOT_BALANCE_MIN } from './lib/telegram-alerts.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BOT_JSON = join(__dirname, 'bot.json');
@@ -37,7 +38,8 @@ export const DEFAULTS = {
     healthCheckObserveMs: 8000,
     idleQuitMs: 25_000,
     deliverTimeoutMs: 600_000,
-    balanceMin: 1_000_000_000,
+    /** 150кк — ниже тег в TG */
+    balanceMin: 150_000_000,
     balanceWaitMs: 15_000,
     balanceCmdWaitMs: 2000,
     /** /clan info — ждём ответ дольше (после transfer) */
@@ -51,6 +53,7 @@ export const DEFAULTS = {
     /** Не хватает монет на балансе бота */
     insufficientFundsMarker: '[✘] Ошибка! У вас недостаточно денег.',
     invalidNickMarkers: ['ник не найден'],
+    /** Токен/чат — хардкод в lib/telegram-alerts.mjs (не из bot.json) */
     telegramToken: '',
     telegramChatId: '',
     telegramSkip: false,
@@ -133,7 +136,7 @@ export async function loadSettings(path = BOT_JSON) {
         ),
         idleQuitMs: Number(pick(entry, 'idleQuitMs', DEFAULTS.idleQuitMs)),
         deliverTimeoutMs: Number(pick(entry, 'deliverTimeoutMs', DEFAULTS.deliverTimeoutMs)),
-        balanceMin: Number(pick(entry, 'balanceMin', DEFAULTS.balanceMin)),
+        balanceMin: SELLBOT_BALANCE_MIN,
         balanceWaitMs: Number(pick(entry, 'balanceWaitMs', DEFAULTS.balanceWaitMs)),
         balanceCmdWaitMs: Number(pick(entry, 'balanceCmdWaitMs', DEFAULTS.balanceCmdWaitMs)),
         clanInfoWaitMs: Number(pick(entry, 'clanInfoWaitMs', DEFAULTS.clanInfoWaitMs)),
