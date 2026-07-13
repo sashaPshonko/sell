@@ -329,9 +329,10 @@ function handleChatMessage(raw) {
     // как в 4narek-old: всегда toLowerCase — сервер шлёт «ВЫ ЗАБАНЕНЫ!»
     if (text.toLowerCase().includes('вы забанены')) {
         if (healthCheckActive) return finishHealth('banned');
+        // сначала fail заказа → sell успеет уведомить покупателя до stopWorker
+        endDelivery('banned');
         parentPort.postMessage(`${config.username} - забанен`);
         parentPort.postMessage({ name: 'banned' });
-        endDelivery('banned');
         shutdown('banned');
         return;
     }
@@ -1160,7 +1161,11 @@ function endDelivery(result, queued, { skipNextOrder = false } = {}) {
     }
 
     if (FATAL.has(result)) {
-        deliverQueue.length = 0;
+        const queued = deliverQueue.splice(0, deliverQueue.length);
+        for (const o of queued) {
+            post('delivery_failed', { orderId: o.orderId, reason: result });
+        }
+        postQueueStatus();
         return;
     }
     if (!skipNextOrder) nextOrder();

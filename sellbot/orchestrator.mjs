@@ -373,6 +373,14 @@ async function startWorker(reason = 'order') {
 
             if (message?.name === 'banned') {
                 await sendAlert(`🚫 ${botConfig.username} забанен на сервере`);
+                // страховка: все активные заказы → sell уведомит покупателей
+                for (const order of activeOrders.values()) {
+                    forwardToSell({
+                        type: 'delivery_failed',
+                        orderId: order.orderId,
+                        reason: 'banned',
+                    });
+                }
                 await stopWorker();
                 return;
             }
