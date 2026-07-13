@@ -16,8 +16,6 @@ import {
     ordersInChat,
 } from './state.mjs';
 import {
-    hasGreetingInChat,
-    buildNewOrderTwinHint,
     buildOrderCancelledHint,
     buildOrderCancelDeniedHint,
     buildDispatchingHint,
@@ -127,48 +125,38 @@ export function syncChatNick(
 
 export async function ensureChatGreeting(client, state, chatId, messages, sellerUserId, deals) {
     const chat = ensureChat(state, chatId);
-    const hasOpen = deals.some((d) => {
-        const o = getOrder(state, d.dealId);
-        return isActionableOrder(o);
-    });
-    if (!hasOpen) return chat.greetingAt || null;
-
-    if (!chat.greetingAt) {
-        const anchor = findGreetingAnchorInChat(messages, sellerUserId);
-        if (anchor) chat.greetingAt = anchor;
-    }
-
-    if (chat.greetingSent || hasGreetingInChat(messages, sellerUserId)) {
-        chat.greetingSent = true;
-        if (!chat.greetingAt) {
-            chat.greetingAt = findGreetingAnchorInChat(messages, sellerUserId) || new Date().toISOString();
-        }
-        for (const paid of deals) {
-            const o = getOrder(state, paid.dealId);
-            if (!o || !isActionableOrder(o)) continue;
-            if (o.phase === 'new') {
-                setOrderPhase(state, paid.dealId, 'awaiting_nick', {
-                    greetedAt: chat.greetingAt,
-                });
-            }
-        }
-        return chat.greetingAt;
-    }
-
-    const firstDeal = deals[0];
-    await sendGreeting(client, chatId, {
-        orderId: firstDeal?.dealId,
-        lotKk: firstDeal?.amountKk,
-    });
-    chat.greetingSent = true;
-    chat.greetingAt = new Date().toISOString();
-    console.log(`[sell] чат ${chatId.slice(0, 8)}…: приветствие`);
-
+    const needGreet = [];
     for (const paid of deals) {
-        setOrderPhase(state, paid.dealId, 'awaiting_nick', {
-            greetedAt: chat.greetingAt,
-        });
+        const o = getOrder(state, paid.dealId);
+        if (!o || !isActionableOrder(o)) continue;
+        if (o.greetedAt) continue;
+        needGreet.push(paid);
     }
+    if (!needGreet.length) {
+        if (!chat.greetingAt) {
+            chat.greetingAt =
+                findGreetingAnchorInChat(messages, sellerUserId) || chat.greetingAt || null;
+        }
+        return chat.greetingAt || null;
+    }
+
+    // При каждой новой оплате — полное приветствие (не короткий twin-hint).
+    const greetedAt = new Date().toISOString();
+    for (const paid of needGreet) {
+        await sendGreeting(client, chatId, {
+            orderId: paid.dealId,
+            lotKk: paid.amountKk,
+        });
+        setOrderPhase(state, paid.dealId, 'awaiting_nick', {
+            greetedAt,
+        });
+        console.log(
+            `[sell] чат ${chatId.slice(0, 8)}…: приветствие (заказ ${String(paid.dealId).slice(0, 8)}…)`,
+        );
+    }
+
+    chat.greetingSent = true;
+    chat.greetingAt = greetedAt;
     return chat.greetingAt;
 }
 
@@ -300,52 +288,6 @@ export async function sendPremiumRefundUpsellForOrders(client, state, chatId, ne
             );
         } catch (e) {
             console.warn(`[sell] profile-upsell refund чат: ${e.message}`);
-        }
-    }
-}
-
-/**
- * Новые оплаты, когда полное приветствие в чате уже было — коротко про твинк.
- * @param {object[]} newOrders — заказы из registerDealOrders
- */
-export async function sendTwinRemindersForNewOrders(client, state, chatId, newOrders) {
-    if (!newOrders?.length) return;
-
-    const chat = ensureChat(state, chatId);
-    const twinSentForBuyer = new Set();
-
-    for (const order of newOrders) {
-        if (!order || !isActionableOrder(order)) continue;
-        if (!playerokNeedsDelivery(order.playerokStatus)) continue;
-        if (order.twinReminderSentAt) continue;
-        if (order.buyerId && twinSentForBuyer.has(order.buyerId)) {
-            setOrderPhase(state, order.orderId, order.phase, {
-                twinReminderSentAt: new Date().toISOString(),
-                greetedAt: order.greetedAt || chat.greetingAt,
-            });
-            continue;
-        }
-
-        const phase = order.phase === 'new' ? 'awaiting_nick' : order.phase;
-        setOrderPhase(state, order.orderId, phase, {
-            twinReminderSentAt: new Date().toISOString(),
-            greetedAt: order.greetedAt || chat.greetingAt,
-        });
-        if (order.buyerId) twinSentForBuyer.add(order.buyerId);
-
-        try {
-            await sendChatMessage(
-                client,
-                chatId,
-                buildNewOrderTwinHint({
-                    lotKk: order.amountKk,
-                }),
-            );
-            console.log(
-                `[sell] чат ${chatId.slice(0, 8)}…: напоминание твинк (заказ ${order.orderId.slice(0, 8)}…)`,
-            );
-        } catch (e) {
-            console.warn(`[sell] напоминание твинк: ${e.message}`);
         }
     }
 }

@@ -40,7 +40,6 @@ import {
     buildClanPartialWithdrawHint,
     clanFullAmountRaw,
     buildOrderAlreadyDoneHint,
-    hasGreetingInChat,
     DELIVERY_ANARCHY,
 } from './messages.mjs';
 import { confirmDealOnPlayerok } from './confirm.mjs';
@@ -52,7 +51,6 @@ import {
     chatHasOpenOrders,
     chatHasPendingOrders,
     ensureChatGreeting,
-    sendTwinRemindersForNewOrders,
     sendPremiumRefundUpsellForOrders,
     syncChatNick,
     applyNickCommandUpdates,
@@ -698,9 +696,6 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
     }
 
     const chatBeforeGreeting = ensureChat(state, chatId);
-    const hadGreetingBefore =
-        chatBeforeGreeting.greetingSent || hasGreetingInChat(messages, sellerUserId);
-
     let greetingAt = chatBeforeGreeting.greetingAt || null;
     if (openDeals.length) {
         greetingAt = await ensureChatGreeting(
@@ -713,10 +708,6 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
         );
     } else if (!greetingAt) {
         greetingAt = findGreetingAnchorInChat(messages, sellerUserId);
-    }
-
-    if (hadGreetingBefore && newlyRegistered.length) {
-        await sendTwinRemindersForNewOrders(client, state, chatId, newlyRegistered);
     }
 
     const buyerIds = [...new Set([...openDeals.map((d) => d.buyerId), ...pendingBuyerIds])];

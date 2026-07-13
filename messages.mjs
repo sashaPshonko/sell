@@ -40,30 +40,6 @@ export function buildGreetingText(_ctx = null) {
     ].join('\n');
 }
 
-/**
- * Повторная оплата в том же чате — без полного приветствия, но с напоминанием про твинк.
- * @param {{ lotKk?: number }} [ctx]
- */
-export function buildNewOrderTwinHint(ctx = null) {
-    const anka = DELIVERY_ANARCHY;
-    const lotKk = Number(ctx?.lotKk);
-
-    const lines = [
-        '✅ Оплата получена.',
-        '',
-        ...twinAccountWarningLines(),
-        `🎮 Анархия ${anka} — будь в сети.`,
-        '💸 Выдача теперь через клан (не /pay):',
-        'приглашение → казна → ты снимешь /clan withdraw',
-        '',
-        askNickInChatLine(),
-    ];
-    if (lotKk > 0) {
-        lines.push('', `📦 Лот: ${lotKk}кк`);
-    }
-    return lines.join('\n');
-}
-
 /** Красная «рамка» для бан-сообщений (симметрично сверху и снизу). */
 function buildRedAlertFrame(headline, bodyLines, footerLines = []) {
     const border =
@@ -549,13 +525,12 @@ export function buildClanPartialWithdrawHint(nick, remainAmountRaw) {
     ].join('\n');
 }
 
+/** Полное приветствие в чате (не короткий twin-hint после повторной оплаты). */
 export function hasGreetingInChat(messages, sellerUserId) {
     const marker = (process.env.GREETING_MARKER || 'выдача автоматическая').toLowerCase();
     for (const msg of messages) {
         if (!msg?.text || msg.user?.id !== sellerUserId) continue;
-        const text = msg.text.toLowerCase();
-        if (text.includes(marker)) return true;
-        if (text.includes('оплата получена') && text.includes('твинк')) return true;
+        if (msg.text.toLowerCase().includes(marker)) return true;
     }
     return false;
 }
