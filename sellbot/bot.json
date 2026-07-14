@@ -1,11 +1,11 @@
 [
   {
-    "username": "hjhjh5230",
+    "username": "hjhjh5231",
     "password": "ggggg",
     "anarchy": 221,
     "payAmountMultiplier": 1000000,
     "paySuffix": "",
     "telegramProxy": "off",
-    "proxy": "socks5://privetnitron:jacb9eSh7e@50.114.27.88:50101"
+    "proxy": "socks5://privetnitron:jacb9eSh7e@50.114.27.105:50101"
   }
 ]
