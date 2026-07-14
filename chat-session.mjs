@@ -141,15 +141,29 @@ export async function ensureChatGreeting(client, state, chatId, messages, seller
     }
 
     // При каждой новой оплате — полное приветствие (не короткий twin-hint).
+    // Claim ВСЕ заказы до send — иначе параллельный poll / повторный вызов дублирует.
+    // Одно сообщение на чат за вызов: все needGreet получают один и тот же greetedAt.
     const greetedAt = new Date().toISOString();
     for (const paid of needGreet) {
-        await sendGreeting(client, chatId, {
-            orderId: paid.dealId,
-            lotKk: paid.amountKk,
-        });
         setOrderPhase(state, paid.dealId, 'awaiting_nick', {
             greetedAt,
         });
+    }
+    try {
+        const primary = needGreet[0];
+        await sendGreeting(client, chatId, {
+            orderId: primary.dealId,
+            lotKk: primary.amountKk,
+        });
+    } catch (e) {
+        for (const paid of needGreet) {
+            setOrderPhase(state, paid.dealId, 'awaiting_nick', {
+                greetedAt: undefined,
+            });
+        }
+        throw e;
+    }
+    for (const paid of needGreet) {
         console.log(
             `[sell] чат ${chatId.slice(0, 8)}…: приветствие (заказ ${String(paid.dealId).slice(0, 8)}…)`,
         );
@@ -502,14 +516,22 @@ export async function applyNickCommandUpdates(
                 console.log(
                     `[sell] повторный ник игнор: ${order.orderId?.slice(0, 8)}… (${fulfilled ? 'заказ закрыт' : 'выдача идёт'})`,
                 );
-                if (!fulfilled) {
-                    order.queueStatusSentAt = undefined;
-                    if (
-                        !order.pausedUntilNick
-                        && (order.phase === 'dispatched' || order.phase === 'ws_pending')
-                    ) {
-                        blockedByActiveDelivery = true;
+                if (
+                    !fulfilled
+                    && !order.pausedUntilNick
+                    && (order.phase === 'dispatched' || order.phase === 'ws_pending')
+                ) {
+                    // Смена ника mid-delivery — только nick_update, без retry/сброса статусов
+                    if (order.nick !== u.nick) {
+                        order.nick = u.nick;
+                        await dispatchNickUpdate(order.orderId, u.nick);
+                        order.queueStatusSentAt = undefined;
+                        console.log(
+                            `[sell] mid-delivery ник → ${u.nick} (${order.orderId?.slice(0, 8)}…)`,
+                        );
                     }
+                    blockedByActiveDelivery = true;
+                    nickApplied = true;
                 }
                 continue;
             }
@@ -524,19 +546,23 @@ export async function applyNickCommandUpdates(
             const wasPausedUntilNick = order.pausedUntilNick;
             order.nick = u.nick;
             order.pausedUntilNick = false;
-            order.deliveryHintSentAt = undefined;
-            order.queueStatusSentAt = undefined;
-            if (isNewNickMessage) {
+            // Сброс подсказок только при СМЕНЕ ника (не при повторном том же нике)
+            if (changed) {
+                order.deliveryHintSentAt = undefined;
+                order.queueStatusSentAt = undefined;
+            }
+            if (isNewNickMessage && wasPausedUntilNick) {
                 order.deliveryAttempts = 0;
                 order.deliveryAttemptsHintSentAt = undefined;
             }
             nickApplied = true;
 
             if (order.phase === 'dispatched') {
+                // На всякий случай: shouldIgnore уже покрывает dispatched
                 order.wrongNickWarned = false;
                 if (changed) {
                     await dispatchNickUpdate(order.orderId, u.nick);
-                } else if (isNewNickMessage || u.recovery || wasPausedUntilNick) {
+                } else if (wasPausedUntilNick || u.recovery) {
                     setOrderPhase(
                         state,
                         order.orderId,
@@ -564,14 +590,20 @@ export async function applyNickCommandUpdates(
                 continue;
             }
 
+            // Retry после паузы / первый dispatch — сброс delivery-флагов
             setOrderPhase(
                 state,
                 order.orderId,
                 'awaiting_nick',
-                clanDeliveryRetryReset({
-                    nick: u.nick,
-                    lastError: null,
-                }),
+                wasPausedUntilNick || u.recovery
+                    ? clanDeliveryRetryReset({
+                          nick: u.nick,
+                          lastError: null,
+                      })
+                    : {
+                          nick: u.nick,
+                          lastError: null,
+                      },
             );
             queuedForDelivery = true;
         }
@@ -587,7 +619,9 @@ export async function applyNickCommandUpdates(
             session.via = u.via;
             session.messageId = u.messageId;
             session.nickAt = u.at;
-        } else if (blockedByActiveDelivery && client) {
+        }
+        // Повторный ник на активной выдаче: статус только если ещё не слали
+        if (blockedByActiveDelivery && client) {
             const active = buyerOrders.find(
                 (o) =>
                     !isOrderFulfilled(o)
@@ -595,8 +629,6 @@ export async function applyNickCommandUpdates(
                     && !o.pausedUntilNick,
             );
             if (active) {
-                // Уже в выдаче / казне — статус очереди или «жди withdraw»
-                active.queueStatusSentAt = undefined;
                 await notifyDeliveryQueueStatus(client, state, chatId, active, u.nick);
                 await notifyClanWithdrawWaitHint(client, state, chatId, active, u.nick);
             }
@@ -610,7 +642,6 @@ export async function applyNickCommandUpdates(
                     && !o.pausedUntilNick,
             );
             if (waiting) {
-                waiting.queueStatusSentAt = undefined;
                 await notifyDeliveryQueueStatus(client, state, chatId, waiting, u.nick);
             } else if (buyerHasPendingOrder(state, chatId, buyerId)) {
                 console.log(
@@ -669,17 +700,22 @@ async function notifyDeliveryQueueStatus(client, state, chatId, order, nick) {
     }
     if (order.playerokStatus && !playerokNeedsDelivery(order.playerokStatus)) return;
 
+    // Claim до await — параллельный poll не отправит второй раз
+    setOrderPhase(state, order.orderId, order.phase, {
+        queueStatusSentAt: new Date().toISOString(),
+    });
+
     try {
         const text = buildQueueStatusMessage(state, order, nick);
         await sendChatMessage(client, chatId, text);
-        setOrderPhase(state, order.orderId, order.phase, {
-            queueStatusSentAt: new Date().toISOString(),
-        });
         const q = getQueuePosition(order.orderId, state);
         console.log(
             `[sell] очередь → ${order.orderId.slice(0, 8)}… pos=${q.position}/${q.total} phase=${order.phase}`,
         );
     } catch (e) {
+        setOrderPhase(state, order.orderId, order.phase, {
+            queueStatusSentAt: undefined,
+        });
         console.warn(`[sell] очередь: ${e.message}`);
     }
 }

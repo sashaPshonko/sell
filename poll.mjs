@@ -135,10 +135,17 @@ async function sendDeliveryHintOnce(client, state, chatId, orderId, order, build
         );
         return;
     }
-    await sendChatMessage(client, chatId, buildHint());
     setOrderPhase(state, orderId, order.phase, {
         deliveryHintSentAt: new Date().toISOString(),
     });
+    try {
+        await sendChatMessage(client, chatId, buildHint());
+    } catch (e) {
+        setOrderPhase(state, orderId, order.phase, {
+            deliveryHintSentAt: undefined,
+        });
+        throw e;
+    }
 }
 
 async function handleBotEvents(client, state) {
@@ -161,10 +168,17 @@ async function handleBotEvents(client, state) {
                 const fresh = getOrder(state, ev.orderId) || order;
                 if (fresh.clanInviteHintSentAt) continue;
                 const nick = ev.nick || fresh.nick || '?';
-                await sendChatMessage(client, chatId, buildClanInviteHint(nick));
                 setOrderPhase(state, ev.orderId, fresh.phase, {
                     clanInviteHintSentAt: new Date().toISOString(),
                 });
+                try {
+                    await sendChatMessage(client, chatId, buildClanInviteHint(nick));
+                } catch (e) {
+                    setOrderPhase(state, ev.orderId, fresh.phase, {
+                        clanInviteHintSentAt: undefined,
+                    });
+                    throw e;
+                }
                 console.log(`[sell] clan invite hint → ${ev.orderId.slice(0, 8)}…`);
             } else if (ev.type === 'clan_joined') {
                 setOrderPhase(state, ev.orderId, order.phase, {
@@ -180,16 +194,23 @@ async function handleBotEvents(client, state) {
                     ev.investAmount ||
                     ev.fullInvestAmount ||
                     clanFullAmountRaw(fresh);
-                await sendChatMessage(
-                    client,
-                    chatId,
-                    buildClanWithdrawHint(nick, withdrawAmount),
-                );
                 setOrderPhase(state, ev.orderId, fresh.phase, {
                     clanWithdrawHintSentAt: new Date().toISOString(),
                     clanRemainderHintSentAt: null,
                     clanInvestedAt: new Date().toISOString(),
                 });
+                try {
+                    await sendChatMessage(
+                        client,
+                        chatId,
+                        buildClanWithdrawHint(nick, withdrawAmount),
+                    );
+                } catch (e) {
+                    setOrderPhase(state, ev.orderId, fresh.phase, {
+                        clanWithdrawHintSentAt: undefined,
+                    });
+                    throw e;
+                }
                 console.log(`[sell] clan withdraw hint → ${ev.orderId.slice(0, 8)}…`);
             } else if (ev.type === 'clan_withdraw_partial') {
                 const fresh = getOrder(state, ev.orderId) || order;
@@ -706,6 +727,8 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
             sellerUserId,
             openDeals,
         );
+        // Сразу пишем state — иначе следующий poll со старым JSON снова шлёт приветствие
+        await saveState(state);
     } else if (!greetingAt) {
         greetingAt = findGreetingAnchorInChat(messages, sellerUserId);
     }
@@ -763,6 +786,7 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
     warnInvalidNickOnce(client, state, chatId, messages, openDeals, greetingAt);
 
     await flushChatDispatchQueue(state, openDeals, client);
+    await saveState(state);
 
     await handleCompletedLateNick(client, state, chatId, messages, dealTimeline, sellerUserId);
 }
