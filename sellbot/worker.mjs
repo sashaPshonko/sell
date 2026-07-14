@@ -23,6 +23,11 @@ import { isIgnorableProtocolNoise } from './lib/protocol-noise.mjs';
 import { setupChatSafeGuard } from './lib/chat-safe.mjs';
 import { audit } from '../lib/audit.mjs';
 import { isRetryableDeliveryFailure } from './lib/delivery-retry.mjs';
+import {
+    listDukeNicks,
+    shuffleInPlace,
+    isPaySuccessLine,
+} from './lib/duke-pay.mjs';
 
 // --- маркеры чата ---
 const CLAN_INVITE_OK = '[⚔] Вы отправили приглашение в клан игроку';
@@ -71,6 +76,9 @@ const config = {
     clanBalanceWaitMs: workerData.clanBalanceWaitMs ?? 30_000,
     clanBalanceCmdWaitMs: workerData.clanBalanceCmdWaitMs ?? 5000,
     healthCheckObserveMs: workerData.healthCheckObserveMs ?? 8000,
+    parkBalanceBelow: workerData.parkBalanceBelow ?? 50_000_000,
+    parkPayWaitMs: workerData.parkPayWaitMs ?? 2000,
+    parkPayMaxDukes: workerData.parkPayMaxDukes ?? 8,
     proxy: workerData.proxy,
     afk: false,
     balance: null,
@@ -90,6 +98,9 @@ let currentOrder = null;
 let idleQuitTimer = null;
 let healthCheckActive = false;
 let clanJoinedForCurrent = false;
+/** Парковка баланса герцогу: ждём «[✔] Успешно!» из чата */
+let parkPayOutcome = null;
+let parkPayActive = false;
 
 const deliverQueue = [];
 /** orderId уже успешно выдан — не принимать повторно */
@@ -371,6 +382,12 @@ function handleChatMessage(raw) {
     const members = parseClanMembersFromChat(text);
     if (members != null) clanMembersSnapshot = members;
 
+    if (parkPayActive && isPaySuccessLine(text)) {
+        parkPayOutcome = 'ok';
+        logOk(`pay успех: ${text.slice(0, 80)}`);
+        return;
+    }
+
     if (!delivering || !currentOrder?.nick) return;
     const nick = currentOrder.nick;
 
@@ -626,6 +643,81 @@ async function safeBalance(waitMs = config.balanceWaitMs, cmdWaitMs = config.bal
     }
     if (config.balance != null) logInfo(`баланс: ${config.balance}`);
     return config.balance;
+}
+
+/**
+ * Если баланс < parkBalanceBelow — осмотр + /pay ник сумма дважды.
+ * Нет «[✔] Успешно!» → другой герцог из таба.
+ */
+async function parkBalanceToDukeIfNeeded() {
+    const threshold = Number(config.parkBalanceBelow) || 0;
+    if (threshold <= 0) return false;
+
+    let amount = Number(config.balance);
+    if (!Number.isFinite(amount) || amount <= 0) {
+        amount = await safeBalance();
+    }
+    if (!Number.isFinite(amount) || amount <= 0) return false;
+    if (amount >= threshold) return false;
+
+    const dukes = shuffleInPlace(listDukeNicks(bot?.players || {}, config.username));
+    if (!dukes.length) {
+        logWarn(`park: баланс ${amount} < ${threshold}, но герцогов в табе нет`);
+        return false;
+    }
+
+    const maxDukes = Math.min(dukes.length, Math.max(1, Number(config.parkPayMaxDukes) || 8));
+    const waitMs = Math.max(500, Number(config.parkPayWaitMs) || 2000);
+    logInfo(
+        `park: баланс ${amount} < ${threshold} → /pay герцогу (кандидатов ${maxDukes})`,
+    );
+
+    parkPayActive = true;
+    try {
+        for (let di = 0; di < maxDukes; di++) {
+            const nick = dukes[di];
+            const cmd = `/pay ${nick} ${amount}`;
+            logInfo(`park → герцог ${nick} (${di + 1}/${maxDukes})`);
+
+            let confirmed = false;
+            for (let attempt = 1; attempt <= 2; attempt++) {
+                if (!bot?.chat) return false;
+                await antiAfkIfNeeded(bot, config, logInfo);
+                await lookAroundSpin(bot, logInfo);
+                parkPayOutcome = null;
+                logInfo(`park /pay #${attempt}: ${cmd}`);
+                try {
+                    bot.chat(cmd);
+                } catch (e) {
+                    logInfo(`park chat fail: ${e.message}`);
+                    return false;
+                }
+
+                const deadline = Date.now() + waitMs;
+                while (Date.now() < deadline && parkPayOutcome !== 'ok') {
+                    await sleep(CHAT_POLL_MS);
+                }
+                if (parkPayOutcome === 'ok') {
+                    confirmed = true;
+                    break;
+                }
+                logInfo(`park: нет подтверждения после /pay #${attempt}`);
+            }
+
+            if (confirmed) {
+                config.balance = 0;
+                logOk(`park ok → ${nick} (${amount})`);
+                return true;
+            }
+            logWarn(`park: ${nick} не подтвердил после 2× /pay → другой герцог`);
+        }
+    } finally {
+        parkPayActive = false;
+        parkPayOutcome = null;
+    }
+
+    logWarn('park: ни один герцог не принял /pay');
+    return false;
 }
 
 async function safeClanBalance(waitMs = config.clanBalanceWaitMs) {
@@ -890,11 +982,26 @@ async function deliverClan() {
 
     // 0. баланс
     if (investThisRound > 0) {
-        const balance = await safeBalance(
+        let balance = await safeBalance(
             config.clanBalanceWaitMs,
             config.clanBalanceCmdWaitMs,
         );
         if (!active()) return;
+        // Мелкий баланс (< parkBalanceBelow) и не хватает на invest — паркуем герцогу
+        if (
+            balance != null
+            && balance > 0
+            && balance < Number(config.parkBalanceBelow)
+            && balance < investThisRound
+        ) {
+            await parkBalanceToDukeIfNeeded();
+            if (!active()) return;
+            balance = await safeBalance(
+                config.clanBalanceWaitMs,
+                config.clanBalanceCmdWaitMs,
+            );
+            if (!active()) return;
+        }
         if (balance == null || balance < investThisRound) {
             logInfo(`мало денег: ${balance ?? '?'} < ${invest}`);
             endDelivery('insufficient_funds');
@@ -1230,6 +1337,7 @@ async function runHealthCheck() {
         if (bot && ready) {
             await safeBalance();
             if (config.balance != null) post('health_balance', { balance: config.balance });
+            await parkBalanceToDukeIfNeeded();
             await sleep(config.healthCheckObserveMs);
             if (healthCheckActive) finishHealth('ok');
             return;

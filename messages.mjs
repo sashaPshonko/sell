@@ -525,12 +525,43 @@ export function buildClanPartialWithdrawHint(nick, remainAmountRaw) {
     ].join('\n');
 }
 
+/** Коротко: новая оплата, когда полное приветствие уже было в чате. */
+export function buildNewOrderTwinHint(ctx = null) {
+    const anka = DELIVERY_ANARCHY;
+    const lotKk = Number(ctx?.lotKk);
+
+    const lines = [
+        '✅ Оплата получена.',
+        '',
+        ...twinAccountWarningLines(),
+        `🎮 Анархия ${anka} — будь в сети.`,
+        '💸 Выдача через клан: приглашение → казна → /clan withdraw',
+        '',
+        askNickInChatLine(),
+    ];
+    if (lotKk > 0) {
+        lines.push('', `📦 Лот: ${lotKk}кк`);
+    }
+    return lines.join('\n');
+}
+
 /** Полное приветствие в чате (не короткий twin-hint после повторной оплаты). */
 export function hasGreetingInChat(messages, sellerUserId) {
     const marker = (process.env.GREETING_MARKER || 'выдача автоматическая').toLowerCase();
     for (const msg of messages) {
         if (!msg?.text || msg.user?.id !== sellerUserId) continue;
         if (msg.text.toLowerCase().includes(marker)) return true;
+    }
+    return false;
+}
+
+/** Уже писали статус выдачи на этот ник (по истории чата PlayerOK). */
+export function hasDispatchStatusInChat(messages, sellerUserId, nick) {
+    if (!nick) return false;
+    const needle = `сейчас выдаю на ник «${String(nick).toLowerCase()}»`;
+    for (const msg of messages) {
+        if (!msg?.text || msg.user?.id !== sellerUserId) continue;
+        if (msg.text.toLowerCase().includes(needle)) return true;
     }
     return false;
 }

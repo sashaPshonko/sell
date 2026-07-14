@@ -293,6 +293,9 @@ function workerDataPayload() {
         clanBalanceWaitMs: cfg.clanBalanceWaitMs,
         clanBalanceCmdWaitMs: cfg.clanBalanceCmdWaitMs,
         healthCheckObserveMs: cfg.healthCheckObserveMs,
+        parkBalanceBelow: cfg.parkBalanceBelow,
+        parkPayWaitMs: cfg.parkPayWaitMs,
+        parkPayMaxDukes: cfg.parkPayMaxDukes,
     };
 }
 

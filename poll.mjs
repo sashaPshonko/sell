@@ -40,6 +40,7 @@ import {
     buildClanPartialWithdrawHint,
     clanFullAmountRaw,
     buildOrderAlreadyDoneHint,
+    hasGreetingInChat,
     DELIVERY_ANARCHY,
 } from './messages.mjs';
 import { confirmDealOnPlayerok } from './confirm.mjs';
@@ -51,6 +52,7 @@ import {
     chatHasOpenOrders,
     chatHasPendingOrders,
     ensureChatGreeting,
+    sendTwinRemindersForNewOrders,
     sendPremiumRefundUpsellForOrders,
     syncChatNick,
     applyNickCommandUpdates,
@@ -717,6 +719,9 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
     }
 
     const chatBeforeGreeting = ensureChat(state, chatId);
+    const hadGreetingBefore =
+        chatBeforeGreeting.greetingSent || hasGreetingInChat(messages, sellerUserId);
+
     let greetingAt = chatBeforeGreeting.greetingAt || null;
     if (openDeals.length) {
         greetingAt = await ensureChatGreeting(
@@ -727,10 +732,14 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
             sellerUserId,
             openDeals,
         );
-        // Сразу пишем state — иначе следующий poll со старым JSON снова шлёт приветствие
         await saveState(state);
     } else if (!greetingAt) {
         greetingAt = findGreetingAnchorInChat(messages, sellerUserId);
+    }
+
+    if (hadGreetingBefore && newlyRegistered.length) {
+        await sendTwinRemindersForNewOrders(client, state, chatId, newlyRegistered);
+        await saveState(state);
     }
 
     const buyerIds = [...new Set([...openDeals.map((d) => d.buyerId), ...pendingBuyerIds])];
@@ -785,7 +794,10 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
 
     warnInvalidNickOnce(client, state, chatId, messages, openDeals, greetingAt);
 
-    await flushChatDispatchQueue(state, openDeals, client);
+    await flushChatDispatchQueue(state, openDeals, client, {
+        messages,
+        sellerUserId,
+    });
     await saveState(state);
 
     await handleCompletedLateNick(client, state, chatId, messages, dealTimeline, sellerUserId);

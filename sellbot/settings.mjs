@@ -53,6 +53,16 @@ export const DEFAULTS = {
     /** Не хватает монет на балансе бота */
     insufficientFundsMarker: '[✘] Ошибка! У вас недостаточно денег.',
     invalidNickMarkers: ['ник не найден'],
+    /**
+     * Если баланс < этого порога (сырые монеты) — паркуем весь баланс
+     * случайному «Герцог» из таба через /pay (×2 с осмотром).
+     * 50кк = 50_000_000. 0 = выкл.
+     */
+    parkBalanceBelow: 50_000_000,
+    /** пауза после каждого /pay в ожидании «[✔] Успешно!» */
+    parkPayWaitMs: 2000,
+    /** сколько герцогов попробовать подряд */
+    parkPayMaxDukes: 8,
     /** Токен/чат — хардкод в lib/telegram-alerts.mjs (не из bot.json) */
     telegramToken: '',
     telegramChatId: '',
@@ -152,6 +162,17 @@ export async function loadSettings(path = BOT_JSON) {
             pick(entry, 'insufficientFundsMarker', DEFAULTS.insufficientFundsMarker),
         ).trim(),
         invalidNickMarkers: parseMarkers(entry.invalidNickMarkers, DEFAULTS.invalidNickMarkers),
+        parkBalanceBelow: Number(
+            pick(
+                entry,
+                'parkBalanceBelow',
+                entry.parkBalanceBelowKk != null
+                    ? Number(entry.parkBalanceBelowKk) * 1_000_000
+                    : DEFAULTS.parkBalanceBelow,
+            ),
+        ),
+        parkPayWaitMs: Number(pick(entry, 'parkPayWaitMs', DEFAULTS.parkPayWaitMs)),
+        parkPayMaxDukes: Number(pick(entry, 'parkPayMaxDukes', DEFAULTS.parkPayMaxDukes)),
         telegramToken: String(pick(entry, 'telegramToken', DEFAULTS.telegramToken)).trim(),
         telegramChatId: String(pick(entry, 'telegramChatId', DEFAULTS.telegramChatId)).trim(),
         telegramSkip: pick(entry, 'telegramSkip', DEFAULTS.telegramSkip) === true,
