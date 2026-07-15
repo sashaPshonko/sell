@@ -550,7 +550,37 @@ export function hasGreetingInChat(messages, sellerUserId) {
     const marker = (process.env.GREETING_MARKER || 'выдача автоматическая').toLowerCase();
     for (const msg of messages) {
         if (!msg?.text || msg.user?.id !== sellerUserId) continue;
-        if (msg.text.toLowerCase().includes(marker)) return true;
+        const text = msg.text.toLowerCase();
+        if (text.includes(marker)) return true;
+        // Twin / кастом тоже считаем «уже писали» — иначе полное + twin подряд
+        if (text.includes('оплата получена') && text.includes('твинк')) return true;
+        if (text.includes('заходи на анархию') && text.includes('твинк')) return true;
+    }
+    return false;
+}
+
+/**
+ * Уже кидали «Оплата получена» после этой оплаты (дедуп дублей poll).
+ * @param {object[]} messages
+ * @param {string} sellerUserId
+ * @param {{ lotKk?: number, sinceIso?: string }} [opts]
+ */
+export function hasPaymentAckInChat(messages, sellerUserId, opts = null) {
+    const lotKk = Number(opts?.lotKk);
+    const sinceMs = opts?.sinceIso ? Date.parse(opts.sinceIso) : NaN;
+    const lotNeedle = lotKk > 0 ? `лот: ${lotKk}кк` : null;
+
+    for (const msg of messages) {
+        if (!msg?.text || msg.user?.id !== sellerUserId) continue;
+        if (Number.isFinite(sinceMs)) {
+            const at = Date.parse(msg.createdAt);
+            if (Number.isFinite(at) && at < sinceMs - 5000) continue;
+        }
+        const text = msg.text.toLowerCase();
+        if (!text.includes('оплата получена')) continue;
+        if (!text.includes('твинк')) continue;
+        if (lotNeedle && !text.includes(lotNeedle)) continue;
+        return true;
     }
     return false;
 }

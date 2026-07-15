@@ -776,7 +776,14 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
     }
 
     if (hadGreetingBefore && newlyRegistered.length) {
-        await sendTwinRemindersForNewOrders(client, state, chatId, newlyRegistered);
+        await sendTwinRemindersForNewOrders(
+            client,
+            state,
+            chatId,
+            newlyRegistered,
+            messages,
+            sellerUserId,
+        );
         await saveState(state);
     }
 
