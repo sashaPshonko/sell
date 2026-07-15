@@ -638,15 +638,14 @@ export async function applyNickCommandUpdates(
                 continue;
             }
 
-            if (!canDispatchToSellbot(order)) {
+            // awaiting_nick / new / … — сразу в sellbot, не ждём silent flush
+            if (isDeliveryAttemptsExhausted(order) && !wasPausedUntilNick) {
+                console.warn(
+                    `[sell] ник ${u.nick}: ${order.orderId?.slice(0, 8)}… лимит попыток (${order.deliveryAttempts}), ждём новый /nick после паузы`,
+                );
                 continue;
             }
 
-            if (!isActionableOrder(order)) {
-                continue;
-            }
-
-            // Retry после паузы / первый dispatch — сброс delivery-флагов
             setOrderPhase(
                 state,
                 order.orderId,
@@ -664,7 +663,59 @@ export async function applyNickCommandUpdates(
                           lastError: null,
                       },
             );
-            queuedForDelivery = true;
+
+            applyOrderPayBonus(state, order);
+            const fresh = getOrder(state, order.orderId) || order;
+            try {
+                const { sent } = await dispatchOrder(
+                    {
+                        ...fresh,
+                        orderId: order.orderId,
+                        dealId: order.orderId,
+                        chatId,
+                        nick: u.nick,
+                        paidAtMs: order.paidAt ? Date.parse(order.paidAt) : undefined,
+                    },
+                    state,
+                    { force: true },
+                );
+                if (sent > 0) {
+                    const payKk = fresh.payAmountKk ?? fresh.amountKk;
+                    console.log(
+                        `[sell] ${order.orderId}: → sellbot ${u.nick} ${payKk}kk (после /nick, попытка ${(fresh.deliveryAttempts || 0) + 1}/${MAX_DELIVERY_ATTEMPTS})`,
+                    );
+                    setOrderPhase(state, order.orderId, 'dispatched', {
+                        nick: u.nick,
+                        dispatchedAt: new Date().toISOString(),
+                        deliveryAttempts: (fresh.deliveryAttempts || 0) + 1,
+                    });
+                    if (client) {
+                        await notifyDispatchingForOrder(
+                            client,
+                            state,
+                            chatId,
+                            getOrder(state, order.orderId) || fresh,
+                            u.nick,
+                        );
+                    }
+                    queuedForDelivery = true;
+                } else {
+                    console.warn(
+                        `[sell] ${order.orderId?.slice(0, 8)}…: sellbot офлайн — ${u.nick} (ждём ws)`,
+                    );
+                    setOrderPhase(state, order.orderId, 'ws_pending', {
+                        nick: u.nick,
+                        lastError: 'sellbot_offline',
+                    });
+                    queuedForDelivery = true;
+                }
+            } catch (e) {
+                console.error(`[sell] ws ${order.orderId?.slice(0, 8)}…: ${e.message}`);
+                setOrderPhase(state, order.orderId, 'awaiting_nick', {
+                    nick: u.nick,
+                    lastError: e.message,
+                });
+            }
         }
 
         if (nickApplied) {
@@ -814,7 +865,13 @@ export async function flushChatDispatchQueue(state, deals, client = null, opts =
     for (const paid of sorted) {
         const oid = paid.dealId;
         const order = getOrder(state, oid);
-        if (!order) continue;
+        if (!order) {
+            console.log(`[sell] flush ${oid?.slice(0, 8)}…: нет в state`);
+            continue;
+        }
+        if (order.phase === 'dispatched') {
+            continue;
+        }
         if (!canDispatchToSellbot(order)) {
             if (isDeliveryAttemptsExhausted(order)) {
                 const chatId = paid.chatId || order.chatId;
@@ -830,20 +887,34 @@ export async function flushChatDispatchQueue(state, deals, client = null, opts =
                     });
                     void dispatchCancelOrder(oid, state);
                 }
+                console.log(
+                    `[sell] flush ${oid.slice(0, 8)}…: лимит попыток (${order.deliveryAttempts})`,
+                );
+            } else {
+                console.log(
+                    `[sell] flush ${oid.slice(0, 8)}…: canDispatch=false phase=${order.phase} paused=${Boolean(order.pausedUntilNick)}`,
+                );
             }
-            continue;
-        }
-        if (order.phase === 'dispatched') {
             continue;
         }
 
         const chatId = paid.chatId || order.chatId;
         const session = getBuyerSession(state, chatId, paid.buyerId);
         const nick = session.nick || order.nick || null;
-        if (!nick) continue;
+        if (!nick) {
+            console.log(`[sell] flush ${oid.slice(0, 8)}…: нет ника`);
+            continue;
+        }
         const resetAt = session.nickResetAt ? Date.parse(session.nickResetAt) : 0;
         const nickAt = session.nickAt ? Date.parse(session.nickAt) : 0;
-        if (resetAt && (!nickAt || nickAt < resetAt)) continue;
+        // Ник уже на заказе (только что принят) — не блочим по nickAt vs nickResetAt
+        const nickReadyOnOrder = Boolean(order.nick) && order.nick === nick;
+        if (resetAt && (!nickAt || nickAt < resetAt) && !nickReadyOnOrder) {
+            console.log(
+                `[sell] flush ${oid.slice(0, 8)}…: ник старше оплаты (nickAt=${session.nickAt || 'нет'} reset=${session.nickResetAt})`,
+            );
+            continue;
+        }
 
         order.nick = nick;
         applyOrderPayBonus(state, order);
