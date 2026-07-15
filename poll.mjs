@@ -23,11 +23,12 @@ import {
     schedulePostDeliveryMessages,
     flushScheduledChatMessages,
 } from './lib/scheduled-chat.mjs';
-import { drainBotEvents, dispatchCancelOrder } from './dispatch.mjs';
+import { drainBotEvents, dispatchCancelOrder, dispatchOrder } from './dispatch.mjs';
 import { setDeliveryQueueSnapshot } from './lib/delivery-queue.mjs';
 import { cancelClosedOrdersOnSellbot } from './lib/sellbot-cancel.mjs';
 import { isRetryableDeliveryFailure } from './sellbot/lib/delivery-retry.mjs';
 import { isOrderFulfilled, clanDeliveryRetryReset } from './lib/playerok-deal-sync.mjs';
+import { applyOrderPayBonus } from './lib/pay-bonus.mjs';
 import { sendChatMessage } from './chat.mjs';
 import {
     buildWrongNickHint,
@@ -166,6 +167,43 @@ async function handleBotEvents(client, state) {
         const buyerId = order.buyerId;
 
         try {
+            if (ev.type === 'order_missing') {
+                if (!shouldProcessBotRetryEvent(order)) {
+                    console.log(
+                        `[sell] order_missing ${ev.orderId.slice(0, 8)}… игнор (заказ закрыт)`,
+                    );
+                    continue;
+                }
+                const nick = ev.nick || order.nick;
+                if (!nick) continue;
+                applyOrderPayBonus(state, order);
+                const fresh = getOrder(state, ev.orderId) || order;
+                const { sent } = await dispatchOrder(
+                    {
+                        ...fresh,
+                        orderId: ev.orderId,
+                        dealId: ev.orderId,
+                        nick,
+                        paidAtMs: order.paidAt ? Date.parse(order.paidAt) : undefined,
+                    },
+                    state,
+                    { force: true, resync: true },
+                );
+                if (sent > 0) {
+                    console.log(
+                        `[sell] order_missing → resync ${ev.orderId.slice(0, 8)}… ${nick}`,
+                    );
+                    if (order.phase === 'ws_pending' || order.phase === 'awaiting_nick') {
+                        setOrderPhase(state, ev.orderId, 'dispatched', {
+                            nick,
+                            dispatchedAt: new Date().toISOString(),
+                            lastError: null,
+                        });
+                    }
+                }
+                continue;
+            }
+
             if (ev.type === 'clan_invite_sent') {
                 const fresh = getOrder(state, ev.orderId) || order;
                 if (fresh.clanInviteHintSentAt) continue;

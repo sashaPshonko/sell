@@ -24,9 +24,13 @@ async function getTransport() {
     return hub;
 }
 
-/** Отправить заказ ботам по WebSocket */
-export async function dispatchOrder(order, state = null) {
-    if (state?.orders) {
+/** Отправить заказ ботам по WebSocket
+ * @param {{ force?: boolean, resync?: boolean }} opts
+ * force — обойти canDispatch (для resync dispatched после рестарта sellbot)
+ */
+export async function dispatchOrder(order, state = null, opts = {}) {
+    const force = Boolean(opts.force || opts.resync);
+    if (state?.orders && !force) {
         const oid = order.orderId || order.dealId;
         const existing = state.orders[oid];
         if (existing) {
@@ -63,6 +67,7 @@ export async function dispatchOrder(order, state = null) {
         itemName: order.itemName,
         server: order.server || null,
         priorWithdrawn: priorWithdrawn > 0 ? priorWithdrawn : undefined,
+        resync: Boolean(opts.resync) || undefined,
     };
     return t.pushOrder(payload);
 }

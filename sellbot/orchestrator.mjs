@@ -607,15 +607,19 @@ async function handleOrder(order) {
         return;
     }
     await loadBotConfig();
+    const alreadyLive = activeOrders.has(oid);
+    const isResync = Boolean(order.resync);
     activeOrders.set(oid, order);
     console.log(
-        `[sellbot] заказ ${order.orderId} | ${order.nick || '?'} | ${order.amount ?? '?'}kk`,
+        `[sellbot] заказ ${order.orderId} | ${order.nick || '?'} | ${order.amount ?? '?'}kk` +
+            (isResync ? ' (resync)' : ''),
     );
     void audit('sellbot_order', {
         orderId: order.orderId,
         nick: order.nick,
         amountKk: order.amount,
         buyer: order.buyer,
+        resync: isResync || undefined,
     });
 
     if (healthInProgress) {
@@ -632,18 +636,22 @@ async function handleOrder(order) {
         return;
     }
 
-    const short = order.orderId?.slice(0, 8) || '?';
-    await sendAlert(
-        `💰 Выдача PlayerOK\n` +
-            `Покупатель: ${order.buyer || '?'}\n` +
-            `Ник: ${order.nick}\n` +
-            `Сумма: ${order.amount}kk\n` +
-            `Анархия: ${order.anarchy || botConfig.anarchy}\n` +
-            `Заказ: ${short}…`,
-    );
+    // Resync после рестарта: не спамим TG, если заказ уже был в памяти
+    if (!(isResync && alreadyLive)) {
+        const short = order.orderId?.slice(0, 8) || '?';
+        await sendAlert(
+            `💰 Выдача PlayerOK\n` +
+                `Покупатель: ${order.buyer || '?'}\n` +
+                `Ник: ${order.nick}\n` +
+                `Сумма: ${order.amount}kk\n` +
+                `Анархия: ${order.anarchy || botConfig.anarchy}\n` +
+                `Заказ: ${short}…` +
+                (isResync ? '\n(resync после рестарта)' : ''),
+        );
+    }
 
     if (!workerEntry) {
-        await startWorker('payment');
+        await startWorker(isResync ? 'resync' : 'payment');
     }
 
     scheduleDeliver(order);
@@ -664,7 +672,9 @@ function handleNickUpdate(orderId, nick) {
     }
     const prev = activeOrders.get(orderId);
     if (!prev) {
-        console.warn(`[sellbot] nick_update без заказа ${orderId}`);
+        // После рестарта sellbot память пуста — просим sell прислать полный order
+        console.warn(`[sellbot] nick_update без заказа ${orderId} → order_missing`);
+        forwardToSell({ type: 'order_missing', orderId, nick });
         return;
     }
     if (!isValidNick(nick)) {

@@ -578,15 +578,33 @@ export async function applyNickCommandUpdates(
                     && !order.pausedUntilNick
                     && (order.phase === 'dispatched' || order.phase === 'ws_pending')
                 ) {
-                    // Смена ника mid-delivery — только nick_update, без retry/сброса статусов
-                    if (order.nick !== u.nick) {
+                    const nickChanged = order.nick !== u.nick;
+                    if (nickChanged) {
                         order.nick = u.nick;
-                        await dispatchNickUpdate(order.orderId, u.nick);
                         order.queueStatusSentAt = undefined;
+                        await dispatchNickUpdate(order.orderId, u.nick);
                         console.log(
                             `[sell] mid-delivery ник → ${u.nick} (${order.orderId?.slice(0, 8)}…)`,
                         );
                     }
+                    // После рестарта sellbot activeOrders пуст — одного nick_update мало.
+                    // force resync полного заказа (воркер дедупит тот же orderId).
+                    applyOrderPayBonus(state, order);
+                    const fresh = getOrder(state, order.orderId) || order;
+                    await dispatchOrder(
+                        {
+                            ...fresh,
+                            orderId: order.orderId,
+                            dealId: order.orderId,
+                            nick: u.nick,
+                            paidAtMs: order.paidAt ? Date.parse(order.paidAt) : undefined,
+                        },
+                        state,
+                        { force: true, resync: true },
+                    );
+                    console.log(
+                        `[sell] mid-delivery resync → sellbot ${u.nick} (${order.orderId?.slice(0, 8)}…)`,
+                    );
                     blockedByActiveDelivery = true;
                     nickApplied = true;
                 }
@@ -1013,21 +1031,35 @@ export function chatHasPendingOrders(state, chatId) {
     return ordersInChat(state, chatId).some((o) => !isOrderFulfilled(o));
 }
 
-/** Повторная отправка в sellbot после переподключения ws */
+/** Повторная отправка в sellbot после переподключения ws / рестарта sellbot */
 export async function retryWsPendingOrders(state) {
+    let doResync = false;
+    try {
+        const client = await import('./lib/ws-client.mjs');
+        if (client.consumeOrderResync?.()) doResync = true;
+    } catch {
+        /* ws-client может быть не загружен */
+    }
+
     for (const order of Object.values(state.orders)) {
-        if (order.phase !== 'ws_pending' || !order.nick) continue;
-        // Нехватку баланса не ретраим автоматически — только после нового /nick
+        const oid = order.orderId || order.dealId;
+        if (!oid || !order.nick) continue;
+        if (isOrderFulfilled(order)) continue;
         if (order.lastError === 'insufficient_funds' || order.pausedUntilNick) {
             continue;
         }
-        const oid = order.orderId || order.dealId;
-        if (!canDispatchToSellbot(order)) {
+
+        const isPending = order.phase === 'ws_pending';
+        const isDispatched = order.phase === 'dispatched';
+        if (!isPending && !(doResync && isDispatched)) continue;
+
+        if (isPending && !canDispatchToSellbot(order)) {
             console.log(
                 `[sell] ${oid.slice(0, 8)}…: ws_pending пропуск (phase=${order.phase}, game=${order.gameDeliveryAt ? 'ok' : 'нет'})`,
             );
             continue;
         }
+
         applyOrderPayBonus(state, order);
         try {
             const fresh = getOrder(state, oid) || order;
@@ -1047,16 +1079,23 @@ export async function retryWsPendingOrders(state) {
                     server: order.server,
                 },
                 state,
+                isDispatched ? { force: true, resync: true } : {},
             );
             if (sent > 0) {
                 const payKk = fresh.payAmountKk ?? order.amountKk;
-                console.log(`[sell] ${oid}: → sellbot (повтор ws) ${order.nick} ${payKk}kk`);
-                setOrderPhase(state, oid, 'dispatched', {
-                    nick: order.nick,
-                    dispatchedAt: new Date().toISOString(),
-                    lastError: null,
-                    deliveryAttempts: (fresh.deliveryAttempts || 0) + 1,
-                });
+                if (isDispatched) {
+                    console.log(
+                        `[sell] ${oid}: → sellbot (resync после reconnect) ${order.nick} ${payKk}kk`,
+                    );
+                } else {
+                    console.log(`[sell] ${oid}: → sellbot (повтор ws) ${order.nick} ${payKk}kk`);
+                    setOrderPhase(state, oid, 'dispatched', {
+                        nick: order.nick,
+                        dispatchedAt: new Date().toISOString(),
+                        lastError: null,
+                        deliveryAttempts: (fresh.deliveryAttempts || 0) + 1,
+                    });
+                }
             }
         } catch (e) {
             console.warn(`[sell] ws повтор ${oid}: ${e.message}`);
