@@ -51,7 +51,6 @@ import {
     resolveDealStatus,
     dealNeedsFulfillment,
     canDispatchToSellbot,
-    shouldIgnoreNickRedispatch,
     clanDeliveryRetryReset,
     buyerHasPendingOrder,
     isOrderFulfilled,
@@ -568,61 +567,22 @@ export async function applyNickCommandUpdates(
         const buyerOrders = ordersInChat(state, chatId).filter((o) => o.buyerId === buyerId);
 
         for (const order of buyerOrders) {
-            if (shouldIgnoreNickRedispatch(order)) {
-                const fulfilled = isOrderFulfilled(order);
+            // Закрытый заказ — единственный случай игнора ника
+            if (isOrderFulfilled(order)) {
                 console.log(
-                    `[sell] повторный ник игнор: ${order.orderId?.slice(0, 8)}… (${fulfilled ? 'заказ закрыт' : 'выдача идёт'})`,
-                );
-                if (
-                    !fulfilled
-                    && !order.pausedUntilNick
-                    && (order.phase === 'dispatched' || order.phase === 'ws_pending')
-                ) {
-                    const nickChanged = order.nick !== u.nick;
-                    if (nickChanged) {
-                        order.nick = u.nick;
-                        order.queueStatusSentAt = undefined;
-                        await dispatchNickUpdate(order.orderId, u.nick);
-                        console.log(
-                            `[sell] mid-delivery ник → ${u.nick} (${order.orderId?.slice(0, 8)}…)`,
-                        );
-                    }
-                    // После рестарта sellbot activeOrders пуст — одного nick_update мало.
-                    // force resync полного заказа (воркер дедупит тот же orderId).
-                    applyOrderPayBonus(state, order);
-                    const fresh = getOrder(state, order.orderId) || order;
-                    await dispatchOrder(
-                        {
-                            ...fresh,
-                            orderId: order.orderId,
-                            dealId: order.orderId,
-                            nick: u.nick,
-                            paidAtMs: order.paidAt ? Date.parse(order.paidAt) : undefined,
-                        },
-                        state,
-                        { force: true, resync: true },
-                    );
-                    console.log(
-                        `[sell] mid-delivery resync → sellbot ${u.nick} (${order.orderId?.slice(0, 8)}…)`,
-                    );
-                    blockedByActiveDelivery = true;
-                    nickApplied = true;
-                }
-                continue;
-            }
-
-            if (order.clanJoinedAt && order.nick && order.nick !== u.nick) {
-                console.log(
-                    `[sell] чат ${chatId.slice(0, 8)}…: новый ник игнор — ${order.nick} уже в клане`,
+                    `[sell] повторный ник игнор: ${order.orderId?.slice(0, 8)}… (заказ закрыт)`,
                 );
                 continue;
             }
 
             const wasPausedUntilNick = order.pausedUntilNick;
+            const nickChanged = order.nick !== u.nick;
+            const prevNick = order.nick;
+
             order.nick = u.nick;
             order.pausedUntilNick = false;
             // Сброс подсказок только при СМЕНЕ ника (не при повторном том же нике)
-            if (changed) {
+            if (changed || nickChanged) {
                 order.deliveryHintSentAt = undefined;
                 order.queueStatusSentAt = undefined;
             }
@@ -631,26 +591,49 @@ export async function applyNickCommandUpdates(
                 order.deliveryAttemptsHintSentAt = undefined;
             }
             nickApplied = true;
+            order.wrongNickWarned = false;
 
-            if (order.phase === 'dispatched') {
-                // На всякий случай: shouldIgnore уже покрывает dispatched
-                order.wrongNickWarned = false;
-                if (changed) {
+            // Активная / зависшая выдача — nick_update + полный resync (заказ не закрыт → не игнорим)
+            if (order.phase === 'dispatched' || order.phase === 'ws_pending') {
+                if (nickChanged) {
                     await dispatchNickUpdate(order.orderId, u.nick);
-                } else if (wasPausedUntilNick || u.recovery) {
+                    console.log(
+                        `[sell] mid-delivery ник ${prevNick || '?'} → ${u.nick} (${order.orderId?.slice(0, 8)}…)`,
+                    );
+                }
+                // После рестарта sellbot activeOrders пуст — одного nick_update мало.
+                applyOrderPayBonus(state, order);
+                const fresh = getOrder(state, order.orderId) || order;
+                await dispatchOrder(
+                    {
+                        ...fresh,
+                        orderId: order.orderId,
+                        dealId: order.orderId,
+                        nick: u.nick,
+                        paidAtMs: order.paidAt ? Date.parse(order.paidAt) : undefined,
+                    },
+                    state,
+                    { force: true, resync: true },
+                );
+                console.log(
+                    `[sell] mid-delivery resync → sellbot ${u.nick} (${order.orderId?.slice(0, 8)}…)`,
+                );
+                blockedByActiveDelivery = true;
+
+                // Смена ника после join — сброс clan-флагов, иначе воркер ждёт старый ник
+                if (nickChanged && order.clanJoinedAt) {
                     setOrderPhase(
                         state,
                         order.orderId,
-                        'awaiting_nick',
+                        order.phase,
                         clanDeliveryRetryReset({
                             nick: u.nick,
                             lastError: null,
-                            ...(u.recovery
-                                ? { nickRecoveryForMessageId: u.messageId }
-                                : {}),
                         }),
                     );
-                    queuedForDelivery = true;
+                    console.log(
+                        `[sell] mid-delivery: сброс clan-флагов (был ${prevNick}, новый ${u.nick})`,
+                    );
                 }
                 continue;
             }
@@ -658,8 +641,6 @@ export async function applyNickCommandUpdates(
             if (!canDispatchToSellbot(order)) {
                 continue;
             }
-
-            order.wrongNickWarned = false;
 
             if (!isActionableOrder(order)) {
                 continue;
@@ -670,10 +651,13 @@ export async function applyNickCommandUpdates(
                 state,
                 order.orderId,
                 'awaiting_nick',
-                wasPausedUntilNick || u.recovery
+                wasPausedUntilNick || u.recovery || (order.clanJoinedAt && nickChanged)
                     ? clanDeliveryRetryReset({
                           nick: u.nick,
                           lastError: null,
+                          ...(u.recovery
+                              ? { nickRecoveryForMessageId: u.messageId }
+                              : {}),
                       })
                     : {
                           nick: u.nick,
@@ -700,7 +684,7 @@ export async function applyNickCommandUpdates(
             const active = buyerOrders.find(
                 (o) =>
                     !isOrderFulfilled(o)
-                    && shouldIgnoreNickRedispatch(o)
+                    && (o.phase === 'dispatched' || o.phase === 'ws_pending')
                     && !o.pausedUntilNick,
             );
             if (active) {
