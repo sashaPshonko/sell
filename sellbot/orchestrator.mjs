@@ -388,6 +388,14 @@ async function startWorker(reason = 'order') {
                 return;
             }
 
+            if (message?.name === 'bot_not_in_clan') {
+                await sendAlert(
+                    `⚠️ ${botConfig.username}: не состоит в клане на an${botConfig.anarchy}\n` +
+                        `Добавь бота в клан на этой анархии (иначе /clan * → «[⚔] Помощь по Кланам»).`,
+                );
+                return;
+            }
+
             if (message?.name === 'kicked') {
                 await sendAlert(`⛔ ${botConfig.username} kicked: ${message.reason || '?'}`);
                 workerReady = false;

@@ -21,6 +21,7 @@ export const TERMINAL_DELIVERY_REASONS = new Set([
     'player_offline',
     'clan_timeout',
     'clan_withdraw_timeout',
+    'bot_not_in_clan',
     'max_retries',
     'timeout',
 ]);

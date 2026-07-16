@@ -40,8 +40,11 @@ const CLAN_OFFLINE_TAIL = ' не в сети!';
 const CLAN_OTHER_CLAN_MARKER = 'состоит в другом клане';
 /** [⚔] Кланы: Nick отклонил Ваше приглашение в клан. */
 const CLAN_INVITE_DECLINED_MARKER = 'отклонил Ваше приглашение в клан';
+/** FunTime: /clan * без членства → [⚔] Помощь по Кланам: */
+const CLAN_HELP_MARKER = '[⚔] Помощь по Кланам';
 const AFK_MARKER = 'Данная команда недоступна в режиме AFK';
 const ANARCHY_ALREADY_ON_MARKER = 'Вы уже подключены к этому серверу!';
+const BOT_NOT_IN_CLAN_ALERT_COOLDOWN_MS = 60_000;
 
 const LMB = 0;
 const SHIFT = 1;
@@ -101,6 +104,7 @@ let clanJoinedForCurrent = false;
 /** Парковка баланса герцогу: ждём «[✔] Успешно!» из чата */
 let parkPayOutcome = null;
 let parkPayActive = false;
+let lastBotNotInClanAlertAt = 0;
 
 const deliverQueue = [];
 /** orderId уже успешно выдан — не принимать повторно */
@@ -359,6 +363,20 @@ function handleChatMessage(raw) {
     if (text.includes(AFK_MARKER)) {
         config.afk = true;
         logInfo('сервер: режим AFK');
+        return;
+    }
+
+    if (text.includes(CLAN_HELP_MARKER)) {
+        const now = Date.now();
+        if (now - lastBotNotInClanAlertAt >= BOT_NOT_IN_CLAN_ALERT_COOLDOWN_MS) {
+            lastBotNotInClanAlertAt = now;
+            logInfo('бот не в клане (Помощь по Кланам)');
+            parentPort.postMessage(
+                `⚠️ ${config.username}: не состоит в клане на an${config.anarchy}`,
+            );
+            parentPort.postMessage({ name: 'bot_not_in_clan' });
+        }
+        if (delivering) endDelivery('bot_not_in_clan');
         return;
     }
 
