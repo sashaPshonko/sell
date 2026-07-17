@@ -452,10 +452,24 @@ async function startWorker(reason = 'order') {
                 } else if (st === 'banned') {
                     healthCheckPaused = true;
                     await sendAlert(`🚫 ${botConfig.username}: бан (проверка)`);
+                    for (const order of activeOrders.values()) {
+                        forwardToSell({
+                            type: 'delivery_failed',
+                            orderId: order.orderId,
+                            reason: 'banned',
+                        });
+                    }
                     await stopWorker();
                 } else if (st === 'captcha') {
                     healthCheckPaused = true;
                     await sendAlert(`🔐 ${botConfig.username}: капча (проверка)`);
+                    for (const order of activeOrders.values()) {
+                        forwardToSell({
+                            type: 'delivery_failed',
+                            orderId: order.orderId,
+                            reason: 'captcha',
+                        });
+                    }
                     await stopWorker();
                 } else {
                     console.warn(`[sellbot] health: ${st}`);

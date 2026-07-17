@@ -24,7 +24,10 @@ import {
     flushScheduledChatMessages,
 } from './lib/scheduled-chat.mjs';
 import { drainBotEvents, dispatchCancelOrder, dispatchOrder } from './dispatch.mjs';
-import { setDeliveryQueueSnapshot } from './lib/delivery-queue.mjs';
+import {
+    setDeliveryQueueSnapshot,
+    localLiveQueueIds,
+} from './lib/delivery-queue.mjs';
 import { cancelClosedOrdersOnSellbot } from './lib/sellbot-cancel.mjs';
 import { isRetryableDeliveryFailure } from './sellbot/lib/delivery-retry.mjs';
 import { isOrderFulfilled, clanDeliveryRetryReset } from './lib/playerok-deal-sync.mjs';
@@ -121,6 +124,86 @@ async function markPlayerokDone(client, state, dealId, chatId) {
 function shouldProcessBotRetryEvent(order) {
     if (!order) return false;
     return !isOrderFulfilled(order);
+}
+
+/**
+ * Бан/капча бота — уведомить ВСЕ живые заказы в очереди (не только текущий).
+ * Worker шлёт fail по каждому id, но часть событий теряется при stopWorker;
+ * fan-out страхует остальные чаты + подсказку /cancel.
+ */
+async function notifyBotFatalToQueue(client, state, reason, primaryOrderId = null) {
+    const ids = new Set(localLiveQueueIds(state));
+    if (primaryOrderId) ids.add(primaryOrderId);
+
+    for (const orderId of ids) {
+        const order = getOrder(state, orderId);
+        if (!order || !shouldProcessBotRetryEvent(order)) continue;
+        if (order.botStatusHintAt) continue;
+        if (!order.chatId) continue;
+
+        const nick =
+            getBuyerSession(state, order.chatId, order.buyerId).nick || order.nick;
+        markDeliveryPaused(state, orderId, 'awaiting_nick', {
+            ...clanDeliveryRetryReset({ lastError: reason, nick }),
+        });
+        void dispatchCancelOrder(orderId);
+
+        try {
+            await sendChatMessage(client, order.chatId, buildDeliveryFailHint(reason));
+            setOrderPhase(state, orderId, 'awaiting_nick', {
+                botStatusHintAt: new Date().toISOString(),
+                deliveryHintSentAt: new Date().toISOString(),
+            });
+            console.warn(
+                `[sell] ${reason} → чат ${String(order.chatId).slice(0, 8)}… заказ ${orderId.slice(0, 8)}…`,
+            );
+        } catch (e) {
+            console.warn(
+                `[sell] ${reason} notify ${orderId.slice(0, 8)}…: ${e.message}`,
+            );
+        }
+    }
+}
+
+function orderAmountKk(order) {
+    return Number(order?.payAmountKk ?? order?.amountKk) || 0;
+}
+
+/**
+ * Мало денег на текущем → пауза + сообщение заказам в очереди дороже текущего.
+ * Дешевле оставляем — им баланса может хватить.
+ */
+async function notifyInsufficientFundsExpensive(client, state, primaryOrderId) {
+    const primary = getOrder(state, primaryOrderId);
+    const threshold = orderAmountKk(primary);
+
+    for (const orderId of localLiveQueueIds(state)) {
+        if (orderId === primaryOrderId) continue;
+        const order = getOrder(state, orderId);
+        if (!order || !shouldProcessBotRetryEvent(order)) continue;
+        if (orderAmountKk(order) <= threshold) continue;
+        if (!order.chatId) continue;
+        if (order.lastError === 'insufficient_funds' && order.deliveryHintSentAt) continue;
+
+        const nick =
+            getBuyerSession(state, order.chatId, order.buyerId).nick || order.nick;
+        markDeliveryPaused(state, orderId, 'awaiting_nick', {
+            lastError: 'insufficient_funds',
+            nick,
+        });
+        void dispatchCancelOrder(orderId);
+        await sendDeliveryHintOnce(
+            client,
+            state,
+            order.chatId,
+            orderId,
+            getOrder(state, orderId) || order,
+            () => buildDeliveryFailHint('insufficient_funds'),
+        );
+        console.warn(
+            `[sell] insufficient_funds → дороже ${threshold}kk: ${orderId.slice(0, 8)}… (${orderAmountKk(order)}kk)`,
+        );
+    }
 }
 
 /** После сбоя — не крутить /pay и не дублировать подсказку, пока покупатель не пришлёт /nick снова */
@@ -407,31 +490,25 @@ async function handleBotEvents(client, state) {
                 }
                 const nick =
                     getBuyerSession(state, chatId, buyerId).nick || order.nick;
-                markDeliveryPaused(
-                    state,
-                    ev.orderId,
-                    'awaiting_nick',
-                    clanDeliveryRetryReset({ lastError: reason, nick }),
-                );
-                void dispatchCancelOrder(ev.orderId);
-                const fresh = getOrder(state, ev.orderId) || order;
-                const failHint = () => buildDeliveryFailHint(reason);
                 if (reason === 'captcha' || reason === 'banned') {
-                    if (!fresh.botStatusHintAt) {
-                        await sendChatMessage(client, chatId, failHint());
-                        setOrderPhase(state, ev.orderId, fresh.phase, {
-                            botStatusHintAt: new Date().toISOString(),
-                            deliveryHintSentAt: new Date().toISOString(),
-                        });
-                    }
+                    // текущий + вся очередь → каждый чат с текстом бана и /cancel
+                    await notifyBotFatalToQueue(client, state, reason, ev.orderId);
                 } else {
+                    markDeliveryPaused(
+                        state,
+                        ev.orderId,
+                        'awaiting_nick',
+                        clanDeliveryRetryReset({ lastError: reason, nick }),
+                    );
+                    void dispatchCancelOrder(ev.orderId);
+                    const fresh = getOrder(state, ev.orderId) || order;
                     await sendDeliveryHintOnce(
                         client,
                         state,
                         chatId,
                         ev.orderId,
                         fresh,
-                        failHint,
+                        () => buildDeliveryFailHint(reason),
                     );
                 }
                 console.warn(`[sell] fail ${ev.orderId}: ${reason}`);
@@ -561,6 +638,8 @@ async function handleBotEvents(client, state) {
                     getOrder(state, ev.orderId) || order,
                     () => buildDeliveryFailHint('insufficient_funds'),
                 );
+                // Дороже текущего в очереди — тоже пауза + «денег нет»
+                await notifyInsufficientFundsExpensive(client, state, ev.orderId);
                 console.warn(
                     `[sell] insufficient_funds ${ev.orderId} — пополни баланс бота (без автоповтора)`,
                 );

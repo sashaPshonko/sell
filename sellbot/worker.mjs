@@ -344,8 +344,9 @@ function handleChatMessage(raw) {
     // как в 4narek-old: всегда toLowerCase — сервер шлёт «ВЫ ЗАБАНЕНЫ!»
     if (text.toLowerCase().includes('вы забанены')) {
         if (healthCheckActive) return finishHealth('banned');
-        // сначала fail заказа → sell успеет уведомить покупателя до stopWorker
-        endDelivery('banned');
+        // fail текущего + всей очереди → sell уведомит каждый чат до stopWorker
+        if (currentOrder) endDelivery('banned');
+        else flushQueueAsFailed('banned');
         parentPort.postMessage(`${config.username} - забанен`);
         parentPort.postMessage({ name: 'banned' });
         shutdown('banned');
@@ -355,7 +356,8 @@ function handleChatMessage(raw) {
     if (text.toLowerCase().includes('botfilter >> введите номер с картинки')) {
         if (healthCheckActive) return finishHealth('captcha');
         parentPort.postMessage(`${config.username} - ввести капчу`);
-        endDelivery('captcha');
+        if (currentOrder) endDelivery('captcha');
+        else flushQueueAsFailed('captcha');
         shutdown('captcha');
         return;
     }
@@ -1261,6 +1263,22 @@ function endDelivery(result, queued, { skipNextOrder = false } = {}) {
         post('invite_declined', { orderId, nick });
     } else if (result === 'insufficient_funds') {
         post('insufficient_funds', { orderId });
+        // Дешевле текущего ещё могут пройти; дороже — нет смысла держать в очереди
+        const threshold = Number(amountKk) || 0;
+        const dropped = [];
+        for (let i = deliverQueue.length - 1; i >= 0; i--) {
+            const o = deliverQueue[i];
+            if ((Number(o.amount) || 0) > threshold) {
+                dropped.push(deliverQueue.splice(i, 1)[0]);
+            }
+        }
+        for (const o of dropped) {
+            post('insufficient_funds', { orderId: o.orderId });
+            logInfo(
+                `очередь: снят ${o.nick} ${o.amount}kk (>${threshold}kk, мало денег)`,
+            );
+        }
+        if (dropped.length) postQueueStatus();
     } else if (result === 'banned') {
         post('delivery_failed', { orderId, reason: 'banned' });
     } else if (result === 'captcha') {
@@ -1286,14 +1304,19 @@ function endDelivery(result, queued, { skipNextOrder = false } = {}) {
     }
 
     if (FATAL.has(result)) {
-        const queued = deliverQueue.splice(0, deliverQueue.length);
-        for (const o of queued) {
-            post('delivery_failed', { orderId: o.orderId, reason: result });
-        }
-        postQueueStatus();
+        flushQueueAsFailed(result);
         return;
     }
     if (!skipNextOrder) nextOrder();
+}
+
+/** Слить всю очередь как failed (бан/капча) — даже без currentOrder. */
+function flushQueueAsFailed(reason) {
+    const queued = deliverQueue.splice(0, deliverQueue.length);
+    for (const o of queued) {
+        post('delivery_failed', { orderId: o.orderId, reason });
+    }
+    postQueueStatus();
 }
 
 async function startDeliver(order) {
