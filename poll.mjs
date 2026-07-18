@@ -32,6 +32,7 @@ import { cancelClosedOrdersOnSellbot } from './lib/sellbot-cancel.mjs';
 import { isRetryableDeliveryFailure } from './sellbot/lib/delivery-retry.mjs';
 import { isOrderFulfilled, clanDeliveryRetryReset } from './lib/playerok-deal-sync.mjs';
 import { applyOrderPayBonus } from './lib/pay-bonus.mjs';
+import { setBotBalance, canAffordOrder } from './lib/bot-balance.mjs';
 import { sendChatMessage } from './chat.mjs';
 import {
     buildWrongNickHint,
@@ -241,6 +242,18 @@ async function handleBotEvents(client, state) {
             continue;
         }
 
+        if (ev.type === 'bot_balance') {
+            const prev = state.botBalance?.coins;
+            const info = setBotBalance(state, ev.balance, { username: ev.username });
+            if (info && info.coins !== prev) {
+                console.log(
+                    `[sell] баланс бота: ${(info.coins / 1_000_000).toLocaleString('ru-RU')}kk` +
+                        (info.username ? ` (${info.username})` : ''),
+                );
+            }
+            continue;
+        }
+
         const order = getOrder(state, ev.orderId);
         if (!order) {
             console.warn(`[sell] ws: неизвестный заказ ${ev.orderId}`);
@@ -261,6 +274,21 @@ async function handleBotEvents(client, state) {
                 if (!nick) continue;
                 applyOrderPayBonus(state, order);
                 const fresh = getOrder(state, ev.orderId) || order;
+                if (!canAffordOrder(state, fresh)) {
+                    markDeliveryPaused(state, ev.orderId, 'awaiting_nick', {
+                        lastError: 'insufficient_funds',
+                        nick,
+                    });
+                    await sendDeliveryHintOnce(
+                        client,
+                        state,
+                        chatId,
+                        ev.orderId,
+                        getOrder(state, ev.orderId) || fresh,
+                        () => buildDeliveryFailHint('insufficient_funds'),
+                    );
+                    continue;
+                }
                 const { sent } = await dispatchOrder(
                     {
                         ...fresh,
@@ -610,6 +638,9 @@ async function handleBotEvents(client, state) {
                     () => buildDeliveryFailHint('invite_declined'),
                 );
             } else if (ev.type === 'insufficient_funds') {
+                if (ev.balance != null) {
+                    setBotBalance(state, ev.balance);
+                }
                 if (!shouldProcessBotRetryEvent(order)) {
                     console.log(
                         `[sell] insufficient_funds ${ev.orderId.slice(0, 8)}… игнор (заказ уже закрыт)`,

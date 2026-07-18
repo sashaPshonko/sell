@@ -417,11 +417,28 @@ async function startWorker(reason = 'order') {
                     return;
                 }
                 console.log(`[sellbot] health: баланс ${bal}`);
+                forwardToSell({
+                    type: 'bot_balance',
+                    balance: bal,
+                    username: botConfig.username,
+                });
                 if (bal < min) {
                     await sendAlert(
                         `⚠️ ${botConfig.username}: мало баланса!\n` +
                             `${bal.toLocaleString('ru-RU')} < ${min.toLocaleString('ru-RU')} (150кк)`,
                     );
+                }
+                return;
+            }
+
+            if (message?.name === 'bot_balance') {
+                const bal = message.balance;
+                if (bal != null && Number.isFinite(Number(bal))) {
+                    forwardToSell({
+                        type: 'bot_balance',
+                        balance: Number(bal),
+                        username: botConfig.username,
+                    });
                 }
                 return;
             }
@@ -441,6 +458,13 @@ async function startWorker(reason = 'order') {
                             ? `, баланс ${bal.toLocaleString('ru-RU')}`
                             : '';
                     console.log(`[sellbot] health: ок${balNote}`);
+                    if (bal != null && Number.isFinite(bal)) {
+                        forwardToSell({
+                            type: 'bot_balance',
+                            balance: bal,
+                            username: botConfig.username,
+                        });
+                    }
                     if (bal != null && Number.isFinite(bal) && bal < min) {
                         await sendAlert(
                             `⚠️ ${botConfig.username}: мало баланса!\n` +
@@ -542,6 +566,7 @@ async function startWorker(reason = 'order') {
                 if (message.full != null) ev.full = message.full;
                 if (message.nick) ev.nick = message.nick;
                 if (message.amountKk != null) ev.amountKk = message.amountKk;
+                if (message.balance != null) ev.balance = message.balance;
                 forwardToSell(ev);
 
                 const short = orderId.slice(0, 8);

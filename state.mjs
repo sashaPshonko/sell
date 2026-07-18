@@ -11,6 +11,7 @@ const EMPTY = {
     chats: {},
     bannedBuyers: {},
     scheduledChatMessages: [],
+    botBalance: null,
 };
 
 export async function loadState() {
@@ -21,6 +22,7 @@ export async function loadState() {
     if (!state.chats) state.chats = {};
     if (!state.scheduledChatMessages) state.scheduledChatMessages = [];
     if (!state.bannedBuyers) state.bannedBuyers = {};
+    if (!('botBalance' in state)) state.botBalance = null;
     return state;
 }
 

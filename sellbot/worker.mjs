@@ -662,6 +662,7 @@ async function safeBalance(waitMs = config.balanceWaitMs, cmdWaitMs = config.bal
         await sleep(cmdWaitMs);
     }
     if (config.balance != null) logInfo(`баланс: ${config.balance}`);
+    if (config.balance != null) post('bot_balance', { balance: config.balance });
     return config.balance;
 }
 
@@ -1024,6 +1025,7 @@ async function deliverClan() {
         }
         if (balance == null || balance < investThisRound) {
             logInfo(`мало денег: ${balance ?? '?'} < ${invest}`);
+            if (balance != null) post('bot_balance', { balance });
             endDelivery('insufficient_funds');
             return;
         }
@@ -1151,6 +1153,10 @@ async function deliverClan() {
             amountKk: order.amount,
             priorWithdrawn,
         });
+        if (config.balance != null && investThisRound > 0) {
+            config.balance = Math.max(0, Number(config.balance) - investThisRound);
+            post('bot_balance', { balance: config.balance });
+        }
     } else {
         logInfo('invest пропуск — игрок уже снял полную сумму');
     }
@@ -1262,7 +1268,11 @@ function endDelivery(result, queued, { skipNextOrder = false } = {}) {
     } else if (result === 'invite_declined') {
         post('invite_declined', { orderId, nick });
     } else if (result === 'insufficient_funds') {
-        post('insufficient_funds', { orderId });
+        post('insufficient_funds', {
+            orderId,
+            balance: config.balance ?? null,
+        });
+        if (config.balance != null) post('bot_balance', { balance: config.balance });
         // Дешевле текущего ещё могут пройти; дороже — нет смысла держать в очереди
         const threshold = Number(amountKk) || 0;
         const dropped = [];

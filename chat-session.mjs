@@ -29,6 +29,7 @@ import {
     buildPremiumRefundUpsellHint,
     buildClanWithdrawWaitHint,
     buildDeliveryAttemptsExceededHint,
+    buildDeliveryFailHint,
     clanFullAmountRaw,
 } from './messages.mjs';
 import {
@@ -42,6 +43,7 @@ import { tryOnceClaim } from './lib/once-claim.mjs';
 import { sendGreeting, sendChatMessage } from './chat.mjs';
 import { dispatchOrder, dispatchNickUpdate, dispatchCancelOrder } from './dispatch.mjs';
 import { applyOrderPayBonus } from './lib/pay-bonus.mjs';
+import { canAffordOrder } from './lib/bot-balance.mjs';
 import { isBuyerBanned } from './lib/banlist.mjs';
 import { cancelDealOnPlayerok } from './cancel.mjs';
 import { isBuyerOrderCancelBlocked } from './lib/order-cancel.mjs';
@@ -78,6 +80,46 @@ function resolveBuyerUsername(state, chatId, buyerId) {
         }
     }
     return null;
+}
+
+/**
+ * Если в state уже известен баланс бота и его не хватает —
+ * не стартуем выдачу, пишем покупателю сразу.
+ * @returns {Promise<boolean>} true = заблокировано
+ */
+async function refuseIfBotBroke(client, state, order, nick) {
+    if (canAffordOrder(state, order)) return false;
+    const oid = order.orderId || order.dealId;
+    if (!oid) return false;
+    const n = nick || order.nick || null;
+    const needKk = order.payAmountKk ?? order.amountKk;
+    console.warn(
+        `[sell] ${oid.slice(0, 8)}…: баланс бота < ${needKk}kk — не шлём в sellbot`,
+    );
+    setOrderPhase(state, oid, 'awaiting_nick', {
+        pausedUntilNick: true,
+        lastError: 'insufficient_funds',
+        nick: n,
+    });
+    const fresh = getOrder(state, oid) || order;
+    if (client && fresh.chatId && !fresh.deliveryHintSentAt) {
+        setOrderPhase(state, oid, fresh.phase || 'awaiting_nick', {
+            deliveryHintSentAt: new Date().toISOString(),
+        });
+        try {
+            await sendChatMessage(
+                client,
+                fresh.chatId,
+                buildDeliveryFailHint('insufficient_funds'),
+            );
+        } catch (e) {
+            setOrderPhase(state, oid, fresh.phase || 'awaiting_nick', {
+                deliveryHintSentAt: undefined,
+            });
+            console.warn(`[sell] hint insufficient_funds: ${e.message}`);
+        }
+    }
+    return true;
 }
 
 /** /cancel — по-прежнему не трогаем старые команды до nickResetAt / приветствия. */
@@ -709,6 +751,9 @@ export async function applyNickCommandUpdates(
 
             applyOrderPayBonus(state, order);
             const fresh = getOrder(state, order.orderId) || order;
+            if (await refuseIfBotBroke(client, state, fresh, u.nick)) {
+                continue;
+            }
             try {
                 const { sent } = await dispatchOrder(
                     {
@@ -964,6 +1009,9 @@ export async function flushChatDispatchQueue(state, deals, client = null, opts =
 
         try {
             const fresh = getOrder(state, oid) || order;
+            if (await refuseIfBotBroke(client, state, fresh, nick)) {
+                continue;
+            }
             const { sent } = await dispatchOrder(
                 {
                     ...fresh,
@@ -1161,6 +1209,10 @@ export async function retryWsPendingOrders(state) {
         applyOrderPayBonus(state, order);
         try {
             const fresh = getOrder(state, oid) || order;
+            // resync уже выданного — не режем по кэшу; новые ws_pending — да
+            if (!isDispatched && (await refuseIfBotBroke(null, state, fresh, order.nick))) {
+                continue;
+            }
             const { sent } = await dispatchOrder(
                 {
                     ...fresh,
