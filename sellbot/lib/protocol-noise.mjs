@@ -11,6 +11,7 @@ export function isIgnorableProtocolNoise(err) {
     if (stack.includes('prismarine-chat') || stack.includes('ChatMessage.fromNetwork')) return true;
     if (msg.includes('Cannot convert undefined or null to object')) return true;
     if (msg.includes('uncompressed length') || msg.includes('problem inflating chunk')) return true;
+    if (msg.includes('array size is abnormally large')) return true;
     if (msg.includes('client timed out')) return true;
     if (msg.includes("reading 'translate'")) return true;
     return false;

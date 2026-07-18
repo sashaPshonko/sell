@@ -1,12 +1,12 @@
 [
     {
-        "username": "hjhjh5239",
+        "username": "hjhjh5240",
         "password": "ggggg",
         "anarchy": 221,
         "payAmountMultiplier": 1000000,
         "paySuffix": "",
         "telegramProxy": "off",
-        "proxy": "socks5://privetnitron:jacb9eSh7e@85.120.129.218:50101",
+        "proxy": "socks5://privetnitron:jacb9eSh7e@212.236.230.189:50101",
         "parkBalanceBelow": 50000000
     }
 ]
