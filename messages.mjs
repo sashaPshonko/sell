@@ -173,6 +173,14 @@ export function buildDeliveryFailHint(reason) {
                 `🎮 Если ждёшь: будь на анархии ${anka} в сети; после пополнения напиши ник снова.`,
             );
             return lines.join('\n');
+        case 'balance_unread':
+            lines.push(
+                '📋 Сейчас не удалось проверить баланс бота (сбой на сервере).',
+                'Это не «закончилась валюта» — просто не прочитали /balance.',
+                '',
+                `🎮 Будь на анархии ${anka} в сети и напиши ник в этот чат снова.`,
+            );
+            return lines.join('\n');
         case 'player_offline':
         case 'offline':
             lines.push(

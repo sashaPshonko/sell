@@ -6,6 +6,7 @@ export const RETRYABLE_DELIVERY_REASONS = new Set([
     'disconnected',
     'worker_crash',
     'anarchy_join_failed',
+    'balance_unread',
 ]);
 
 /** Покупатель / финал / таймаут — только /nick или стоп */

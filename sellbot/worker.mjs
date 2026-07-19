@@ -1025,9 +1025,14 @@ async function deliverClan() {
             );
             if (!active()) return;
         }
-        if (balance == null || balance < investThisRound) {
-            logInfo(`мало денег: ${balance ?? '?'} < ${invest}`);
-            if (balance != null) post('bot_balance', { balance });
+        if (balance == null) {
+            logWarn(`баланс не прочитан (/balance) — не вру «нет денег»`);
+            endDelivery('balance_unread');
+            return;
+        }
+        if (balance < investThisRound) {
+            logInfo(`мало денег: ${balance} < ${invest}`);
+            post('bot_balance', { balance });
             endDelivery('insufficient_funds');
             return;
         }
@@ -1291,6 +1296,9 @@ function endDelivery(result, queued, { skipNextOrder = false } = {}) {
             );
         }
         if (dropped.length) postQueueStatus();
+    } else if (result === 'balance_unread') {
+        // Не «валюта кончилась» — /balance не пришёл. Покупатель пусть напишет ник снова.
+        post('delivery_failed', { orderId, reason: 'balance_unread' });
     } else if (result === 'banned') {
         post('delivery_failed', { orderId, reason: 'banned' });
     } else if (result === 'captcha') {
