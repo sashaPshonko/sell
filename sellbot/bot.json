@@ -6,7 +6,7 @@
         "payAmountMultiplier": 1000000,
         "paySuffix": "",
         "telegramProxy": "off",
-        "proxy": "socks5://privetnitron:jacb9eSh7e@212.236.230.189:50101",
+        "proxy": "socks5://privetnitron:jacb9eSh7e@212.236.230.175:50101",
         "parkBalanceBelow": 50000000
     }
 ]
