@@ -244,6 +244,16 @@ async function handleBotEvents(client, state) {
 
         if (ev.type === 'bot_balance') {
             const prev = state.botBalance?.coins;
+            if (ev.balance == null || ev.balance === '') {
+                if (prev != null) {
+                    console.log(
+                        `[sell] баланс бота: сброс` +
+                            (ev.reason === 'ws_reconnect' ? ' (ws reconnect)' : ''),
+                    );
+                }
+                setBotBalance(state, null);
+                continue;
+            }
             const info = setBotBalance(state, ev.balance, { username: ev.username });
             if (info && info.coins !== prev) {
                 console.log(

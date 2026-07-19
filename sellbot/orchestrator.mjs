@@ -357,6 +357,12 @@ async function startWorker(reason = 'order') {
 
             if (message?.name === 'ready') {
                 workerReady = true;
+                // После рестарта MC-бота старый кэш баланса в poll недействителен
+                forwardToSell({
+                    type: 'bot_balance',
+                    balance: null,
+                    username: botConfig.username,
+                });
                 console.log('[sellbot] бот на анархии, готов к выдаче (клан)');
                 if (pendingCrashReschedule) {
                     pendingCrashReschedule = false;
@@ -370,6 +376,11 @@ async function startWorker(reason = 'order') {
 
             if (message?.name === 'shutdown') {
                 workerReady = false;
+                forwardToSell({
+                    type: 'bot_balance',
+                    balance: null,
+                    username: botConfig.username,
+                });
                 console.log(`[sellbot] бот офлайн (${message.reason || '?'})`);
                 return;
             }
@@ -433,7 +444,15 @@ async function startWorker(reason = 'order') {
 
             if (message?.name === 'bot_balance') {
                 const bal = message.balance;
-                if (bal != null && Number.isFinite(Number(bal))) {
+                if (bal == null || bal === '') {
+                    forwardToSell({
+                        type: 'bot_balance',
+                        balance: null,
+                        username: botConfig.username,
+                    });
+                    return;
+                }
+                if (Number.isFinite(Number(bal))) {
                     forwardToSell({
                         type: 'bot_balance',
                         balance: Number(bal),

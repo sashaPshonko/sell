@@ -950,6 +950,8 @@ async function connectBot() {
 
                 bot = b;
                 ready = true;
+                config.balance = null;
+                post('bot_balance', { balance: null });
                 post('ready');
 
                 if (healthCheckActive) {
