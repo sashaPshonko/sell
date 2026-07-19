@@ -1,50 +1,14 @@
 #!/bin/bash
-cd "$(dirname "$0")/../../sellbot"
-
-LOCK_FILE="/tmp/sellbot-orchestrator.lock"
-exec 9>"$LOCK_FILE"
-if ! flock -n 9; then
-    echo "[sellbot] уже запущен (flock $LOCK_FILE) — второй nohup не нужен"
-    echo "[sellbot] остановить: bash scripts/run/stop.sh  или  pkill -f 'scripts/run/sellbot.sh'"
-    exit 1
-fi
-
-echo "[sellbot] wrapper pid $$ — orchestrator loop"
-
-CHILD=""
-
-stop_child() {
-    if [ -n "$CHILD" ] && kill -0 "$CHILD" 2>/dev/null; then
-        kill -TERM "$CHILD" 2>/dev/null
-        for _ in 1 2 3 4 5; do
-            kill -0 "$CHILD" 2>/dev/null || break
-            sleep 1
-        done
-        kill -KILL "$CHILD" 2>/dev/null || true
-        wait "$CHILD" 2>/dev/null || true
-    fi
-    CHILD=""
-}
-
-on_signal() {
-    stop_child
-    exit 0
-}
-
-trap on_signal TERM INT HUP
+# Как 4narek: цикл + node в foreground. Без trap/CHILD — pkill убивает и обёртку, и node.
+cd "$(dirname "$0")/../../sellbot" || exit 1
 
 while true; do
-    node orchestrator.mjs &
-    CHILD=$!
-    wait "$CHILD"
+    node orchestrator.mjs
     code=$?
-    CHILD=""
     if [ "$code" -eq 2 ]; then
-        echo "[sellbot] exit 2 — занят lock, retry через 5s"
-        sleep 5
-        continue
+        echo "[sellbot] уже запущен (pid lock) — выход"
+        exit 1
     fi
-    echo "[sellbot] orchestrator exit $code — перезапуск через 5s"
-    rm -f .orchestrator.pid
+    echo "[sellbot] orchestrator exit $code — через 5s"
     sleep 5
 done
