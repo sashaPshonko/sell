@@ -908,6 +908,15 @@ async function notifyDeliveryQueueStatus(client, state, chatId, order, nick, opt
     setOrderPhase(state, order.orderId, order.phase, {
         queueStatusSentAt: new Date().toISOString(),
     });
+    await saveState(state);
+
+    // Между копиями репо / двумя poll — общий диск-claim
+    if (!tryOnceClaim('dispatch-status', order.orderId)) {
+        console.log(
+            `[sell] очередь → ${order.orderId.slice(0, 8)}… уже claim — skip`,
+        );
+        return;
+    }
 
     try {
         const text = buildQueueStatusMessage(state, order, nick);

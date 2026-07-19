@@ -16,7 +16,9 @@ import {
 import { existsSync, readFileSync } from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ORCHESTRATOR_LOCK = join(__dirname, '.orchestrator.pid');
+// Глобальный lock — две копии репо не должны поднять двух sellbot
+const ORCHESTRATOR_LOCK =
+    process.env.SELLBOT_ORCHESTRATOR_LOCK || '/tmp/sellbot-orchestrator.pid';
 
 let sendAlert = async (m) => console.log(`🔔 ${m}`);
 let isShuttingDown = false;

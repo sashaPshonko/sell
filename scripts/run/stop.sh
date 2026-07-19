@@ -28,6 +28,11 @@ fi
 if [ -f sellbot/.orchestrator.pid ]; then
     kill "$(cat sellbot/.orchestrator.pid)" 2>/dev/null || true
 fi
+for f in /tmp/sell-poll.pid /tmp/sellbot-orchestrator.pid; do
+    if [ -f "$f" ]; then
+        kill "$(cat "$f")" 2>/dev/null || true
+    fi
+done
 
 sleep 1
 
@@ -36,6 +41,8 @@ killpids -9 'scripts/run/sellbot.sh' 'run/sellbot.sh' 'scripts/run/sell.sh' 'run
 killpids -9 orchestrator.mjs poll.mjs
 
 rm -f sellbot/.orchestrator.pid .poll.pid
+rm -f /tmp/sell-poll.pid /tmp/sellbot-orchestrator.pid
+rm -f /tmp/sell-poll.lock /tmp/sellbot-orchestrator.lock
 sleep 1
 
 left=$(ps aux | grep -E 'run/sell\.sh|run/sellbot\.sh|poll\.mjs|orchestrator\.mjs' | grep -v grep || true)

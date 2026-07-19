@@ -89,11 +89,9 @@ import {
 import { ensureChat } from './state.mjs';
 import { assertPlayerokAuth } from './lib/check-auth.mjs';
 import { acquirePidLock } from './lib/pid-lock.mjs';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const POLL_LOCK = join(__dirname, '.poll.pid');
+// Глобальный lock: иначе ~/sell и ~/foo/sell оба «легально» крутят poll
+const POLL_LOCK = process.env.SELL_POLL_LOCK || '/tmp/sell-poll.pid';
 
 loadEnv();
 acquirePidLock(POLL_LOCK, 'sell', { processPattern: 'poll.mjs' });
