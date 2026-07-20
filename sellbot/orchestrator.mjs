@@ -410,7 +410,15 @@ async function startWorker(reason = 'order') {
             }
 
             if (message?.name === 'kicked') {
-                await sendAlert(`⛔ ${botConfig.username} kicked: ${message.reason || '?'}`);
+                const why = message.reason || '?';
+                await sendAlert(
+                    `⛔ ${botConfig.username} kicked` +
+                        (message.duplicateOnline ? ' (ник уже онлайн / пополнение?)' : '') +
+                        `: ${why}`,
+                );
+                if (message.duplicateOnline) {
+                    forwardToSell({ type: 'bot_balance_refilling' });
+                }
                 workerReady = false;
                 return;
             }

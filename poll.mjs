@@ -37,6 +37,7 @@ import { sendChatMessage } from './chat.mjs';
 import {
     buildWrongNickHint,
     buildDeliveryFailHint,
+    buildBotBalanceRefillingHint,
     buildQueueStallHint,
     buildDeliveryOkHint,
     buildClanInviteHint,
@@ -233,10 +234,62 @@ async function sendDeliveryHintOnce(client, state, chatId, orderId, order, build
     }
 }
 
+/**
+ * Кик «ник уже онлайн» — чаще всего заход для пополнения.
+ * Сообщаем живым чатам, CD 15 мин на чат.
+ */
+const BALANCE_REFILL_HINT_CD_MS = 15 * 60 * 1000;
+
+async function notifyBotBalanceRefilling(client, state) {
+    const chatIds = new Set();
+    for (const orderId of localLiveQueueIds(state)) {
+        const order = getOrder(state, orderId);
+        if (order?.chatId) chatIds.add(order.chatId);
+    }
+    for (const order of Object.values(state.orders || {})) {
+        if (!shouldProcessBotRetryEvent(order)) continue;
+        if (order.chatId) chatIds.add(order.chatId);
+    }
+    if (!chatIds.size) {
+        console.log('[sell] bot_balance_refilling — нет живых чатов');
+        return;
+    }
+
+    const now = Date.now();
+    let sent = 0;
+    for (const chatId of chatIds) {
+        const chat = ensureChat(state, chatId);
+        const last = chat.balanceRefillHintAt ? Date.parse(chat.balanceRefillHintAt) : 0;
+        if (Number.isFinite(last) && now - last < BALANCE_REFILL_HINT_CD_MS) {
+            console.log(
+                `[sell] пополнение баланса: skip чат ${String(chatId).slice(0, 8)}… (CD 15м)`,
+            );
+            continue;
+        }
+        try {
+            await sendChatMessage(client, chatId, buildBotBalanceRefillingHint());
+            chat.balanceRefillHintAt = new Date().toISOString();
+            await saveState(state);
+            sent++;
+            console.log(`[sell] пополнение баланса → чат ${String(chatId).slice(0, 8)}…`);
+        } catch (e) {
+            console.warn(
+                `[sell] пополнение баланса notify ${String(chatId).slice(0, 8)}…: ${e.message}`,
+            );
+        }
+    }
+    if (sent) console.log(`[sell] bot_balance_refilling: отправлено в ${sent} чат(ов)`);
+}
+
 async function handleBotEvents(client, state) {
     for (const ev of await drainBotEvents()) {
         if (ev.type === 'delivery_queue') {
             setDeliveryQueueSnapshot(ev);
+            continue;
+        }
+
+        if (ev.type === 'bot_balance_refilling') {
+            await notifyBotBalanceRefilling(client, state);
             continue;
         }
 

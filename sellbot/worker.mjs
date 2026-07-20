@@ -155,6 +155,26 @@ process.on('unhandledRejection', (reason) => {
     console.error(`[${config.username}] unhandled rejection:`, reason);
 });
 
+function kickReasonToText(reason) {
+    if (reason == null) return '';
+    if (typeof reason === 'string') return reason;
+    if (typeof reason?.toString === 'function') {
+        const s = reason.toString();
+        if (s && s !== '[object Object]') return s;
+    }
+    try {
+        return JSON.stringify(reason);
+    } catch {
+        return String(reason);
+    }
+}
+
+/** FunTime: кик при входе второго клиента с тем же ником (часто пополнение). */
+function isDuplicateNickOnlineKick(reasonText) {
+    const t = String(reasonText || '');
+    return /уже онлайн/i.test(t) || /таким[- ]?же ником/i.test(t);
+}
+
 function post(name, extra = {}) {
     parentPort.postMessage({ name, ...extra });
 }
@@ -849,7 +869,9 @@ function wireBot(b) {
 
     b.on('kicked', (reason) => {
         abortInFlightRetryable('kicked');
-        post('kicked', { reason: JSON.stringify(reason) });
+        const reasonText = kickReasonToText(reason);
+        const duplicateOnline = isDuplicateNickOnlineKick(reasonText);
+        post('kicked', { reason: reasonText, duplicateOnline });
         shutdown('kicked');
         process.exit(1);
     });
