@@ -14,6 +14,9 @@ import {
     DELIVERY_RETRY_DELAY_MS,
 } from './lib/delivery-retry.mjs';
 import { existsSync, readFileSync } from 'fs';
+import { buildBanTelegramAlert, formatBanDuration } from './lib/ban-info.mjs';
+import { loadLastBalance, saveLastBalance } from './lib/last-balance.mjs';
+import { ALERT_KIND } from './lib/telegram-alerts.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Глобальный lock — две копии репо не должны поднять двух sellbot
@@ -46,6 +49,31 @@ const retryScheduled = new Set();
 /** @type {Map<string, NodeJS.Timeout>} */
 const retryTimers = new Map();
 let pendingCrashReschedule = false;
+/** Последний баланс для TG (poll не использует) */
+let lastKnownBalance = null;
+
+function rememberLastBalance(coins) {
+    const n = Number(coins);
+    if (!Number.isFinite(n) || n < 0) return;
+    lastKnownBalance = Math.round(n);
+    if (botConfig?.username) saveLastBalance(botConfig.username, lastKnownBalance);
+}
+
+function banAlertBalance(messageBalance) {
+    const direct = Number(messageBalance);
+    if (Number.isFinite(direct) && direct >= 0) return direct;
+    if (lastKnownBalance != null) return lastKnownBalance;
+    if (botConfig?.username) return loadLastBalance(botConfig.username);
+    return null;
+}
+
+function resetPollBalance() {
+    forwardToSell({
+        type: 'bot_balance',
+        balance: null,
+        username: botConfig?.username,
+    });
+}
 
 function forwardToSell(ev) {
     void audit('ws_bot_event', ev);
@@ -261,6 +289,12 @@ async function loadBotConfig() {
     if (cfg.mockDelivery) {
         console.log('[sellbot] mockDelivery в bot.json — без Minecraft');
     }
+    lastKnownBalance = loadLastBalance(botConfig.username);
+    if (lastKnownBalance != null) {
+        console.log(
+            `[sellbot] last balance (TG): ${lastKnownBalance.toLocaleString('ru-RU')}`,
+        );
+    }
 }
 
 function workerDataPayload() {
@@ -298,6 +332,7 @@ function workerDataPayload() {
         parkBalanceBelow: cfg.parkBalanceBelow,
         parkPayWaitMs: cfg.parkPayWaitMs,
         parkPayMaxDukes: cfg.parkPayMaxDukes,
+        lastKnownBalance,
     };
 }
 
@@ -338,6 +373,7 @@ async function startWorker(reason = 'order') {
     if (workerEntry?.worker || isShuttingDown) return;
     await loadBotConfig();
     console.log(`[sellbot] запуск воркера (${reason})…`);
+    resetPollBalance();
 
     const worker = new Worker(join(__dirname, 'worker.mjs'), {
         workerData: workerDataPayload(),
@@ -359,12 +395,6 @@ async function startWorker(reason = 'order') {
 
             if (message?.name === 'ready') {
                 workerReady = true;
-                // После рестарта MC-бота старый кэш баланса в poll недействителен
-                forwardToSell({
-                    type: 'bot_balance',
-                    balance: null,
-                    username: botConfig.username,
-                });
                 console.log('[sellbot] бот на анархии, готов к выдаче (клан)');
                 if (pendingCrashReschedule) {
                     pendingCrashReschedule = false;
@@ -378,17 +408,19 @@ async function startWorker(reason = 'order') {
 
             if (message?.name === 'shutdown') {
                 workerReady = false;
-                forwardToSell({
-                    type: 'bot_balance',
-                    balance: null,
-                    username: botConfig.username,
-                });
+                resetPollBalance();
                 console.log(`[sellbot] бот офлайн (${message.reason || '?'})`);
                 return;
             }
 
             if (message?.name === 'banned') {
-                await sendAlert(`🚫 ${botConfig.username} забанен на сервере`);
+                await sendAlert(
+                    buildBanTelegramAlert(botConfig.username, {
+                        ban: message.ban,
+                        balance: banAlertBalance(message.balance),
+                    }),
+                    { forceKind: ALERT_KIND.BAN },
+                );
                 // страховка: все активные заказы → sell уведомит покупателей
                 for (const order of activeOrders.values()) {
                     forwardToSell({
@@ -455,17 +487,15 @@ async function startWorker(reason = 'order') {
             if (message?.name === 'bot_balance') {
                 const bal = message.balance;
                 if (bal == null || bal === '') {
-                    forwardToSell({
-                        type: 'bot_balance',
-                        balance: null,
-                        username: botConfig.username,
-                    });
+                    resetPollBalance();
                     return;
                 }
                 if (Number.isFinite(Number(bal))) {
+                    const coins = Number(bal);
+                    rememberLastBalance(coins);
                     forwardToSell({
                         type: 'bot_balance',
-                        balance: Number(bal),
+                        balance: coins,
                         username: botConfig.username,
                     });
                 }
@@ -504,7 +534,8 @@ async function startWorker(reason = 'order') {
                     await sendAlert(`✅ ${botConfig.username}: проверка анархии ок${balNote}`);
                 } else if (st === 'banned') {
                     healthCheckPaused = true;
-                    await sendAlert(`🚫 ${botConfig.username}: бан (проверка)`);
+                    const dur = message.ban ? ` (${formatBanDuration(message.ban)})` : '';
+                    console.log(`[sellbot] health: бан${dur}`);
                     for (const order of activeOrders.values()) {
                         forwardToSell({
                             type: 'delivery_failed',

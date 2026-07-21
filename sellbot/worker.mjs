@@ -6,6 +6,7 @@ import {
     parseClanBalanceFromChat,
     parseClanWithdrawAmount,
 } from './lib/balance.mjs';
+import { parseBanFromChat } from './lib/ban-info.mjs';
 import {
     parseClanMembersFromChat,
     findClanIntruders,
@@ -85,6 +86,8 @@ const config = {
     proxy: workerData.proxy,
     afk: false,
     balance: null,
+    /** для TG при бане — не сбрасывается при reconnect */
+    lastKnownBalance: workerData.lastKnownBalance ?? null,
     /** как botMenu в 4narek: что ждём от следующего windowOpen */
     menu: null,
     /** timestamp входа на анархию (scoreboard) */
@@ -358,18 +361,66 @@ async function afkTick() {
 
 // ========== чат ==========
 
+let banCaptureTimer = null;
+let banLines = [];
+
+function isBanRelatedLine(text) {
+    const t = String(text).toLowerCase();
+    return (
+        t.includes('забанен') ||
+        t.includes('бан выдан') ||
+        t.includes('по причине') ||
+        t.includes('разбан через') ||
+        t.includes('обжаловать бан') ||
+        t.includes('funtime.su') ||
+        t.includes('купить разбан')
+    );
+}
+
+function finishBanCapture() {
+    banCaptureTimer = null;
+    if (!banLines.length) return;
+    const full = banLines.join('\n');
+    banLines = [];
+    notifyBanned(parseBanFromChat(full));
+}
+
+function bumpBanCapture(text) {
+    banLines.push(text);
+    if (/разбан через:/i.test(text) || /навсегда/i.test(text)) {
+        clearTimeout(banCaptureTimer);
+        finishBanCapture();
+        return;
+    }
+    clearTimeout(banCaptureTimer);
+    banCaptureTimer = setTimeout(finishBanCapture, 1000);
+}
+
+function notifyBanned(ban) {
+    const balance = config.lastKnownBalance ?? config.balance ?? null;
+    const payload = { name: 'banned', ban, balance };
+
+    if (healthCheckActive) {
+        healthCheckActive = false;
+        logInfo('health: banned');
+        post('health_check', { status: 'banned', balance, ban });
+        parentPort.postMessage(payload);
+        shutdown('banned');
+        return;
+    }
+
+    if (currentOrder) endDelivery('banned');
+    else flushQueueAsFailed('banned');
+    parentPort.postMessage(payload);
+    shutdown('banned');
+}
+
 function handleChatMessage(raw) {
     const text = plain(raw);
 
     // как в 4narek-old: всегда toLowerCase — сервер шлёт «ВЫ ЗАБАНЕНЫ!»
-    if (text.toLowerCase().includes('вы забанены')) {
-        if (healthCheckActive) return finishHealth('banned');
-        // fail текущего + всей очереди → sell уведомит каждый чат до stopWorker
-        if (currentOrder) endDelivery('banned');
-        else flushQueueAsFailed('banned');
-        parentPort.postMessage(`${config.username} - забанен`);
-        parentPort.postMessage({ name: 'banned' });
-        shutdown('banned');
+    if (text.toLowerCase().includes('вы забанены') || (banLines.length && isBanRelatedLine(text))) {
+        bumpBanCapture(text);
         return;
     }
 
@@ -414,7 +465,10 @@ function handleChatMessage(raw) {
     }
 
     const bal = parseBalanceFromChat(text);
-    if (bal != null) config.balance = bal;
+    if (bal != null) {
+        config.balance = bal;
+        rememberBalance(bal);
+    }
 
     const clanBal = parseClanBalanceFromChat(text);
     if (clanBal != null) clanBalance = clanBal;
@@ -669,6 +723,12 @@ async function kickAndSweepClan(nick, deadline) {
 
 // ========== баланс ==========
 
+function rememberBalance(bal) {
+    const n = Number(bal);
+    if (!Number.isFinite(n) || n < 0) return;
+    config.lastKnownBalance = n;
+}
+
 async function safeBalance(waitMs = config.balanceWaitMs, cmdWaitMs = config.balanceCmdWaitMs) {
     if (!bot?.chat) return null;
     await waitUntilConfigurationIdle(bot);
@@ -681,8 +741,19 @@ async function safeBalance(waitMs = config.balanceWaitMs, cmdWaitMs = config.bal
         bot.chat('/balance');
         await sleep(cmdWaitMs);
     }
-    if (config.balance != null) logInfo(`баланс: ${config.balance}`);
-    if (config.balance != null) post('bot_balance', { balance: config.balance });
+    if (config.balance != null) {
+        rememberBalance(config.balance);
+        logInfo(`баланс: ${config.balance}`);
+        post('bot_balance', { balance: config.balance });
+    }
+    return config.balance;
+}
+
+/** Свежий /balance сразу после входа на анархию (+ park мелочи). */
+async function refreshBalanceAfterJoin() {
+    if (!bot?.chat) return null;
+    await safeBalance();
+    await parkBalanceToDukeIfNeeded();
     return config.balance;
 }
 
@@ -747,6 +818,7 @@ async function parkBalanceToDukeIfNeeded() {
 
             if (confirmed) {
                 config.balance = 0;
+                rememberBalance(0);
                 logOk(`park ok → ${nick} (${amount})`);
                 return true;
             }
@@ -913,6 +985,7 @@ async function connectBot() {
 
     connecting = true;
     logInfo('подключение…');
+    post('bot_balance', { balance: null });
 
     return new Promise((resolve, reject) => {
         const botOpts = {
@@ -972,12 +1045,10 @@ async function connectBot() {
 
                 bot = b;
                 ready = true;
-                config.balance = null;
-                post('bot_balance', { balance: null });
+                await refreshBalanceAfterJoin();
                 post('ready');
 
                 if (healthCheckActive) {
-                    await safeBalance();
                     if (config.balance != null) post('health_balance', { balance: config.balance });
                     await sleep(config.healthCheckObserveMs);
                     if (healthCheckActive) finishHealth('ok');
@@ -1184,6 +1255,7 @@ async function deliverClan() {
         });
         if (config.balance != null && investThisRound > 0) {
             config.balance = Math.max(0, Number(config.balance) - investThisRound);
+            rememberBalance(config.balance);
             post('bot_balance', { balance: config.balance });
         }
     } else {
@@ -1374,6 +1446,7 @@ async function startDeliver(order) {
         await antiAfkIfNeeded(bot, config, logInfo);
         config.timeJoinAnarchy = 0;
         await joinAnarchy(bot, { rejoin: true });
+        await refreshBalanceAfterJoin();
 
         await deliverClan();
     } catch (e) {
@@ -1404,7 +1477,6 @@ function finishHealth(status) {
     healthCheckActive = false;
     logInfo(`health: ${status}`);
     post('health_check', { status, balance: config.balance ?? null });
-    if (status === 'banned') parentPort.postMessage({ name: 'banned' });
     if (status === 'captcha') parentPort.postMessage(`${config.username} - ввести капчу (проверка)`);
     if (status === 'interrupted') return nextOrder();
     shutdown(status === 'ok' ? 'health_ok' : status);
@@ -1418,9 +1490,8 @@ async function runHealthCheck() {
     healthCheckActive = true;
     try {
         if (bot && ready) {
-            await safeBalance();
+            await refreshBalanceAfterJoin();
             if (config.balance != null) post('health_balance', { balance: config.balance });
-            await parkBalanceToDukeIfNeeded();
             await sleep(config.healthCheckObserveMs);
             if (healthCheckActive) finishHealth('ok');
             return;
