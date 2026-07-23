@@ -448,6 +448,8 @@ export async function sendPremiumRefundUpsellForOrders(client, state, chatId, ne
             scheduleUpsellRepeat(state, chatId, order.orderId, {
                 fromSentAtMs: Date.parse(refundSentAt),
             });
+            // Сразу на диск: иначе early-return в poll без saveState теряет повтор на 40с
+            await saveState(state);
         } catch (e) {
             console.warn(`[sell] profile-upsell refund чат: ${e.message}`);
         }

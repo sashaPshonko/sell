@@ -941,6 +941,7 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
     ];
     if (!openDeals.length && !pendingBuyerIds.length) {
         await handleCompletedLateNick(client, state, chatId, messages, dealTimeline, sellerUserId);
+        await saveState(state);
         return;
     }
 
