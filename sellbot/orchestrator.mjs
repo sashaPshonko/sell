@@ -702,8 +702,8 @@ async function startWorker(reason = 'order') {
         if (activeOrders.size > 0) {
             pendingCrashReschedule = true;
         }
-        console.warn(`[sellbot] воркер exit ${code} → перезапуск через 15с`);
-        setTimeout(() => startWorker('restart'), 15_000);
+        console.warn(`[sellbot] воркер exit ${code} → перезапуск сразу`);
+        startWorker('restart');
     });
 }
 
