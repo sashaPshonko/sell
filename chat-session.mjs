@@ -29,7 +29,6 @@ import {
     buildPremiumRefundUpsellHint,
     buildClanWithdrawWaitHint,
     buildDeliveryAttemptsExceededHint,
-    buildDeliveryFailHint,
     clanFullAmountRaw,
 } from './messages.mjs';
 import {
@@ -45,6 +44,7 @@ import { sendGreeting, sendChatMessage } from './chat.mjs';
 import { dispatchOrder, dispatchNickUpdate, dispatchCancelOrder } from './dispatch.mjs';
 import { applyOrderPayBonus } from './lib/pay-bonus.mjs';
 import { canAffordOrder } from './lib/bot-balance.mjs';
+import { composeInsufficientFundsHint } from './lib/insufficient-funds-hint.mjs';
 import { isBuyerBanned } from './lib/banlist.mjs';
 import { cancelDealOnPlayerok } from './cancel.mjs';
 import { isBuyerOrderCancelBlocked } from './lib/order-cancel.mjs';
@@ -108,11 +108,8 @@ async function refuseIfBotBroke(client, state, order, nick) {
             deliveryHintSentAt: new Date().toISOString(),
         });
         try {
-            await sendChatMessage(
-                client,
-                fresh.chatId,
-                buildDeliveryFailHint('insufficient_funds'),
-            );
+            const text = await composeInsufficientFundsHint(client, state, fresh);
+            await sendChatMessage(client, fresh.chatId, text);
         } catch (e) {
             setOrderPhase(state, oid, fresh.phase || 'awaiting_nick', {
                 deliveryHintSentAt: undefined,
@@ -444,9 +441,8 @@ export async function sendPremiumRefundUpsellForOrders(client, state, chatId, ne
                 chatId,
                 buildPremiumRefundUpsellHint({
                     upsellKk,
+                    baseKk,
                     url: match.url,
-                    emoji: match.emoji ?? profileUpsellEmoji(),
-                    priceRub: matchPrice,
                 }),
             );
             scheduleUpsellRepeat(state, chatId, order.orderId, {

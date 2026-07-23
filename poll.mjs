@@ -33,6 +33,7 @@ import { isRetryableDeliveryFailure } from './sellbot/lib/delivery-retry.mjs';
 import { isOrderFulfilled, clanDeliveryRetryReset } from './lib/playerok-deal-sync.mjs';
 import { applyOrderPayBonus } from './lib/pay-bonus.mjs';
 import { setBotBalance, canAffordOrder } from './lib/bot-balance.mjs';
+import { composeInsufficientFundsHint } from './lib/insufficient-funds-hint.mjs';
 import { sendChatMessage } from './chat.mjs';
 import {
     buildWrongNickHint,
@@ -198,7 +199,12 @@ async function notifyInsufficientFundsExpensive(client, state, primaryOrderId) {
             order.chatId,
             orderId,
             getOrder(state, orderId) || order,
-            () => buildDeliveryFailHint('insufficient_funds'),
+            () =>
+                composeInsufficientFundsHint(
+                    client,
+                    state,
+                    getOrder(state, orderId) || order,
+                ),
         );
         console.warn(
             `[sell] insufficient_funds → дороже ${threshold}kk: ${orderId.slice(0, 8)}… (${orderAmountKk(order)}kk)`,
@@ -225,7 +231,7 @@ async function sendDeliveryHintOnce(client, state, chatId, orderId, order, build
         deliveryHintSentAt: new Date().toISOString(),
     });
     try {
-        await sendChatMessage(client, chatId, buildHint());
+        await sendChatMessage(client, chatId, await buildHint());
     } catch (e) {
         setOrderPhase(state, orderId, order.phase, {
             deliveryHintSentAt: undefined,
@@ -346,7 +352,12 @@ async function handleBotEvents(client, state) {
                         chatId,
                         ev.orderId,
                         getOrder(state, ev.orderId) || fresh,
-                        () => buildDeliveryFailHint('insufficient_funds'),
+                        () =>
+                            composeInsufficientFundsHint(
+                                client,
+                                state,
+                                getOrder(state, ev.orderId) || fresh,
+                            ),
                     );
                     continue;
                 }
@@ -728,7 +739,13 @@ async function handleBotEvents(client, state) {
                     chatId,
                     ev.orderId,
                     getOrder(state, ev.orderId) || order,
-                    () => buildDeliveryFailHint('insufficient_funds'),
+                    () =>
+                        composeInsufficientFundsHint(
+                            client,
+                            state,
+                            getOrder(state, ev.orderId) || order,
+                            ev.balance != null ? Number(ev.balance) : null,
+                        ),
                 );
                 // Дороже текущего в очереди — тоже пауза + «денег нет»
                 await notifyInsufficientFundsExpensive(client, state, ev.orderId);

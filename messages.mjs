@@ -151,10 +151,65 @@ export function buildBotBalanceRefillingHint() {
 }
 
 /**
+ * Мало валюты — главное: ссылка на самый большой 🎁 ≤ баланса.
+ * @param {{
+ *   availableLotKk?: number|null,
+ *   needLotKk?: number|null,
+ *   upsellUrl?: string|null,
+ *   upsellKk?: number|null,
+ * }} [ctx]
+ */
+export function buildInsufficientFundsHint(ctx = null) {
+    const anka = DELIVERY_ANARCHY;
+    const available = Math.round(Number(ctx?.availableLotKk) || 0);
+    const need = Math.round(Number(ctx?.needLotKk) || 0);
+    const upsellUrl = String(ctx?.upsellUrl || '').trim();
+    const upsellKk = Math.round(Number(ctx?.upsellKk) || 0);
+    const marker = '🎁';
+
+    const lines = ['❌ Не удалось выдать.', ''];
+
+    if (available > 0) {
+        lines.push(
+            `📋 Сейчас хватает примерно на ${available}кк`,
+            '(с запасом под бонус к выдаче).',
+        );
+        if (need > available) {
+            lines.push(`Заказ ~${need}кк целиком пока не влезает.`);
+        }
+    } else {
+        lines.push('📋 Сейчас у бота почти нет валюты — выдать не получится.');
+    }
+
+    if (upsellUrl && upsellKk > 0) {
+        lines.push(
+            '',
+            'Можешь:',
+            `1️⃣ Подождать пополнения (когда — неизвестно, гарантий нет) — анархия ${anka}, в сети, ник в чат снова.`,
+            `2️⃣ Или /cancel и взять этот лот без премки (${marker}) — ${upsellKk}кк:`,
+            '',
+            upsellUrl,
+        );
+    } else {
+        lines.push(
+            '',
+            'Можешь:',
+            `1️⃣ Подождать пополнения (когда — неизвестно, гарантий нет) — анархия ${anka}, в сети, ник в чат снова.`,
+            available > 0
+                ? `2️⃣ Или /cancel и купить лот поменьше (до ~${available}кк), лучше с ${marker} на профиле.`
+                : `2️⃣ Или /cancel и купить лот поменьше, лучше с ${marker} на профиле.`,
+        );
+    }
+
+    return lines.join('\n');
+}
+
+/**
  * Покупателю — почему не выдали (капча / бан бота / нет монет / офлайн).
  * @param {string} [reason]
+ * @param {object} [ctx] — для insufficient_funds: availableLotKk, needLotKk, upsellUrl, upsellKk
  */
-export function buildDeliveryFailHint(reason) {
+export function buildDeliveryFailHint(reason, ctx = null) {
     const anka = DELIVERY_ANARCHY;
     const lines = ['❌ Не удалось выдать.', ''];
 
@@ -177,14 +232,7 @@ export function buildDeliveryFailHint(reason) {
             );
             return lines.join('\n');
         case 'insufficient_funds':
-            lines.push(
-                '📋 Сейчас выдать не получится — у бота закончилась валюта.',
-                '⏳ Когда снова пополню — неизвестно (может быстро, может подождать).',
-                '',
-                '❌ Не хочешь ждать — отмени заказ командой /cancel',
-                `🎮 Если ждёшь: будь на анархии ${anka} в сети; после пополнения напиши ник снова.`,
-            );
-            return lines.join('\n');
+            return buildInsufficientFundsHint(ctx);
         case 'balance_unread':
             lines.push(
                 '📋 Сейчас не удалось проверить баланс бота (сбой на сервере).',
@@ -350,23 +398,25 @@ export function formatUpsellLinkLine(url) {
 }
 
 /**
- * Автовозврат прошёл — коротко ссылка на 🎁-лот.
- * @param {{ upsellKk?: number, url?: string, emoji?: string, priceRub?: number }} opts
+ * Автовозврат прошёл — деньги уже на балансе, сразу на 🎁-лот.
+ * @param {{ upsellKk?: number, baseKk?: number, url?: string }} opts
  */
 export function buildPremiumRefundUpsellHint(opts = {}) {
     const upsellKk = Math.round(Number(opts.upsellKk) || 0);
+    const baseKk = Math.round(Number(opts.baseKk) || 0);
     const url = String(opts.url || '').trim();
-    const marker = opts.emoji || '🎁';
-    const priceRub = opts.priceRub != null ? Math.round(Number(opts.priceRub)) : null;
-    const priceBit =
-        priceRub != null && priceRub > 0 ? `за ${priceRub} ₽` : 'по этой же цене';
 
-    return (
-        `Деньги вернули. Бери ${marker} — ${upsellKk}кк ${priceBit}:` +
-        formatUpsellLinkLine(url) +
-        `\n\n` +
-        `P.S мне выгодно продавать предложения без премки, поэтому так`
-    );
+    let body;
+    if (upsellKk > 0 && baseKk > 0) {
+        body = `деньги уже на твоем балансе, так что сразу можешь взять ${upsellKk}кк за цену ${baseKk}кк`;
+    } else if (upsellKk > 0) {
+        body = `деньги уже на твоем балансе, так что сразу можешь взять ${upsellKk}кк по этой же цене`;
+    } else {
+        body = 'деньги уже на твоем балансе — бери лот по ссылке';
+    }
+
+    if (!url) return body;
+    return `${body}\n\n${url}`;
 }
 
 /** Нет конкретного лота-аналога — подсказка про 🎁 на профиле (без ссылки). */
