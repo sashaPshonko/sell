@@ -38,6 +38,7 @@ import {
     isMarkedProfileLot,
     buyerHasPriorSuccessfulDelivery,
 } from './lib/profile-upsell.mjs';
+import { scheduleUpsellRepeat } from './lib/scheduled-chat.mjs';
 import { getQueuePosition } from './lib/delivery-queue.mjs';
 import { tryOnceClaim } from './lib/once-claim.mjs';
 import { sendGreeting, sendChatMessage } from './chat.mjs';
@@ -411,11 +412,18 @@ export async function sendPremiumRefundUpsellForOrders(client, state, chatId, ne
         }
 
         const wasDispatched = order.phase === 'dispatched';
+        const refundSentAt = new Date().toISOString();
         setOrderPhase(state, order.orderId, 'cancelled', {
-            cancelledAt: new Date().toISOString(),
+            cancelledAt: refundSentAt,
             cancelReason: 'profile_upsell_refund',
-            premiumRefundUpsellSentAt: new Date().toISOString(),
-            playerokCancelledAt: new Date().toISOString(),
+            premiumRefundUpsellSentAt: refundSentAt,
+            profileUpsellSentAt: refundSentAt,
+            profileUpsellUrl: match.url,
+            profileUpsellKk: upsellKk,
+            profileUpsellBaseKk: baseKk,
+            profileUpsellPriceRub: matchPrice,
+            profileUpsellEmoji: match.emoji ?? profileUpsellEmoji(),
+            playerokCancelledAt: refundSentAt,
         });
         if (wasDispatched) {
             await dispatchCancelOrder(order.orderId, state);
@@ -441,6 +449,9 @@ export async function sendPremiumRefundUpsellForOrders(client, state, chatId, ne
                     priceRub: matchPrice,
                 }),
             );
+            scheduleUpsellRepeat(state, chatId, order.orderId, {
+                fromSentAtMs: Date.parse(refundSentAt),
+            });
         } catch (e) {
             console.warn(`[sell] profile-upsell refund чат: ${e.message}`);
         }

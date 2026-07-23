@@ -398,15 +398,22 @@ export function buildProfileUpsellHint(opts) {
 }
 
 /**
- * Повтор через 40с — та же ссылка, коротко по-человечески.
- * @param {{ upsellKk: number, url: string }} opts
+ * Повтор через 40с — только ссылка + «65кк, вместо 60кк по этой же цене» (без эмодзи).
+ * @param {{ upsellKk: number, baseKk?: number, url: string }} opts
  */
 export function buildProfileUpsellRepeatHint(opts) {
     const upsellKk = Math.round(Number(opts.upsellKk) || 0);
+    const baseKk = Math.round(Number(opts.baseKk) || 0);
     const url = String(opts.url || '').trim();
     if (!url) return '';
 
-    return `${url}\n\nкупи вот это. тут ${upsellKk}кк по этой же цене`;
+    if (upsellKk > 0 && baseKk > 0) {
+        return `${url}\n\n${upsellKk}кк, вместо ${baseKk}кк по этой же цене`;
+    }
+    if (upsellKk > 0) {
+        return `${url}\n\n${upsellKk}кк по этой же цене`;
+    }
+    return url;
 }
 
 export function buildOrderAlreadyDoneHint() {
