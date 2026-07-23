@@ -217,6 +217,15 @@ export function buildDeliveryFailHint(reason) {
                 'когда бот пришлёт его снова.',
             );
             break;
+        case 'bot_not_in_clan':
+            lines.push(
+                '📋 Причина: продавец забыл создать клан на сервере.',
+                'Это не твоя ошибка — бот без клана не может выдать заказ.',
+                '',
+                '⏳ Можешь подождать, пока продавец создаст клан.',
+                '❌ Или верни оплату командой /cancel',
+            );
+            return lines.join('\n');
         default:
             return buildRetryNickHint();
     }
