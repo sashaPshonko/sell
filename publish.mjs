@@ -12,10 +12,13 @@ function publishEnabled() {
     return process.env.AUTO_PUBLISH_ITEM !== '0';
 }
 
-/** kk + цена из заказа — ищем лот в completed-list. */
+/**
+ * Достаточно kk: цену PlayerOK часто не кладёт в ITEM_PAID (itemPriceRub=null).
+ * Цену подтянем из completed-list / itemMeta при publish.
+ */
 export function shouldRepublishOrder(order) {
     const kk = order?.amountKk ?? parseAmountKk(order?.itemName);
-    return Boolean(kk && order?.itemPriceRub != null);
+    return Boolean(kk);
 }
 
 function publishDelayMs() {
@@ -246,7 +249,7 @@ export function scheduleRepublishItem(client, state, order, { delayOverrideMs } 
     if (!publishEnabled()) return;
     if (!shouldRepublishOrder(order)) {
         console.log(
-            `[sell] перевыставление пропуск: ${order?.itemName || '?'} (нет kk/цены)`,
+            `[sell] перевыставление пропуск: ${order?.itemName || '?'} (нет kk)`,
         );
         return;
     }

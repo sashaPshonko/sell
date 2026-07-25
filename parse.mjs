@@ -51,7 +51,13 @@ export function listingBuyerPriceRub(item) {
             : null;
     if (sale != null && raw != null && sale < raw) return sale;
     if (sale != null) return sale;
-    return raw;
+    if (raw != null) return raw;
+    // запасные поля у deal / transaction
+    for (const key of ['amount', 'totalPrice', 'buyerPrice', 'priceRub']) {
+        const n = Number(item[key]);
+        if (Number.isFinite(n) && n > 0) return Math.round(n);
+    }
+    return null;
 }
 
 export function listingRawPriceRub(item) {
@@ -100,6 +106,13 @@ function buildCurrencyDeal(msg) {
     const amountKk = parseAmountKk(name);
     if (amountKk == null || amountKk <= 0) return null;
 
+    // ITEM_PAID часто без item.price — пробуем deal / transaction.
+    const itemPriceRub =
+        discountedPriceRub(item) ??
+        discountedPriceRub(msg.deal) ??
+        discountedPriceRub(msg.deal?.transaction) ??
+        discountedPriceRub(msg.deal?.payment);
+
     return {
         dealId: msg.deal.id,
         chatId: msg.deal.chat?.id,
@@ -108,7 +121,7 @@ function buildCurrencyDeal(msg) {
         buyerId: msg.deal.user?.id,
         itemId: item?.id,
         itemName: name,
-        itemPriceRub: discountedPriceRub(item),
+        itemPriceRub,
         itemSlug: item?.slug || null,
         amountKk,
         server: parseServer(name),
