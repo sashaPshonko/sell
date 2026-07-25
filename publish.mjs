@@ -4,7 +4,12 @@
 import { setOrderPhase, getOrder, saveState } from './state.mjs';
 import { isMarkedProfileLot, isSearchPremiumLot } from './lib/profile-upsell.mjs';
 import { resolveCompletedItemForOrder } from './lib/completed-republish.mjs';
-import { discountedPriceRub, guessItemSlug, parseAmountKk } from './parse.mjs';
+import {
+    discountedPriceRub,
+    listingRawPriceRub,
+    guessItemSlug,
+    parseAmountKk,
+} from './parse.mjs';
 
 const pending = new Map();
 
@@ -22,15 +27,16 @@ export function shouldRepublishOrder(order) {
 }
 
 function publishDelayMs() {
-    return Number(process.env.PUBLISH_DELAY_MS || 10_000);
+    // После оплаты buyer ещё на лоте; 10с почти всегда рано.
+    return Number(process.env.PUBLISH_DELAY_MS || 120_000);
 }
 
 function publishRetryMs() {
-    return Number(process.env.PUBLISH_RETRY_MS || 60_000);
+    return Number(process.env.PUBLISH_RETRY_MS || 120_000);
 }
 
 function publishMaxRetries() {
-    return Number(process.env.PUBLISH_MAX_RETRIES || 5);
+    return Number(process.env.PUBLISH_MAX_RETRIES || 30);
 }
 
 /** paid — сразу после оплаты (по умолчанию). sent — после выдачи. */
@@ -95,9 +101,13 @@ export function listPublishPriorityCandidates(data, { profileLot = false } = {})
         for (const s of list) {
             if (s.type === 'PREMIUM' || s.price > 0) add(s);
         }
-        // Для лотов в поиске (·) не откатываемся на «Обычный» — только платная премка.
-        if (!profileLot) {
-            return ordered.map((s) => s.id);
+        // Fallback: если премку PlayerOK отклонит (нет ₽ на статусе / «нельзя обновить»),
+        // всё равно выставим обычным — лучше на профиле, чем дыра в витрине.
+        for (const s of list) {
+            if (/обычн/i.test(s.name || '')) add(s);
+        }
+        for (const s of list) {
+            if (s.type === 'DEFAULT' || s.price === 0) add(s);
         }
     }
     for (const s of list) {
@@ -146,7 +156,7 @@ function buildPublishVariables(itemId, priorityStatuses) {
 }
 
 const STATUS_REJECTED_RE =
-    /нельзя обновить статус|слишком много попыток/i;
+    /нельзя обновить статус|слишком много попыток|не удалось найти в базе/i;
 
 async function loadItemMeta(client, { itemId, slug } = {}) {
     if (!slug || typeof client?.itemBySlug !== 'function') return null;
@@ -173,71 +183,133 @@ export async function publishItemOnPlayerok(
     const gqlPath = process.env.PUBLISH_ITEM_GQL_PATH || '/products/[slug]';
     const referer = slug ? `https://playerok.com/products/${slug}` : null;
 
-    const itemMeta = await loadItemMeta(client, { itemId, slug });
+    let itemMeta = await loadItemMeta(client, { itemId, slug });
+    // slug из заказа мог быть кривой — угадываем и пробуем ещё раз
+    if (!itemMeta && itemId && itemName) {
+        const guessed = guessItemSlug({ itemId, itemName, itemSlug: slug });
+        if (guessed && guessed !== slug) {
+            slug = guessed;
+            itemMeta = await loadItemMeta(client, { itemId, slug });
+        }
+    }
     let publishItemId = itemId;
+    let statusPriceRub = priceRub;
     if (itemMeta) {
         publishItemId = itemMeta.id || itemId;
+        slug = itemMeta.slug || slug;
         const salePrice = discountedPriceRub(itemMeta);
+        const rawPrice = listingRawPriceRub(itemMeta);
         console.log(
             `[sell] лот ${itemMeta.slug || slug}: status=${itemMeta.status} ` +
                 `mayBePublished=${itemMeta.mayBePublished} ` +
-                `price=${salePrice} rawPrice=${itemMeta.rawPrice ?? '?'}`,
+                `price=${salePrice} rawPrice=${rawPrice ?? '?'}`,
         );
+        // itemPriorityStatuses считает премку от цены листинга (raw), не от скидки в сделке
+        statusPriceRub = rawPrice ?? salePrice ?? priceRub;
         if (salePrice != null) priceRub = salePrice;
         if (itemMeta.mayBePublished === false) {
             throw new Error(
                 `mayBePublished=false (status=${itemMeta.status}) — рано перевыставлять`,
             );
         }
+        // Пока buyer на карточке — сделка не закрыта (SENT ≠ подтверждение).
+        // publishItem тогда стабильно: «нельзя обновить статус».
+        if (itemMeta.buyer?.id || itemMeta.buyer?.username) {
+            const who = itemMeta.buyer.username || String(itemMeta.buyer.id).slice(0, 8);
+            throw new Error(
+                `лот ещё с buyer=${who} — рано перевыставлять (ждём закрытия сделки)`,
+            );
+        }
         if (itemMeta.name) {
             // Всегда пересчитываем по фактическому item.name, чтобы auto и test шли одинаково.
             profileLot = isMarkedProfileLot(itemMeta.name);
+            itemName = itemMeta.name;
         }
     }
 
-    const { list } = await fetchPriorityStatusList(client, publishItemId, priceRub, referer);
-    const candidates = listPublishPriorityCandidates(
-        { itemPriorityStatuses: list },
-        { profileLot },
-    );
-    if (!candidates.length) {
-        throw new Error(`нет подходящего priorityStatus (${formatStatusList(list)})`);
-    }
-
-    const lotKind = profileLot ? '🎁 обычный' : isSearchPremiumLot(itemName) ? '· премиум' : 'премиум';
-    console.log(`[sell] статусы лота (${lotKind}): ${formatStatusList(list)}`);
+    // raw, потом sale, потом 0 — разный price даёт разный набор статусов
+    const priceAttempts = [...new Set(
+        [statusPriceRub, priceRub, listingRawPriceRub(itemMeta), 0].filter(
+            (p) => p != null && Number.isFinite(Number(p)),
+        ).map((p) => Math.round(Number(p))),
+    )];
+    if (!priceAttempts.length) priceAttempts.push(0);
 
     let lastErr;
-    for (const statusId of candidates) {
-        const hit = list.find((s) => s.id === statusId);
-        const label = hit?.name ? `${hit.name} (${statusId.slice(0, 8)}…)` : statusId.slice(0, 8) + '…';
+    const triedStatus = new Set();
+    for (const tryPrice of priceAttempts) {
+        let list;
         try {
-            const variables = buildPublishVariables(publishItemId, [statusId]);
-            console.log(`[sell] PlayerOK publishItem itemId=${publishItemId}… status=${label}`);
-            console.log(
-                `[sell] publish payload: referer=${referer || '-'} ` +
-                    `price=${priceRub ?? 0} profileLot=${profileLot} ` +
-                    `statusId=${statusId}`,
-            );
-            const data = await client.runMutationFromFile(
-                'PUBLISH_ITEM_MUTATION_FILE',
-                file,
-                variables,
-                op,
-                gqlPath,
-            );
-            const item = data?.publishItem;
-            if (item?.status) {
-                console.log(
-                    `[sell] publishItem ok: status=${item.status} slug=${item.slug || '?'}`,
-                );
-            }
-            return data;
+            ({ list } = await fetchPriorityStatusList(
+                client,
+                publishItemId,
+                tryPrice,
+                referer,
+            ));
         } catch (e) {
             lastErr = e;
-            const msg = String(e.message || e);
-            if (!STATUS_REJECTED_RE.test(msg)) throw e;
-            console.warn(`[sell] publishItem status ${label}: ${msg}`);
+            console.warn(
+                `[sell] itemPriorityStatuses @${tryPrice}₽: ${e.message || e}`,
+            );
+            continue;
+        }
+        const candidates = listPublishPriorityCandidates(
+            { itemPriorityStatuses: list },
+            { profileLot },
+        );
+        if (!candidates.length) {
+            lastErr = new Error(
+                `нет подходящего priorityStatus @${tryPrice}₽ (${formatStatusList(list)})`,
+            );
+            continue;
+        }
+
+        const lotKind = profileLot
+            ? '🎁 обычный'
+            : isSearchPremiumLot(itemName)
+              ? '· премиум'
+              : 'премиум';
+        console.log(
+            `[sell] статусы лота (${lotKind}) @${tryPrice}₽: ${formatStatusList(list)}`,
+        );
+
+        for (const statusId of candidates) {
+            if (triedStatus.has(statusId)) continue;
+            triedStatus.add(statusId);
+            const hit = list.find((s) => s.id === statusId);
+            const label = hit?.name
+                ? `${hit.name} (${statusId.slice(0, 8)}…)`
+                : statusId.slice(0, 8) + '…';
+            try {
+                const variables = buildPublishVariables(publishItemId, [statusId]);
+                console.log(
+                    `[sell] PlayerOK publishItem itemId=${publishItemId}… status=${label}`,
+                );
+                console.log(
+                    `[sell] publish payload: referer=${referer || '-'} ` +
+                        `price=${tryPrice} profileLot=${profileLot} ` +
+                        `statusId=${statusId}`,
+                );
+                const data = await client.runMutationFromFile(
+                    'PUBLISH_ITEM_MUTATION_FILE',
+                    file,
+                    variables,
+                    op,
+                    gqlPath,
+                );
+                const item = data?.publishItem;
+                if (item?.status) {
+                    console.log(
+                        `[sell] publishItem ok: status=${item.status} slug=${item.slug || '?'}`,
+                    );
+                }
+                return data;
+            } catch (e) {
+                lastErr = e;
+                const msg = String(e.message || e);
+                if (!STATUS_REJECTED_RE.test(msg)) throw e;
+                console.warn(`[sell] publishItem status ${label}: ${msg}`);
+            }
         }
     }
 
@@ -319,7 +391,10 @@ export function scheduleRepublishItem(client, state, order, { delayOverrideMs } 
             const retryable =
                 STATUS_REJECTED_RE.test(msg) ||
                 /mayBePublished=false/i.test(msg) ||
-                /рано перевыставлять/i.test(msg);
+                /рано перевыставлять/i.test(msg) ||
+                /лот ещё с buyer/i.test(msg) ||
+                /не удалось найти в базе/i.test(msg) ||
+                /все статусы отклонены/i.test(msg);
             const nextAttempt = attempt + 1;
             if (retryable && nextAttempt < maxRetries) {
                 console.warn(
