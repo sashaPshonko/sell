@@ -148,6 +148,8 @@ function buildPublishVariables(itemId, priorityStatuses) {
         transactionProviderId: process.env.PUBLISH_TRANSACTION_PROVIDER || 'LOCAL',
         priorityStatuses,
         itemId,
+        // как в web UI; без поля PlayerOK иногда отвечает «нельзя обновить статус»
+        keepInSale: process.env.PUBLISH_KEEP_IN_SALE === '1',
     };
     if (process.env.PUBLISH_TRANSACTION_PROVIDER_DATA !== '0') {
         input.transactionProviderData = { paymentMethodId: null };
@@ -212,12 +214,13 @@ export async function publishItemOnPlayerok(
                 `mayBePublished=false (status=${itemMeta.status}) — рано перевыставлять`,
             );
         }
-        // Пока buyer на карточке — сделка не закрыта (SENT ≠ подтверждение).
-        // publishItem тогда стабильно: «нельзя обновить статус».
+        // buyer на карточке часто висит и после CONFIRMED; web всё равно шлёт publishItem
+        // с keepInSale=false. Не блокируем заранее — пусть API ответит сам.
         if (itemMeta.buyer?.id || itemMeta.buyer?.username) {
             const who = itemMeta.buyer.username || String(itemMeta.buyer.id).slice(0, 8);
-            throw new Error(
-                `лот ещё с buyer=${who} — рано перевыставлять (ждём закрытия сделки)`,
+            console.warn(
+                `[sell] лот ${itemMeta.slug || slug}: ещё buyer=${who}, ` +
+                    `status=${itemMeta.status} editable=${itemMeta.editable} — пробуем publish`,
             );
         }
         if (itemMeta.name) {
