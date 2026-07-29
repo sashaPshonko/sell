@@ -6,6 +6,7 @@ import { isMarkedProfileLot, isSearchPremiumLot } from './lib/profile-upsell.mjs
 import { resolveCompletedItemForOrder } from './lib/completed-republish.mjs';
 import {
     cloneItemAsDraft,
+    applyCloneSalePrice,
     needsCloneRepublish,
 } from './lib/clone-republish.mjs';
 import {
@@ -237,15 +238,21 @@ export async function publishItemOnPlayerok(
                 `[sell] лот ${itemMeta.slug || slug}: status=${itemMeta.status} ` +
                     `buyer=${who} editable=${itemMeta.editable} — clone+publish`,
             );
-            const draft = await cloneItemAsDraft(client, itemMeta);
+            // премку считаем от raw исходника; sale потом вернём через updateItem
+            const sourceSale = discountedPriceRub(itemMeta);
+            const sourceRaw = listingRawPriceRub(itemMeta);
+            let draft = await cloneItemAsDraft(client, itemMeta);
+            draft = await applyCloneSalePrice(client, draft, itemMeta);
             publishItemId = draft.id;
             slug = draft.slug || slug;
             itemName = draft.name || itemName;
             statusPriceRub =
+                sourceRaw ??
                 listingRawPriceRub(draft) ??
                 draft.rawPrice ??
                 draft.price ??
                 statusPriceRub;
+            if (sourceSale != null) priceRub = sourceSale;
             if (draft.name) {
                 profileLot = isMarkedProfileLot(draft.name);
             }

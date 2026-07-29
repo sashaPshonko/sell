@@ -434,6 +434,37 @@ export function createClient() {
             }
             return json.data;
         },
+
+        /**
+         * updateItem — смена цены (скидка: price < rawPrice после create с raw).
+         * @param {{ id: string, price: number }} input
+         */
+        async updateItem(input, { slug = null, referer = null } = {}) {
+            if (!input?.id) throw new Error('updateItem: нет id');
+            const query = await loadQuery(
+                'UPDATE_ITEM_MUTATION_FILE',
+                './captures/update-item.graphql',
+            );
+            const ref =
+                referer ||
+                (slug
+                    ? `https://playerok.com/products/${slug}/edit`
+                    : 'https://playerok.com/profile/products');
+            return request({
+                gqlOp: 'updateItem',
+                gqlPath: '/products/[slug]/edit',
+                referer: ref,
+                body: {
+                    operationName: 'updateItem',
+                    variables: {
+                        input,
+                        addedAttachments: null,
+                        showForbiddenImage: true,
+                    },
+                    query,
+                },
+            });
+        },
     };
 }
 
