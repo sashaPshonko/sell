@@ -5,6 +5,10 @@ import { setOrderPhase, getOrder, saveState } from './state.mjs';
 import { isMarkedProfileLot, isSearchPremiumLot } from './lib/profile-upsell.mjs';
 import { resolveCompletedItemForOrder } from './lib/completed-republish.mjs';
 import {
+    cloneItemAsDraft,
+    needsCloneRepublish,
+} from './lib/clone-republish.mjs';
+import {
     discountedPriceRub,
     listingRawPriceRub,
     guessItemSlug,
@@ -183,7 +187,6 @@ export async function publishItemOnPlayerok(
     const file = process.env.PUBLISH_ITEM_MUTATION_FILE || './captures/publish-item.graphql';
     const op = process.env.PUBLISH_ITEM_OPERATION || 'publishItem';
     const gqlPath = process.env.PUBLISH_ITEM_GQL_PATH || '/products/[slug]';
-    const referer = slug ? `https://playerok.com/products/${slug}` : null;
 
     let itemMeta = await loadItemMeta(client, { itemId, slug });
     // slug из заказа мог быть кривой — угадываем и пробуем ещё раз
@@ -196,6 +199,7 @@ export async function publishItemOnPlayerok(
     }
     let publishItemId = itemId;
     let statusPriceRub = priceRub;
+    let referer = slug ? `https://playerok.com/products/${slug}` : null;
     if (itemMeta) {
         publishItemId = itemMeta.id || itemId;
         slug = itemMeta.slug || slug;
@@ -209,22 +213,57 @@ export async function publishItemOnPlayerok(
         // itemPriorityStatuses считает премку от цены листинга (raw), не от скидки в сделке
         statusPriceRub = rawPrice ?? salePrice ?? priceRub;
         if (salePrice != null) priceRub = salePrice;
-        if (itemMeta.mayBePublished === false) {
+        // Уже в продаже без buyer — считать успехом (ручной/прошлый publish).
+        if (
+            itemMeta.status === 'APPROVED' &&
+            !itemMeta.buyer?.id &&
+            !itemMeta.buyer?.username
+        ) {
+            console.log(
+                `[sell] лот ${itemMeta.slug || slug}: уже APPROVED без buyer — ` +
+                    `перевыставление не нужно`,
+            );
+            return { publishItem: itemMeta, alreadyListed: true };
+        }
+        // SOLD+buyer+editable=false: publishItem того же id всегда «нельзя обновить статус».
+        // Веб создаёт новый лот — делаем createItem → publish.
+        if (needsCloneRepublish(itemMeta)) {
+            const who =
+                itemMeta.buyer?.username ||
+                (itemMeta.buyer?.id
+                    ? String(itemMeta.buyer.id).slice(0, 8)
+                    : '?');
+            console.warn(
+                `[sell] лот ${itemMeta.slug || slug}: status=${itemMeta.status} ` +
+                    `buyer=${who} editable=${itemMeta.editable} — clone+publish`,
+            );
+            const draft = await cloneItemAsDraft(client, itemMeta);
+            publishItemId = draft.id;
+            slug = draft.slug || slug;
+            itemName = draft.name || itemName;
+            statusPriceRub =
+                listingRawPriceRub(draft) ??
+                draft.rawPrice ??
+                draft.price ??
+                statusPriceRub;
+            if (draft.name) {
+                profileLot = isMarkedProfileLot(draft.name);
+            }
+            itemMeta = draft;
+            referer = slug ? `https://playerok.com/products/${slug}` : referer;
+        } else if (itemMeta.mayBePublished === false) {
             throw new Error(
                 `mayBePublished=false (status=${itemMeta.status}) — рано перевыставлять`,
             );
-        }
-        // buyer на карточке часто висит и после CONFIRMED; web всё равно шлёт publishItem
-        // с keepInSale=false. Не блокируем заранее — пусть API ответит сам.
-        if (itemMeta.buyer?.id || itemMeta.buyer?.username) {
-            const who = itemMeta.buyer.username || String(itemMeta.buyer.id).slice(0, 8);
+        } else if (itemMeta.buyer?.id || itemMeta.buyer?.username) {
+            const who =
+                itemMeta.buyer.username || String(itemMeta.buyer.id).slice(0, 8);
             console.warn(
                 `[sell] лот ${itemMeta.slug || slug}: ещё buyer=${who}, ` +
                     `status=${itemMeta.status} editable=${itemMeta.editable} — пробуем publish`,
             );
         }
         if (itemMeta.name) {
-            // Всегда пересчитываем по фактическому item.name, чтобы auto и test шли одинаково.
             profileLot = isMarkedProfileLot(itemMeta.name);
             itemName = itemMeta.name;
         }

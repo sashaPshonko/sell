@@ -354,6 +354,86 @@ export function createClient() {
                 body: { operationName: op, variables, query },
             });
         },
+
+        /**
+         * createItem (черновик). attachments — Buffer[] | { buffer, filename, contentType }[].
+         * Apollo multipart: operations + map + файлы.
+         */
+        async createItem(input, attachments = [], { referer = null } = {}) {
+            const query = await loadQuery(
+                'CREATE_ITEM_MUTATION_FILE',
+                './captures/create-item.graphql',
+            );
+            const files = (attachments || []).map((a, i) => {
+                if (Buffer.isBuffer(a)) {
+                    return {
+                        buffer: a,
+                        filename: `attach-${i}.png`,
+                        contentType: 'image/png',
+                    };
+                }
+                return {
+                    buffer: a.buffer,
+                    filename: a.filename || `attach-${i}.png`,
+                    contentType: a.contentType || 'image/png',
+                };
+            });
+            const variables = {
+                input,
+                attachments: files.map(() => null),
+                showForbiddenImage: true,
+            };
+            const form = new FormData();
+            form.append(
+                'operations',
+                JSON.stringify({
+                    operationName: 'createItem',
+                    variables,
+                    query,
+                }),
+            );
+            const map = {};
+            for (let i = 0; i < files.length; i++) {
+                map[String(i)] = [`variables.attachments.${i}`];
+            }
+            form.append('map', JSON.stringify(map));
+            for (let i = 0; i < files.length; i++) {
+                const f = files[i];
+                form.append(
+                    String(i),
+                    new Blob([f.buffer], { type: f.contentType }),
+                    f.filename,
+                );
+            }
+
+            const headers = {
+                ...baseHeaders,
+                // fetch + FormData сам ставит multipart boundary; content-type из DEFAULT сбивает
+                referer:
+                    referer ||
+                    'https://playerok.com/profile/products/create',
+                'x-gql-op': 'createItem',
+                'x-gql-path': '/profile/products/create',
+            };
+            delete headers['content-type'];
+
+            const res = await fetch(GQL_URL, { method: 'POST', headers, body: form });
+            const text = await res.text();
+            let json;
+            try {
+                json = JSON.parse(text);
+            } catch {
+                throw new Error(
+                    `PlayerOK createItem: не JSON (${res.status}): ${text.slice(0, 200)}`,
+                );
+            }
+            if (!res.ok || json.errors?.length) {
+                throw new Error(
+                    `PlayerOK GraphQL: ${gqlErrorMessage(json, res.statusText)}`,
+                );
+            }
+            return json.data;
+        },
     };
 }
 
