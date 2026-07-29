@@ -151,63 +151,42 @@ export function buildBotBalanceRefillingHint() {
 }
 
 /**
- * Мало валюты — главное: ссылка на самый большой 🎁 ≤ баланса.
+ * Мало валюты — ссылка на самый большой 🎁, без объяснений про запас/бонус.
  * @param {{
- *   availableLotKk?: number|null,
- *   needLotKk?: number|null,
  *   upsellUrl?: string|null,
  *   upsellKk?: number|null,
  * }} [ctx]
  */
 export function buildInsufficientFundsHint(ctx = null) {
     const anka = DELIVERY_ANARCHY;
-    const available = Math.round(Number(ctx?.availableLotKk) || 0);
-    const need = Math.round(Number(ctx?.needLotKk) || 0);
     const upsellUrl = String(ctx?.upsellUrl || '').trim();
     const upsellKk = Math.round(Number(ctx?.upsellKk) || 0);
     const marker = '🎁';
 
-    const lines = ['❌ Не удалось выдать.', ''];
-
-    if (available > 0) {
-        lines.push(
-            `Сейчас хватает примерно на ${available}кк`,
-            '(с запасом под бонус к выдаче).',
-        );
-        if (need > available) {
-            lines.push(`Заказ ~${need}кк целиком пока не влезает.`);
-        }
-    } else {
-        lines.push('Сейчас у бота почти нет валюты — выдать не получится.');
-    }
-
     if (upsellUrl && upsellKk > 0) {
-        lines.push(
+        return [
+            '❌ Не удалось выдать.',
             '',
-            'Можешь:',
-            `1️⃣ Подождать пополнения (когда — неизвестно) — анархия ${anka}, в сети, ник в чат снова.`,
-            `2️⃣ Или /cancel и взять этот лот без премки (${marker}) — ${upsellKk}кк:`,
+            `Можешь /cancel и взять этот лот (${marker}) — ${upsellKk}кк:`,
             '',
             upsellUrl,
-        );
-    } else {
-        lines.push(
             '',
-            'Можешь:',
-            `1️⃣ Подождать пополнения (когда — неизвестно) — анархия ${anka}, в сети, ник в чат снова.`,
-            available > 0
-                ? `2️⃣ Или /cancel и купить лот поменьше (до ~${available}кк), лучше с ${marker} на профиле.`
-                : `2️⃣ Или /cancel и купить лот поменьше, лучше с ${marker} на профиле.`,
-        );
+            `Потом анархия ${anka}, ник в этот чат снова.`,
+        ].join('\n');
     }
 
-    return lines.join('\n');
+    return [
+        '❌ Не удалось выдать.',
+        '',
+        'Сейчас нет подходящего лота под баланс бота.',
+        `Можешь подождать пополнения (анархия ${anka}, в сети, ник в чат снова) или /cancel.`,
+    ].join('\n');
 }
 
 /**
  * Покупателю — почему не выдали (капча / бан бота / нет монет / офлайн).
  * @param {string} [reason]
- * @param {object} [ctx] — для insufficient_funds: availableLotKk, needLotKk, upsellUrl, upsellKk
+ * @param {object} [ctx] — для insufficient_funds: upsellUrl, upsellKk
  */
 export function buildDeliveryFailHint(reason, ctx = null) {
     const anka = DELIVERY_ANARCHY;
