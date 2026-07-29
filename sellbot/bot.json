@@ -7,6 +7,6 @@
         "paySuffix": "",
         "telegramProxy": "off",
         "proxy": "socks5://privetnitron:jacb9eSh7e@212.236.230.82:50101",
-        "parkBalanceBelow": 50000000
+        "parkBalanceBelow": 5000000
     }
 ]
