@@ -151,7 +151,7 @@ export function buildBotBalanceRefillingHint() {
 }
 
 /**
- * Мало валюты — ссылка на самый большой 🎁, без объяснений про запас/бонус.
+ * Мало валюты — причина + ссылка на самый большой 🎁 (без эссе про запас/бонус).
  * @param {{
  *   upsellUrl?: string|null,
  *   upsellKk?: number|null,
@@ -167,6 +167,8 @@ export function buildInsufficientFundsHint(ctx = null) {
         return [
             '❌ Не удалось выдать.',
             '',
+            '📋 Причина: не хватает баланса у бота.',
+            '',
             `Можешь /cancel и взять этот лот (${marker}) — ${upsellKk}кк:`,
             '',
             upsellUrl,
@@ -178,6 +180,7 @@ export function buildInsufficientFundsHint(ctx = null) {
     return [
         '❌ Не удалось выдать.',
         '',
+        '📋 Причина: не хватает баланса у бота на этот лот.',
         'Сейчас нет подходящего лота под баланс бота.',
         `Можешь подождать пополнения (анархия ${anka}, в сети, ник в чат снова) или /cancel.`,
     ].join('\n');
