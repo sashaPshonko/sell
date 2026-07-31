@@ -128,7 +128,7 @@ function shouldProcessBotRetryEvent(order) {
 }
 
 /**
- * Бан/капча бота — уведомить ВСЕ живые заказы в очереди (не только текущий).
+ * Бан/капча/прокси бота — уведомить ВСЕ живые заказы в очереди (не только текущий).
  * Worker шлёт fail по каждому id, но часть событий теряется при stopWorker;
  * fan-out страхует остальные чаты + подсказку /cancel.
  */
@@ -590,8 +590,8 @@ async function handleBotEvents(client, state) {
                 }
                 const nick =
                     getBuyerSession(state, chatId, buyerId).nick || order.nick;
-                if (reason === 'captcha' || reason === 'banned') {
-                    // текущий + вся очередь → каждый чат с текстом бана и /cancel
+                if (reason === 'captcha' || reason === 'banned' || reason === 'proxy_timeout' || reason === 'bot_offline') {
+                    // текущий + вся очередь → каждый чат с текстом и /cancel
                     await notifyBotFatalToQueue(client, state, reason, ev.orderId);
                 } else {
                     markDeliveryPaused(

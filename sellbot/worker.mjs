@@ -12,7 +12,7 @@ import {
     findClanIntruders,
 } from './lib/clan-members.mjs';
 import { createChatLogger } from './lib/chat-log.mjs';
-import { buildMcProxyConnect, readBotJsonProxy, maskProxyUrl } from './lib/mc-proxy.mjs';
+import { buildMcProxyConnect, readBotJsonProxy, maskProxyUrl, isProxyConnectError } from './lib/mc-proxy.mjs';
 import {
     setupConfigurationTransferFix,
     isInConfigurationTransfer,
@@ -962,6 +962,10 @@ function wireBot(b) {
             logInfo(`protocol noise: ${err.message}`);
             return;
         }
+        if (isProxyConnectError(err)) {
+            failProxyAndExit(err);
+            return;
+        }
         abortInFlightRetryable('disconnected');
         process.exit(1);
     });
@@ -969,6 +973,10 @@ function wireBot(b) {
     b._client?.on('error', (err) => {
         if (isIgnorableProtocolNoise(err)) {
             logInfo(`protocol noise: ${err.message}`);
+            return;
+        }
+        if (isProxyConnectError(err)) {
+            failProxyAndExit(err);
             return;
         }
         abortInFlightRetryable('disconnected');
@@ -1331,7 +1339,19 @@ async function deliverClan() {
     endDelivery('ok');
 }
 
-const FATAL = new Set(['banned', 'captcha']);
+const FATAL = new Set(['banned', 'captcha', 'proxy_timeout']);
+
+/** Прокси мёртв — уведомить очередь (sell → покупателям /cancel) и выйти. */
+function failProxyAndExit(err) {
+    const detail = err?.message || String(err);
+    logInfo(`прокси недоступен: ${detail}`);
+    if (delivering && currentOrder) {
+        endDelivery('proxy_timeout', deliverQueue.length, { skipNextOrder: true });
+    }
+    flushQueueAsFailed('proxy_timeout');
+    post('connect_failed', { reason: 'proxy_timeout', detail });
+    setTimeout(() => process.exit(1), 400);
+}
 
 function abortInFlightRetryable(reason) {
     if (!delivering || !currentOrder) return;
@@ -1536,7 +1556,15 @@ async function addOrder(order) {
         nextOrder();
     } catch (e) {
         logInfo(`connect: ${e.message}`);
-        failQueuedOrder(order, 'connect_failed');
+        const reason = isProxyConnectError(e) ? 'proxy_timeout' : 'connect_failed';
+        if (reason === 'proxy_timeout') {
+            failQueuedOrder(order, 'proxy_timeout');
+            flushQueueAsFailed('proxy_timeout');
+            post('connect_failed', { reason: 'proxy_timeout', detail: e.message });
+        } else {
+            failQueuedOrder(order, 'connect_failed');
+            post('connect_failed', { reason: 'connect_failed', detail: e.message });
+        }
     }
 }
 

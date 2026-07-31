@@ -4,6 +4,19 @@ import { fileURLToPath } from 'url';
 import { SocksClient } from 'socks';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 
+/** SOCKS / прокси не отвечает (типичный SocksClientError: Proxy connection timed out). */
+export function isProxyConnectError(err) {
+    if (!err) return false;
+    const name = String(err.name || '');
+    const msg = String(err.message || err || '');
+    return (
+        name === 'SocksClientError' ||
+        /SocksClientError/i.test(msg) ||
+        /Proxy connection timed out/i.test(msg) ||
+        /proxy.*(timeout|timed out|ECONNREFUSED|ETIMEDOUT)/i.test(msg)
+    );
+}
+
 /**
  * SOCKS5 для mineflayer.
  * @param {string|null|undefined} proxyString — socks5://user:pass@host:port или "off"

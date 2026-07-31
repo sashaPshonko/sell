@@ -456,8 +456,18 @@ async function startWorker(reason = 'order') {
             }
 
             if (message?.name === 'connect_failed') {
-                await sendAlert(`❌ ${botConfig.username}: не подключился — ${message.reason || '?'}`);
+                const why = message.reason || message.detail || '?';
+                await sendAlert(`❌ ${botConfig.username}: не подключился — ${why}`);
                 workerReady = false;
+                if (why === 'proxy_timeout' || /proxy/i.test(String(why))) {
+                    for (const order of activeOrders.values()) {
+                        forwardToSell({
+                            type: 'delivery_failed',
+                            orderId: order.orderId,
+                            reason: 'proxy_timeout',
+                        });
+                    }
+                }
                 return;
             }
 

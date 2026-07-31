@@ -256,6 +256,15 @@ export function buildDeliveryFailHint(reason, ctx = null) {
                 '❌ Или верни оплату командой /cancel',
             );
             return lines.join('\n');
+        case 'proxy_timeout':
+        case 'bot_offline':
+            lines.push(
+                '📋 Причина: бот сейчас не работает (нет связи с сервером).',
+                '⏳ Когда заработает — неизвестно.',
+                '',
+                '❌ Верни оплату командой /cancel',
+            );
+            return lines.join('\n');
         default:
             return buildRetryNickHint();
     }

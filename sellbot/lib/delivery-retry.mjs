@@ -18,6 +18,8 @@ export const TERMINAL_DELIVERY_REASONS = new Set([
     'insufficient_funds',
     'banned',
     'captcha',
+    'proxy_timeout',
+    'bot_offline',
     'offline',
     'player_offline',
     'clan_timeout',
