@@ -12,7 +12,9 @@ export function isIgnorableProtocolNoise(err) {
     if (msg.includes('Cannot convert undefined or null to object')) return true;
     if (msg.includes('uncompressed length') || msg.includes('problem inflating chunk')) return true;
     if (msg.includes('array size is abnormally large')) return true;
-    if (msg.includes('client timed out')) return true;
+    if (msg.includes('Invalid tag')) return true;
+    if (msg.includes('Parse error for play.toClient')) return true;
     if (msg.includes("reading 'translate'")) return true;
+    // keepalive timeout — НЕ noise: соединение мертвое, пусть end/exit перезапустит воркер
     return false;
 }

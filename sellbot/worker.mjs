@@ -21,6 +21,7 @@ import {
     waitForPostJoinConfiguration,
 } from './lib/configuration-transfer.mjs';
 import { isIgnorableProtocolNoise } from './lib/protocol-noise.mjs';
+import { setupProtocolResilience } from './lib/protocol-resilience.mjs';
 import { setupChatSafeGuard } from './lib/chat-safe.mjs';
 import { audit } from '../lib/audit.mjs';
 import { isRetryableDeliveryFailure } from './lib/delivery-retry.mjs';
@@ -918,9 +919,11 @@ async function purgeIntrudersFromClan(deadline, extraAllow = []) {
 // ========== бот ==========
 
 function wireBot(b) {
+    setupProtocolResilience(b, { info: logInfo });
     setupConfigurationTransferFix(b, configTransferLog);
 
     b.once('inject_allowed', () => {
+        setupProtocolResilience(b, { info: logInfo });
         setupChatSafeGuard(b, (text) => {
             logServerMessage(text);
             handleChatMessage(text);
@@ -958,8 +961,20 @@ function wireBot(b) {
     });
 
     b.on('error', (err) => {
+        const msg = String(err?.message ?? err);
+        if (msg.includes('client timed out') || msg.includes('keepAliveError')) {
+            logWarn(`keepalive timeout — перезапуск: ${msg}`);
+            abortInFlightRetryable('disconnected');
+            try { b.quit(); } catch { /* */ }
+            process.exit(1);
+            return;
+        }
         if (isIgnorableProtocolNoise(err)) {
-            logInfo(`protocol noise: ${err.message}`);
+            // без полного стека: resilience уже дропнул пакет
+            if (msg.includes('array size is abnormally large') || msg.includes('Parse error')) {
+                return;
+            }
+            logInfo(`protocol noise: ${msg}`);
             return;
         }
         if (isProxyConnectError(err)) {
@@ -971,8 +986,19 @@ function wireBot(b) {
     });
 
     b._client?.on('error', (err) => {
+        const msg = String(err?.message ?? err);
+        if (msg.includes('client timed out') || msg.includes('keepAliveError')) {
+            logWarn(`keepalive timeout — перезапуск: ${msg}`);
+            abortInFlightRetryable('disconnected');
+            try { b.quit(); } catch { /* */ }
+            process.exit(1);
+            return;
+        }
         if (isIgnorableProtocolNoise(err)) {
-            logInfo(`protocol noise: ${err.message}`);
+            if (msg.includes('array size is abnormally large') || msg.includes('Parse error')) {
+                return;
+            }
+            logInfo(`protocol noise: ${msg}`);
             return;
         }
         if (isProxyConnectError(err)) {
@@ -1003,6 +1029,9 @@ async function connectBot() {
             password: config.password,
             version: '1.21.11',
             chatLengthLimit: 256,
+            hideErrors: true,
+            // SOCKS/FunTime: чуть терпимее к лагам после битых inventory-пакетов
+            checkTimeoutInterval: 60_000,
         };
 
         try {
