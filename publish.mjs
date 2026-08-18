@@ -399,18 +399,21 @@ export function scheduleRepublishItem(client, state, order, { delayOverrideMs } 
     const timer = setTimeout(async () => {
         pending.delete(dealId);
         const fresh = getOrder(state, dealId) || order;
+
         let itemId = fresh.itemId;
         let slug = fresh.itemSlug || guessItemSlug(fresh);
         let priceRub = fresh.itemPriceRub;
         let itemName = fresh.itemName;
 
-        const completed = await resolveCompletedItemForOrder(client, fresh);
-        if (!completed?.id && fresh.itemId) {
-            console.warn(
-                `[sell] completed miss для ${fresh.itemId.slice(0, 8)}…, publish по заказу`,
-            );
-        }
-        if (completed?.id) {
+        try {
+            const completed = await resolveCompletedItemForOrder(client, fresh);
+            if (!completed?.id) {
+                throw new Error(
+                    `completed-list: лот ${fresh.amountKk ?? '?'}kk ещё не в completed ` +
+                        `(itemId=${fresh.itemId?.slice(0, 8) || '—'}… slug=${slug || '—'})`,
+                );
+            }
+
             itemId = completed.id;
             slug = completed.slug || slug;
             priceRub = discountedPriceRub(completed) ?? priceRub;
@@ -418,12 +421,7 @@ export function scheduleRepublishItem(client, state, order, { delayOverrideMs } 
             setOrderPhase(state, dealId, fresh.phase || 'new', {
                 itemSlug: slug || fresh.itemSlug || null,
             });
-        } else if (!fresh.itemSlug && slug) {
-            console.log(`[sell] itemSlug угадан из заказа: ${slug}`);
-            setOrderPhase(state, dealId, fresh.phase || 'new', { itemSlug: slug });
-        }
 
-        try {
             await publishItemOnPlayerok(client, itemId, priceRub, {
                 profileLot: isMarkedProfileLot(itemName),
                 slug,
@@ -443,7 +441,10 @@ export function scheduleRepublishItem(client, state, order, { delayOverrideMs } 
                 /рано перевыставлять/i.test(msg) ||
                 /лот ещё с buyer/i.test(msg) ||
                 /не удалось найти в базе/i.test(msg) ||
-                /все статусы отклонены/i.test(msg);
+                /все статусы отклонены/i.test(msg) ||
+                /ещё не в completed/i.test(msg) ||
+                /fetch failed/i.test(msg) ||
+                /слишком много попыток/i.test(msg);
             const nextAttempt = attempt + 1;
             if (retryable && nextAttempt < maxRetries) {
                 console.warn(
