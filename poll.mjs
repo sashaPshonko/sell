@@ -30,7 +30,7 @@ import {
 } from './lib/delivery-queue.mjs';
 import { cancelClosedOrdersOnSellbot } from './lib/sellbot-cancel.mjs';
 import { isRetryableDeliveryFailure } from './sellbot/lib/delivery-retry.mjs';
-import { isOrderFulfilled, clanDeliveryRetryReset } from './lib/playerok-deal-sync.mjs';
+import { isOrderFulfilled, clanDeliveryRetryReset, playerokNeedsDelivery } from './lib/playerok-deal-sync.mjs';
 import { applyOrderPayBonus } from './lib/pay-bonus.mjs';
 import { setBotBalance, canAffordOrder } from './lib/bot-balance.mjs';
 import { composeInsufficientFundsHint } from './lib/insufficient-funds-hint.mjs';
@@ -47,7 +47,6 @@ import {
     buildClanPartialWithdrawHint,
     clanFullAmountRaw,
     buildOrderAlreadyDoneHint,
-    hasGreetingInChat,
     DELIVERY_ANARCHY,
 } from './messages.mjs';
 import { confirmDealOnPlayerok } from './confirm.mjs';
@@ -946,8 +945,6 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
     }
 
     const chatBeforeGreeting = ensureChat(state, chatId);
-    const hadGreetingBefore =
-        chatBeforeGreeting.greetingSent || hasGreetingInChat(messages, sellerUserId);
 
     let greetingAt = chatBeforeGreeting.greetingAt || null;
     if (openDeals.length) {
@@ -964,12 +961,24 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
         greetingAt = findGreetingAnchorInChat(messages, sellerUserId);
     }
 
-    if (hadGreetingBefore && newlyRegistered.length) {
+    const ackTargets = [];
+    const ackSeen = new Set();
+    for (const d of openDeals) {
+        const o = getOrder(state, d.dealId);
+        if (!o || !isActionableOrder(o)) continue;
+        if (!playerokNeedsDelivery(o.playerokStatus)) continue;
+        if (o.twinReminderSentAt) continue;
+        const oid = o.orderId || o.dealId;
+        if (ackSeen.has(oid)) continue;
+        ackSeen.add(oid);
+        ackTargets.push(o);
+    }
+    if (ackTargets.length) {
         await sendTwinRemindersForNewOrders(
             client,
             state,
             chatId,
-            newlyRegistered,
+            ackTargets,
             messages,
             sellerUserId,
         );
