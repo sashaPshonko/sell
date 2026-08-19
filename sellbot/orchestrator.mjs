@@ -720,7 +720,14 @@ async function startWorker(reason = 'order') {
 async function handleOrder(order) {
     const oid = order.orderId;
     if (closedOrderIds.has(oid)) {
-        console.log(`[sellbot] игнор закрытого заказа ${oid.slice(0, 8)}…`);
+        if (order.resync) {
+            console.log(
+                `[sellbot] resync закрытого ${oid.slice(0, 8)}… → replay delivery_ok`,
+            );
+            forwardToSell({ type: 'delivery_ok', orderId: oid });
+        } else {
+            console.log(`[sellbot] игнор закрытого заказа ${oid.slice(0, 8)}…`);
+        }
         return;
     }
     await loadBotConfig();

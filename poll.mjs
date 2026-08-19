@@ -287,6 +287,16 @@ async function notifyBotBalanceRefilling(client, state) {
     if (sent) console.log(`[sell] bot_balance_refilling: отправлено в ${sent} чат(ов)`);
 }
 
+async function reloadStateFromDisk(state) {
+    const disk = await loadState();
+    state.orders = disk.orders;
+    state.chats = disk.chats;
+    state.confirmedDeals = disk.confirmedDeals;
+    state.scheduledChatMessages = disk.scheduledChatMessages;
+    state.bannedBuyers = disk.bannedBuyers;
+    state.botBalance = disk.botBalance;
+}
+
 async function handleBotEvents(client, state) {
     for (const ev of await drainBotEvents()) {
         if (ev.type === 'delivery_queue') {
@@ -321,7 +331,21 @@ async function handleBotEvents(client, state) {
             continue;
         }
 
-        const order = getOrder(state, ev.orderId);
+        let order = getOrder(state, ev.orderId);
+        if (
+            !order
+            && (ev.type === 'delivery_ok'
+                || ev.type === 'delivery_failed'
+                || ev.type === 'order_missing')
+        ) {
+            await reloadStateFromDisk(state);
+            order = getOrder(state, ev.orderId);
+            if (order) {
+                console.log(
+                    `[sell] ws: заказ ${ev.orderId.slice(0, 8)}… восстановлен из state.json`,
+                );
+            }
+        }
         if (!order) {
             console.warn(`[sell] ws: неизвестный заказ ${ev.orderId}`);
             continue;

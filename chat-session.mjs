@@ -39,7 +39,7 @@ import {
 } from './lib/profile-upsell.mjs';
 import { scheduleUpsellRepeat } from './lib/scheduled-chat.mjs';
 import { getQueuePosition } from './lib/delivery-queue.mjs';
-import { tryOnceClaim } from './lib/once-claim.mjs';
+import { tryOnceClaim, releaseOnceClaim } from './lib/once-claim.mjs';
 import { sendGreeting, sendChatMessage } from './chat.mjs';
 import { dispatchOrder, dispatchNickUpdate, dispatchCancelOrder } from './dispatch.mjs';
 import { applyOrderPayBonus } from './lib/pay-bonus.mjs';
@@ -919,30 +919,42 @@ async function notifyDeliveryQueueStatus(client, state, chatId, order, nick, opt
     }
 
     // Claim до await — параллельный poll не отправит второй раз
-    setOrderPhase(state, order.orderId, order.phase, {
-        queueStatusSentAt: new Date().toISOString(),
-    });
-    await saveState(state);
-
-    // Между копиями репо / двумя poll — общий диск-claim
     if (!tryOnceClaim('dispatch-status', order.orderId)) {
-        console.log(
-            `[sell] очередь → ${order.orderId.slice(0, 8)}… уже claim — skip`,
-        );
-        return;
+        if (
+            messages
+            && sellerUserId
+            && hasDispatchStatusInChat(messages, sellerUserId, nick)
+        ) {
+            setOrderPhase(state, order.orderId, order.phase, {
+                queueStatusSentAt: new Date().toISOString(),
+            });
+            console.log(
+                `[sell] очередь → ${order.orderId.slice(0, 8)}… уже в чате («${nick}»), пропуск`,
+            );
+            return;
+        }
+        // Orphan claim (прошлый poll claim без send) — снимаем и пробуем снова
+        releaseOnceClaim('dispatch-status', order.orderId);
+        if (!tryOnceClaim('dispatch-status', order.orderId)) {
+            console.log(
+                `[sell] очередь → ${order.orderId.slice(0, 8)}… уже claim — skip`,
+            );
+            return;
+        }
     }
 
     try {
         const text = buildQueueStatusMessage(state, order, nick);
         await sendChatMessage(client, chatId, text);
+        setOrderPhase(state, order.orderId, order.phase, {
+            queueStatusSentAt: new Date().toISOString(),
+        });
         const q = getQueuePosition(order.orderId, state);
         console.log(
             `[sell] очередь → ${order.orderId.slice(0, 8)}… pos=${q.position}/${q.total} phase=${order.phase}`,
         );
     } catch (e) {
-        setOrderPhase(state, order.orderId, order.phase, {
-            queueStatusSentAt: undefined,
-        });
+        releaseOnceClaim('dispatch-status', order.orderId);
         console.warn(`[sell] очередь: ${e.message}`);
     }
 }

@@ -1,7 +1,7 @@
 /**
  * Перевыставление лота на PlayerOK после оплаты (publishItem).
  */
-import { setOrderPhase, getOrder, saveState } from './state.mjs';
+import { setOrderPhase, getOrder, saveState, loadState } from './state.mjs';
 import { isMarkedProfileLot, isSearchPremiumLot } from './lib/profile-upsell.mjs';
 import { resolveCompletedItemForOrder } from './lib/completed-republish.mjs';
 import {
@@ -365,9 +365,17 @@ export async function publishItemOnPlayerok(
     throw lastErr || new Error('publishItem: все статусы отклонены');
 }
 
-async function runRepublishAttempt(client, state, order, dealId, attempt) {
+async function runRepublishAttempt(client, _stateSnapshot, orderSnapshot, dealId, attempt) {
+    const state = await loadState();
     const maxRetries = publishMaxRetries();
-    const fresh = getOrder(state, dealId) || order;
+    const fresh = getOrder(state, dealId);
+    if (!fresh) {
+        console.warn(
+            `[sell] publish-queue ${dealId.slice(0, 8)}…: заказ не в state, пропуск`,
+        );
+        return;
+    }
+    const order = { ...orderSnapshot, ...fresh };
 
     if (fresh.republishedAt) return;
 

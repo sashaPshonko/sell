@@ -5,6 +5,9 @@ const PATH = process.env.STATE_FILE || './state.json';
 const TMP_PATH = `${PATH}.tmp`;
 const BAK_PATH = `${PATH}.bak`;
 
+/** Сериализация saveState — параллельные poll/publish-queue не ломают rename. */
+let saveChain = Promise.resolve();
+
 const EMPTY = {
     orders: {},
     confirmedDeals: {},
@@ -26,14 +29,27 @@ export async function loadState() {
     return state;
 }
 
-export async function saveState(state) {
-    const payload = JSON.stringify(state, null, 2);
-    // Atomic replace: write temp, keep backup of last good, then swap.
+async function writeStatePayload(payload) {
     await writeFile(TMP_PATH, payload);
     if (existsSync(PATH)) {
-        await rename(PATH, BAK_PATH);
+        try {
+            await rename(PATH, BAK_PATH);
+        } catch (e) {
+            if (e?.code !== 'ENOENT') throw e;
+        }
     }
     await rename(TMP_PATH, PATH);
+}
+
+export async function saveState(state) {
+    const payload = JSON.stringify(state, null, 2);
+    saveChain = saveChain
+        .then(() => writeStatePayload(payload))
+        .catch((e) => {
+            console.warn(`[sell] saveState: ${e?.message || e}`);
+            throw e;
+        });
+    return saveChain;
 }
 
 export function getOrder(state, dealId) {
