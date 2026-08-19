@@ -15,6 +15,7 @@ import {
     guessItemSlug,
     parseAmountKk,
 } from './parse.mjs';
+import { enqueuePublishWork, publishRetryDelayMs } from './lib/publish-queue.mjs';
 
 const pending = new Map();
 
@@ -34,10 +35,6 @@ export function shouldRepublishOrder(order) {
 function publishDelayMs() {
     // После оплаты buyer ещё на лоте; 10с почти всегда рано.
     return Number(process.env.PUBLISH_DELAY_MS || 120_000);
-}
-
-function publishRetryMs() {
-    return Number(process.env.PUBLISH_RETRY_MS || 120_000);
 }
 
 function publishMaxRetries() {
@@ -383,7 +380,6 @@ export function scheduleRepublishItem(client, state, order, { delayOverrideMs } 
 
     const delayMs = delayOverrideMs ?? publishDelayMs();
     const maxRetries = publishMaxRetries();
-    const retryMs = publishRetryMs();
     const attempt = Number(existing?.republishAttempts || 0);
 
     setOrderPhase(state, dealId, existing?.phase || order.phase || 'new', {
@@ -396,8 +392,9 @@ export function scheduleRepublishItem(client, state, order, { delayOverrideMs } 
             `item=${order.itemId.slice(0, 8)}… (попытка ${attempt + 1}/${maxRetries})`,
     );
 
-    const timer = setTimeout(async () => {
+    const timer = setTimeout(() => {
         pending.delete(dealId);
+        void enqueuePublishWork(async () => {
         const fresh = getOrder(state, dealId) || order;
 
         let itemId = fresh.itemId;
@@ -460,6 +457,7 @@ export function scheduleRepublishItem(client, state, order, { delayOverrideMs } 
                 /слишком много попыток/i.test(msg);
             const nextAttempt = attempt + 1;
             if (retryable && nextAttempt < maxRetries) {
+                const retryMs = publishRetryDelayMs(nextAttempt, msg);
                 console.warn(
                     `[sell] publishItem ${dealId.slice(0, 8)}…: ${msg} → повтор через ${retryMs / 1000}с`,
                 );
@@ -489,6 +487,9 @@ export function scheduleRepublishItem(client, state, order, { delayOverrideMs } 
             });
         }
         await saveState(state);
+        }).catch((e) => {
+            console.warn(`[sell] publish-queue ${dealId.slice(0, 8)}…: ${e.message || e}`);
+        });
     }, delayMs);
 
     pending.set(dealId, timer);
