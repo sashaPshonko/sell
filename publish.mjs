@@ -494,3 +494,24 @@ export function scheduleRepublishItem(client, state, order, { delayOverrideMs } 
 
     pending.set(dealId, timer);
 }
+
+/** После рестарта poll — заново ставим зависшие перевыставления в очередь. */
+export function recoverStuckRepublishes(client, state) {
+    if (!publishEnabled()) return;
+    const maxRetries = publishMaxRetries();
+    let n = 0;
+    for (const order of Object.values(state.orders || {})) {
+        const dealId = order?.orderId || order?.dealId;
+        if (!dealId || order.republishedAt) continue;
+        if (!shouldRepublishOrder(order)) continue;
+        const attempts = Number(order.republishAttempts || 0);
+        if (attempts >= maxRetries) continue;
+        if (!order.republishScheduled && !order.republishError) continue;
+        if (pending.has(dealId)) continue;
+        scheduleRepublishItem(client, state, order, {
+            delayOverrideMs: Number(process.env.PUBLISH_RECOVER_DELAY_MS || 20_000),
+        });
+        n++;
+    }
+    if (n) console.log(`[sell] recover: ${n} зависших перевыставлений в очередь`);
+}

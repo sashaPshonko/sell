@@ -50,7 +50,7 @@ import {
     DELIVERY_ANARCHY,
 } from './messages.mjs';
 import { confirmDealOnPlayerok } from './confirm.mjs';
-import { scheduleRepublishItem, republishWhen } from './publish.mjs';
+import { scheduleRepublishItem, republishWhen, recoverStuckRepublishes } from './publish.mjs';
 import {
     registerDealOrders,
     filterActionableDeals,
@@ -99,6 +99,7 @@ acquirePidLock(POLL_LOCK, 'sell', { processPattern: 'poll.mjs' });
 
 const once = process.argv.includes('--once');
 const pollMs = Number(process.env.POLL_MS || 15000);
+let republishRecovered = false;
 
 async function markPlayerokDone(client, state, dealId, chatId) {
     if (process.env.AUTO_MARK_PLAYEROK === '0') {
@@ -1062,6 +1063,11 @@ async function tick() {
     const sellerUserId = viewerData.viewer.id;
     state.sellerUserId = sellerUserId;
     state.sellerUsername = viewerData.viewer.username;
+
+    if (!republishRecovered) {
+        republishRecovered = true;
+        recoverStuckRepublishes(client, state);
+    }
     console.log(`[sell] ${viewerData.viewer.username} | чаты…`);
 
     const chatsData = await client.userChats(sellerUserId);
