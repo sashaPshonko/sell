@@ -422,8 +422,21 @@ export function scheduleRepublishItem(client, state, order, { delayOverrideMs } 
                 itemSlug: slug || fresh.itemSlug || null,
             });
 
+            if (completed.alreadyListed) {
+                setOrderPhase(state, dealId, getOrder(state, dealId)?.phase || 'new', {
+                    republishedAt: new Date().toISOString(),
+                    republishError: null,
+                    republishAttempts: attempt + 1,
+                });
+                console.log(
+                    `[sell] лот уже в продаже: ${fresh.itemName || slug || itemId}`,
+                );
+                await saveState(state);
+                return;
+            }
+
             await publishItemOnPlayerok(client, itemId, priceRub, {
-                profileLot: isMarkedProfileLot(itemName),
+                profileLot: isMarkedProfileLot(fresh.itemName || itemName),
                 slug,
                 itemName,
             });
