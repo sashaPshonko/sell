@@ -15,9 +15,12 @@ import {
     guessItemSlug,
     parseAmountKk,
 } from './parse.mjs';
-import { enqueuePublishWork, publishRetryDelayMs } from './lib/publish-queue.mjs';
-
-const pending = new Map();
+import {
+    queueRepublish,
+    isRepublishQueued,
+    publishRetryDelayMs,
+    isPublishRateLimitError,
+} from './lib/publish-queue.mjs';
 
 function publishEnabled() {
     return process.env.AUTO_PUBLISH_ITEM !== '0';
@@ -362,6 +365,104 @@ export async function publishItemOnPlayerok(
     throw lastErr || new Error('publishItem: все статусы отклонены');
 }
 
+async function runRepublishAttempt(client, state, order, dealId, attempt) {
+    const maxRetries = publishMaxRetries();
+    const fresh = getOrder(state, dealId) || order;
+
+    if (fresh.republishedAt) return;
+
+    let itemId = fresh.itemId;
+    let slug = fresh.itemSlug || guessItemSlug(fresh);
+    let priceRub = fresh.itemPriceRub;
+    let itemName = fresh.itemName;
+
+    try {
+        const completed = await resolveCompletedItemForOrder(client, fresh);
+        if (!completed?.id) {
+            throw new Error(
+                `completed-list: лот ${fresh.amountKk ?? '?'}kk ещё не в completed ` +
+                    `(itemId=${fresh.itemId?.slice(0, 8) || '—'}… slug=${slug || '—'})`,
+            );
+        }
+
+        itemId = completed.id;
+        slug = completed.slug || slug;
+        priceRub = discountedPriceRub(completed) ?? priceRub;
+        itemName = completed.name || itemName;
+        setOrderPhase(state, dealId, fresh.phase || 'new', {
+            itemSlug: slug || fresh.itemSlug || null,
+        });
+
+        if (completed.alreadyListed) {
+            setOrderPhase(state, dealId, getOrder(state, dealId)?.phase || 'new', {
+                republishedAt: new Date().toISOString(),
+                republishError: null,
+                republishAttempts: attempt + 1,
+            });
+            console.log(
+                `[sell] лот уже в продаже: ${fresh.itemName || slug || itemId}`,
+            );
+            await saveState(state);
+            return;
+        }
+
+        await publishItemOnPlayerok(client, itemId, priceRub, {
+            profileLot: isMarkedProfileLot(fresh.itemName || itemName),
+            slug,
+            itemName,
+        });
+        setOrderPhase(state, dealId, getOrder(state, dealId)?.phase || 'new', {
+            republishedAt: new Date().toISOString(),
+            republishError: null,
+            republishAttempts: attempt + 1,
+        });
+        console.log(`[sell] лот перевыставлен: ${order.itemName || order.itemId}`);
+    } catch (e) {
+        const msg = String(e.message || e);
+        const rateLimited = isPublishRateLimitError(msg);
+        const retryable =
+            STATUS_REJECTED_RE.test(msg) ||
+            /mayBePublished=false/i.test(msg) ||
+            /рано перевыставлять/i.test(msg) ||
+            /лот ещё с buyer/i.test(msg) ||
+            /не удалось найти в базе/i.test(msg) ||
+            /все статусы отклонены/i.test(msg) ||
+            /ещё не в completed/i.test(msg) ||
+            /fetch failed/i.test(msg) ||
+            rateLimited;
+        const nextAttempt = rateLimited ? attempt : attempt + 1;
+        if (retryable && (rateLimited || nextAttempt < maxRetries)) {
+            const retryMs = publishRetryDelayMs(nextAttempt || 1, msg);
+            console.warn(
+                `[sell] publishItem ${dealId.slice(0, 8)}…: ${msg} → повтор через ${retryMs / 1000}с` +
+                    (rateLimited ? ' (rate-limit, попытка не +1)' : ''),
+            );
+            setOrderPhase(state, dealId, getOrder(state, dealId)?.phase || 'new', {
+                republishScheduled: true,
+                republishError: msg,
+                republishAttempts: nextAttempt,
+            });
+            await saveState(state);
+            const retryOrder = {
+                ...order,
+                ...(getOrder(state, dealId) || {}),
+                republishAttempts: nextAttempt,
+            };
+            queueRepublish(dealId, retryMs, () =>
+                runRepublishAttempt(client, state, retryOrder, dealId, nextAttempt),
+            );
+            return;
+        }
+        console.warn(`[sell] publishItem ${dealId.slice(0, 8)}…: ${msg}`);
+        setOrderPhase(state, dealId, getOrder(state, dealId)?.phase || 'new', {
+            republishScheduled: false,
+            republishError: msg,
+            republishAttempts: nextAttempt,
+        });
+    }
+    await saveState(state);
+}
+
 /** Через N мс после оплаты / выдачи — один раз на заказ */
 export function scheduleRepublishItem(client, state, order, { delayOverrideMs } = {}) {
     if (!publishEnabled()) return;
@@ -375,11 +476,10 @@ export function scheduleRepublishItem(client, state, order, { delayOverrideMs } 
     const dealId = order.dealId || order.orderId;
     const existing = getOrder(state, dealId);
     if (existing?.republishedAt) return;
-    if (pending.has(dealId)) return;
+    if (isRepublishQueued(dealId)) return;
     if (existing?.republishScheduled && !existing?.republishError && !delayOverrideMs) return;
 
     const delayMs = delayOverrideMs ?? publishDelayMs();
-    const maxRetries = publishMaxRetries();
     const attempt = Number(existing?.republishAttempts || 0);
 
     setOrderPhase(state, dealId, existing?.phase || order.phase || 'new', {
@@ -387,131 +487,49 @@ export function scheduleRepublishItem(client, state, order, { delayOverrideMs } 
         republishAttempts: attempt,
     });
 
+    const itemRef = order.itemId?.slice(0, 8) || '—';
     console.log(
         `[sell] перевыставление через ${delayMs / 1000}с: ${dealId.slice(0, 8)}… ` +
-            `item=${order.itemId.slice(0, 8)}… (попытка ${attempt + 1}/${maxRetries})`,
+            `item=${itemRef}… (попытка ${attempt + 1}/${publishMaxRetries()}, очередь)`,
     );
 
-    const timer = setTimeout(() => {
-        pending.delete(dealId);
-        void enqueuePublishWork(async () => {
-        const fresh = getOrder(state, dealId) || order;
-
-        let itemId = fresh.itemId;
-        let slug = fresh.itemSlug || guessItemSlug(fresh);
-        let priceRub = fresh.itemPriceRub;
-        let itemName = fresh.itemName;
-
-        try {
-            const completed = await resolveCompletedItemForOrder(client, fresh);
-            if (!completed?.id) {
-                throw new Error(
-                    `completed-list: лот ${fresh.amountKk ?? '?'}kk ещё не в completed ` +
-                        `(itemId=${fresh.itemId?.slice(0, 8) || '—'}… slug=${slug || '—'})`,
-                );
-            }
-
-            itemId = completed.id;
-            slug = completed.slug || slug;
-            priceRub = discountedPriceRub(completed) ?? priceRub;
-            itemName = completed.name || itemName;
-            setOrderPhase(state, dealId, fresh.phase || 'new', {
-                itemSlug: slug || fresh.itemSlug || null,
-            });
-
-            if (completed.alreadyListed) {
-                setOrderPhase(state, dealId, getOrder(state, dealId)?.phase || 'new', {
-                    republishedAt: new Date().toISOString(),
-                    republishError: null,
-                    republishAttempts: attempt + 1,
-                });
-                console.log(
-                    `[sell] лот уже в продаже: ${fresh.itemName || slug || itemId}`,
-                );
-                await saveState(state);
-                return;
-            }
-
-            await publishItemOnPlayerok(client, itemId, priceRub, {
-                profileLot: isMarkedProfileLot(fresh.itemName || itemName),
-                slug,
-                itemName,
-            });
-            setOrderPhase(state, dealId, getOrder(state, dealId)?.phase || 'new', {
-                republishedAt: new Date().toISOString(),
-                republishError: null,
-                republishAttempts: attempt + 1,
-            });
-            console.log(`[sell] лот перевыставлен: ${order.itemName || order.itemId}`);
-        } catch (e) {
-            const msg = String(e.message || e);
-            const retryable =
-                STATUS_REJECTED_RE.test(msg) ||
-                /mayBePublished=false/i.test(msg) ||
-                /рано перевыставлять/i.test(msg) ||
-                /лот ещё с buyer/i.test(msg) ||
-                /не удалось найти в базе/i.test(msg) ||
-                /все статусы отклонены/i.test(msg) ||
-                /ещё не в completed/i.test(msg) ||
-                /fetch failed/i.test(msg) ||
-                /слишком много попыток/i.test(msg);
-            const nextAttempt = attempt + 1;
-            if (retryable && nextAttempt < maxRetries) {
-                const retryMs = publishRetryDelayMs(nextAttempt, msg);
-                console.warn(
-                    `[sell] publishItem ${dealId.slice(0, 8)}…: ${msg} → повтор через ${retryMs / 1000}с`,
-                );
-                setOrderPhase(state, dealId, getOrder(state, dealId)?.phase || 'new', {
-                    republishScheduled: true,
-                    republishError: msg,
-                    republishAttempts: nextAttempt,
-                });
-                await saveState(state);
-                const retryOrder = {
-                    ...order,
-                    ...(getOrder(state, dealId) || {}),
-                    republishAttempts: nextAttempt,
-                };
-                const retryTimer = setTimeout(() => {
-                    pending.delete(dealId);
-                    scheduleRepublishItem(client, state, retryOrder, { delayOverrideMs: retryMs });
-                }, retryMs);
-                pending.set(dealId, retryTimer);
-                return;
-            }
-            console.warn(`[sell] publishItem ${dealId.slice(0, 8)}…: ${msg}`);
-            setOrderPhase(state, dealId, getOrder(state, dealId)?.phase || 'new', {
-                republishScheduled: false,
-                republishError: msg,
-                republishAttempts: nextAttempt,
-            });
-        }
-        await saveState(state);
-        }).catch((e) => {
-            console.warn(`[sell] publish-queue ${dealId.slice(0, 8)}…: ${e.message || e}`);
-        });
-    }, delayMs);
-
-    pending.set(dealId, timer);
+    queueRepublish(dealId, delayMs, () =>
+        runRepublishAttempt(client, state, order, dealId, attempt),
+    );
 }
 
 /** После рестарта poll — заново ставим зависшие перевыставления в очередь. */
 export function recoverStuckRepublishes(client, state) {
     if (!publishEnabled()) return;
     const maxRetries = publishMaxRetries();
+    const staggerMs = Number(process.env.PUBLISH_RECOVER_STAGGER_MS || 45_000);
     let n = 0;
     for (const order of Object.values(state.orders || {})) {
         const dealId = order?.orderId || order?.dealId;
         if (!dealId || order.republishedAt) continue;
         if (!shouldRepublishOrder(order)) continue;
-        const attempts = Number(order.republishAttempts || 0);
+        let attempts = Number(order.republishAttempts || 0);
+        if (
+            attempts >= maxRetries
+            && isPublishRateLimitError(order.republishError)
+        ) {
+            setOrderPhase(state, dealId, order.phase || 'new', {
+                republishAttempts: 0,
+                republishScheduled: true,
+            });
+            attempts = 0;
+        }
         if (attempts >= maxRetries) continue;
         if (!order.republishScheduled && !order.republishError) continue;
-        if (pending.has(dealId)) continue;
+        if (isRepublishQueued(dealId)) continue;
         scheduleRepublishItem(client, state, order, {
-            delayOverrideMs: Number(process.env.PUBLISH_RECOVER_DELAY_MS || 20_000),
+            delayOverrideMs: staggerMs * n,
         });
         n++;
     }
-    if (n) console.log(`[sell] recover: ${n} зависших перевыставлений в очередь`);
+    if (n) {
+        console.log(
+            `[sell] recover: ${n} зависших перевыставлений в очередь (stagger ${staggerMs / 1000}с)`,
+        );
+    }
 }
