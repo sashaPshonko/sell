@@ -20,6 +20,7 @@ import {
     isRepublishQueued,
     publishRetryDelayMs,
     isPublishRateLimitError,
+    notePublishRateLimit,
 } from './lib/publish-queue.mjs';
 
 function publishEnabled() {
@@ -440,6 +441,7 @@ async function runRepublishAttempt(client, _stateSnapshot, orderSnapshot, dealId
             rateLimited;
         const nextAttempt = rateLimited ? attempt : attempt + 1;
         if (retryable && (rateLimited || nextAttempt < maxRetries)) {
+            if (rateLimited) notePublishRateLimit(msg);
             const retryMs = publishRetryDelayMs(nextAttempt || 1, msg);
             console.warn(
                 `[sell] publishItem ${dealId.slice(0, 8)}…: ${msg} → повтор через ${retryMs / 1000}с` +
