@@ -7,7 +7,6 @@ import { resolveCompletedItemForOrder } from './lib/completed-republish.mjs';
 import {
     cloneItemAsDraft,
     applyCloneSalePrice,
-    needsCloneRepublish,
 } from './lib/clone-republish.mjs';
 import {
     discountedPriceRub,
@@ -195,9 +194,9 @@ export async function publishItemOnPlayerok(
     const file = process.env.PUBLISH_ITEM_MUTATION_FILE || './captures/publish-item.graphql';
     const op = process.env.PUBLISH_ITEM_OPERATION || 'publishItem';
     const gqlPath = process.env.PUBLISH_ITEM_GQL_PATH || '/products/[slug]';
+    let referer = slug ? `https://playerok.com/products/${slug}` : null;
 
     let itemMeta = await loadItemMeta(client, { itemId, slug });
-    // slug из заказа мог быть кривой — угадываем и пробуем ещё раз
     if (!itemMeta && itemId && itemName) {
         const guessed = guessItemSlug({ itemId, itemName, itemSlug: slug });
         if (guessed && guessed !== slug) {
@@ -207,83 +206,49 @@ export async function publishItemOnPlayerok(
     }
     if (!itemMeta) {
         throw new Error(
-            `нет itemMeta (itemId=${itemId?.slice(0, 8) || '—'} slug=${slug || '—'}) — ` +
-                `нужен completed-list`,
+            `нет карточки лота (slug=${slug || '—'}) — createItem не из чего клонировать`,
         );
     }
-    let publishItemId = itemId;
-    let statusPriceRub = priceRub;
-    let referer = slug ? `https://playerok.com/products/${slug}` : null;
-    if (itemMeta) {
-        publishItemId = itemMeta.id || itemId;
-        slug = itemMeta.slug || slug;
-        const salePrice = discountedPriceRub(itemMeta);
-        const rawPrice = listingRawPriceRub(itemMeta);
+
+    const salePrice = discountedPriceRub(itemMeta);
+    const rawPrice = listingRawPriceRub(itemMeta);
+    console.log(
+        `[sell] лот ${itemMeta.slug || slug}: status=${itemMeta.status} ` +
+            `mayBePublished=${itemMeta.mayBePublished} ` +
+            `price=${salePrice} rawPrice=${rawPrice ?? '?'}`,
+    );
+
+    if (
+        itemMeta.status === 'APPROVED' &&
+        !itemMeta.buyer?.id &&
+        !itemMeta.buyer?.username
+    ) {
         console.log(
-            `[sell] лот ${itemMeta.slug || slug}: status=${itemMeta.status} ` +
-                `mayBePublished=${itemMeta.mayBePublished} ` +
-                `price=${salePrice} rawPrice=${rawPrice ?? '?'}`,
+            `[sell] лот ${itemMeta.slug || slug}: уже APPROVED без buyer — ` +
+                `перевыставление не нужно`,
         );
-        // itemPriorityStatuses считает премку от цены листинга (raw), не от скидки в сделке
-        statusPriceRub = rawPrice ?? salePrice ?? priceRub;
-        if (salePrice != null) priceRub = salePrice;
-        // Уже в продаже без buyer — считать успехом (ручной/прошлый publish).
-        if (
-            itemMeta.status === 'APPROVED' &&
-            !itemMeta.buyer?.id &&
-            !itemMeta.buyer?.username
-        ) {
-            console.log(
-                `[sell] лот ${itemMeta.slug || slug}: уже APPROVED без buyer — ` +
-                    `перевыставление не нужно`,
-            );
-            return { publishItem: itemMeta, alreadyListed: true };
-        }
-        // Проданный лот: не publishItem того же id — createItem (как веб).
-        if (needsCloneRepublish(itemMeta)) {
-            const who =
-                itemMeta.buyer?.username ||
-                (itemMeta.buyer?.id
-                    ? String(itemMeta.buyer.id).slice(0, 8)
-                    : '?');
-            console.warn(
-                `[sell] лот ${itemMeta.slug || slug}: status=${itemMeta.status} ` +
-                    `buyer=${who} editable=${itemMeta.editable} — clone+publish`,
-            );
-            // премку считаем от raw исходника; sale потом вернём через updateItem
-            const sourceSale = discountedPriceRub(itemMeta);
-            const sourceRaw = listingRawPriceRub(itemMeta);
-            let draft = await cloneItemAsDraft(client, itemMeta);
-            draft = await applyCloneSalePrice(client, draft, itemMeta);
-            publishItemId = draft.id;
-            slug = draft.slug || slug;
-            itemName = draft.name || itemName;
-            statusPriceRub =
-                sourceRaw ??
-                listingRawPriceRub(draft) ??
-                draft.rawPrice ??
-                draft.price ??
-                statusPriceRub;
-            if (sourceSale != null) priceRub = sourceSale;
-            if (draft.name) {
-                profileLot = isMarkedProfileLot(draft.name);
-            }
-            itemMeta = draft;
-            referer = slug ? `https://playerok.com/products/${slug}` : referer;
-        } else if (itemMeta.mayBePublished === false) {
-            throw new Error(
-                `mayBePublished=false (status=${itemMeta.status}) — рано перевыставлять`,
-            );
-        }
-        if (itemMeta.name) {
-            profileLot = isMarkedProfileLot(itemMeta.name);
-            itemName = itemMeta.name;
-        }
-    } else {
-        throw new Error(
-            `нет itemMeta (itemId=${itemId?.slice(0, 8) || '—'} slug=${slug || '—'}) — ` +
-                `не публикуем старый id, нужен clone`,
-        );
+        return { publishItem: itemMeta, alreadyListed: true };
+    }
+
+    // Всегда новый лот: createItem, старый id не публикуем.
+    console.warn(
+        `[sell] лот ${itemMeta.slug || slug}: status=${itemMeta.status} — createItem с нуля`,
+    );
+    const sourceSale = salePrice;
+    const sourceRaw = rawPrice;
+    let draft = await cloneItemAsDraft(client, itemMeta);
+    draft = await applyCloneSalePrice(client, draft, itemMeta);
+    const publishItemId = draft.id;
+    slug = draft.slug || slug;
+    itemName = draft.name || itemName;
+    if (draft.name) profileLot = isMarkedProfileLot(draft.name);
+    itemMeta = draft;
+    referer = slug ? `https://playerok.com/products/${slug}` : referer;
+    let statusPriceRub = sourceRaw ?? listingRawPriceRub(draft) ?? draft.rawPrice ?? draft.price ?? priceRub;
+    if (sourceSale != null) priceRub = sourceSale;
+    if (itemMeta.name) {
+        profileLot = isMarkedProfileLot(itemMeta.name);
+        itemName = itemMeta.name;
     }
 
     // raw, потом sale, потом 0 — разный price даёт разный набор статусов
@@ -446,6 +411,7 @@ async function runRepublishAttempt(client, _stateSnapshot, orderSnapshot, dealId
             /все статусы отклонены/i.test(msg) ||
             /ещё не в completed/i.test(msg) ||
             /нет itemMeta/i.test(msg) ||
+            /нет карточки лота/i.test(msg) ||
             /fetch failed/i.test(msg) ||
             rateLimited;
         const nextAttempt = rateLimited ? attempt : attempt + 1;
