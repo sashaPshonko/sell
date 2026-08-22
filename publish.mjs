@@ -227,8 +227,7 @@ export async function publishItemOnPlayerok(
             );
             return { publishItem: itemMeta, alreadyListed: true };
         }
-        // SOLD+buyer+editable=false: publishItem того же id всегда «нельзя обновить статус».
-        // Веб создаёт новый лот — делаем createItem → publish.
+        // Проданный лот: не publishItem того же id — createItem (как веб).
         if (needsCloneRepublish(itemMeta)) {
             const who =
                 itemMeta.buyer?.username ||
@@ -263,18 +262,16 @@ export async function publishItemOnPlayerok(
             throw new Error(
                 `mayBePublished=false (status=${itemMeta.status}) — рано перевыставлять`,
             );
-        } else if (itemMeta.buyer?.id || itemMeta.buyer?.username) {
-            const who =
-                itemMeta.buyer.username || String(itemMeta.buyer.id).slice(0, 8);
-            console.warn(
-                `[sell] лот ${itemMeta.slug || slug}: ещё buyer=${who}, ` +
-                    `status=${itemMeta.status} editable=${itemMeta.editable} — пробуем publish`,
-            );
         }
         if (itemMeta.name) {
             profileLot = isMarkedProfileLot(itemMeta.name);
             itemName = itemMeta.name;
         }
+    } else {
+        throw new Error(
+            `нет itemMeta (itemId=${itemId?.slice(0, 8) || '—'} slug=${slug || '—'}) — ` +
+                `не публикуем старый id, нужен clone`,
+        );
     }
 
     // raw, потом sale, потом 0 — разный price даёт разный набор статусов
