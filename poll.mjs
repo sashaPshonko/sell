@@ -323,8 +323,9 @@ async function handleBotEvents(client, state) {
             }
             const info = setBotBalance(state, ev.balance, { username: ev.username });
             if (info && info.coins !== prev) {
+                const kk = info.coins / 1_000_000;
                 console.log(
-                    `[sell] баланс бота: ${(info.coins / 1_000_000).toLocaleString('ru-RU')}kk` +
+                    `[sell] баланс бота: ${kk.toLocaleString('ru-RU', { maximumFractionDigits: 3 })}kk` +
                         (info.username ? ` (${info.username})` : ''),
                 );
             }

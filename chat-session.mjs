@@ -88,7 +88,7 @@ function resolveBuyerUsername(state, chatId, buyerId) {
  * не стартуем выдачу, пишем покупателю сразу.
  * @returns {Promise<boolean>} true = заблокировано
  */
-async function refuseIfBotBroke(client, state, order, nick) {
+async function refuseIfBotBroke(client, state, order, nick, { forceHint = false } = {}) {
     if (canAffordOrder(state, order)) return false;
     const oid = order.orderId || order.dealId;
     if (!oid) return false;
@@ -101,9 +101,10 @@ async function refuseIfBotBroke(client, state, order, nick) {
         pausedUntilNick: true,
         lastError: 'insufficient_funds',
         nick: n,
+        ...(forceHint ? { deliveryHintSentAt: undefined } : {}),
     });
     const fresh = getOrder(state, oid) || order;
-    if (client && fresh.chatId && !fresh.deliveryHintSentAt) {
+    if (client && fresh.chatId && (forceHint || !fresh.deliveryHintSentAt)) {
         setOrderPhase(state, oid, fresh.phase || 'awaiting_nick', {
             deliveryHintSentAt: new Date().toISOString(),
         });
@@ -688,6 +689,7 @@ export async function applyNickCommandUpdates(
             if (isNewNickMessage && wasPausedUntilNick) {
                 order.deliveryAttempts = 0;
                 order.deliveryAttemptsHintSentAt = undefined;
+                order.deliveryHintSentAt = undefined;
             }
             nickApplied = true;
             order.wrongNickWarned = false;
@@ -765,7 +767,7 @@ export async function applyNickCommandUpdates(
 
             applyOrderPayBonus(state, order);
             const fresh = getOrder(state, order.orderId) || order;
-            if (await refuseIfBotBroke(client, state, fresh, u.nick)) {
+            if (await refuseIfBotBroke(client, state, fresh, u.nick, { forceHint: true })) {
                 continue;
             }
             try {
