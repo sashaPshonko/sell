@@ -3,6 +3,7 @@
  */
 import { setOrderPhase, getOrder, saveState, loadState } from './state.mjs';
 import { isMarkedProfileLot, isSearchPremiumLot } from './lib/profile-upsell.mjs';
+import { resolveCompletedItemForOrder } from './lib/completed-republish.mjs';
 import {
     cloneItemAsDraft,
     applyCloneSalePrice,
@@ -167,15 +168,21 @@ const STATUS_REJECTED_RE =
 
 async function loadItemMeta(client, { itemId, slug } = {}) {
     if (!slug || typeof client?.itemBySlug !== 'function') return null;
-    const data = await client.itemBySlug(slug);
-    const item = data?.item ?? null;
-    if (!item) return null;
-    if (itemId && item.id && item.id !== itemId) {
-        console.warn(
-            `[sell] slug ${slug}: itemId ${item.id} ≠ ожидаемый ${itemId}`,
-        );
+    try {
+        const data = await client.itemBySlug(slug);
+        const item = data?.item ?? null;
+        if (!item) return null;
+        if (itemId && item.id && item.id !== itemId) {
+            console.warn(
+                `[sell] slug ${slug}: itemId ${item.id} ≠ ожидаемый ${itemId}`,
+            );
+        }
+        return item;
+    } catch (e) {
+        if (isPublishRateLimitError(e)) throw e;
+        console.warn(`[sell] itemBySlug ${slug}: ${e.message || e}`);
+        return null;
     }
-    return item;
 }
 
 export async function publishItemOnPlayerok(
@@ -197,6 +204,12 @@ export async function publishItemOnPlayerok(
             slug = guessed;
             itemMeta = await loadItemMeta(client, { itemId, slug });
         }
+    }
+    if (!itemMeta) {
+        throw new Error(
+            `нет itemMeta (itemId=${itemId?.slice(0, 8) || '—'} slug=${slug || '—'}) — ` +
+                `нужен completed-list`,
+        );
     }
     let publishItemId = itemId;
     let statusPriceRub = priceRub;
@@ -382,7 +395,34 @@ async function runRepublishAttempt(client, _stateSnapshot, orderSnapshot, dealId
     let itemName = fresh.itemName;
 
     try {
-        // Клон с нуля: одна карточка по slug, без 20 страниц completed-list (это и жрало rate-limit).
+        const completed = await resolveCompletedItemForOrder(client, fresh).catch(
+            (e) => {
+                if (isPublishRateLimitError(e)) throw e;
+                console.warn(
+                    `[sell] completed-list ${dealId.slice(0, 8)}…: ${e.message || e}`,
+                );
+                return null;
+            },
+        );
+        if (completed?.alreadyListed) {
+            setOrderPhase(state, dealId, getOrder(state, dealId)?.phase || 'new', {
+                republishedAt: new Date().toISOString(),
+                republishError: null,
+                republishAttempts: attempt + 1,
+            });
+            console.log(
+                `[sell] лот уже в продаже: ${fresh.itemName || slug || itemId}`,
+            );
+            await saveState(state);
+            return;
+        }
+        if (completed?.id) {
+            itemId = completed.id;
+            slug = completed.slug || slug;
+            priceRub = discountedPriceRub(completed) ?? priceRub;
+            itemName = completed.name || itemName;
+        }
+
         await publishItemOnPlayerok(client, itemId, priceRub, {
             profileLot: isMarkedProfileLot(fresh.itemName || itemName),
             slug,
@@ -405,6 +445,7 @@ async function runRepublishAttempt(client, _stateSnapshot, orderSnapshot, dealId
             /не удалось найти в базе/i.test(msg) ||
             /все статусы отклонены/i.test(msg) ||
             /ещё не в completed/i.test(msg) ||
+            /нет itemMeta/i.test(msg) ||
             /fetch failed/i.test(msg) ||
             rateLimited;
         const nextAttempt = rateLimited ? attempt : attempt + 1;
