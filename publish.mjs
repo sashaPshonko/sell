@@ -3,7 +3,6 @@
  */
 import { setOrderPhase, getOrder, saveState, loadState } from './state.mjs';
 import { isMarkedProfileLot, isSearchPremiumLot } from './lib/profile-upsell.mjs';
-import { resolveCompletedItemForOrder } from './lib/completed-republish.mjs';
 import {
     cloneItemAsDraft,
     applyCloneSalePrice,
@@ -383,37 +382,7 @@ async function runRepublishAttempt(client, _stateSnapshot, orderSnapshot, dealId
     let itemName = fresh.itemName;
 
     try {
-        const completed = await resolveCompletedItemForOrder(client, fresh).catch(
-            (e) => {
-                if (isPublishRateLimitError(e)) throw e;
-                console.warn(
-                    `[sell] completed-list ${dealId.slice(0, 8)}…: ${e.message || e} — clone по itemId/slug`,
-                );
-                return null;
-            },
-        );
-        if (completed?.alreadyListed) {
-            setOrderPhase(state, dealId, getOrder(state, dealId)?.phase || 'new', {
-                republishedAt: new Date().toISOString(),
-                republishError: null,
-                republishAttempts: attempt + 1,
-            });
-            console.log(
-                `[sell] лот уже в продаже: ${fresh.itemName || slug || itemId}`,
-            );
-            await saveState(state);
-            return;
-        }
-        if (completed?.id) {
-            itemId = completed.id;
-            slug = completed.slug || slug;
-            priceRub = discountedPriceRub(completed) ?? priceRub;
-            itemName = completed.name || itemName;
-            setOrderPhase(state, dealId, fresh.phase || 'new', {
-                itemSlug: slug || fresh.itemSlug || null,
-            });
-        }
-
+        // Клон с нуля: одна карточка по slug, без 20 страниц completed-list (это и жрало rate-limit).
         await publishItemOnPlayerok(client, itemId, priceRub, {
             profileLot: isMarkedProfileLot(fresh.itemName || itemName),
             slug,
