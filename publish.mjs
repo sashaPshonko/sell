@@ -8,6 +8,7 @@ import {
     cloneItemAsDraft,
     applyCloneSalePrice,
 } from './lib/clone-republish.mjs';
+import { resolveCloneSource } from './lib/clone-source.mjs';
 import {
     discountedPriceRub,
     listingRawPriceRub,
@@ -188,27 +189,39 @@ export async function publishItemOnPlayerok(
     client,
     itemId,
     priceRub = null,
-    { profileLot = false, slug = null, itemName = null } = {},
+    extra = {},
 ) {
+    const { profileLot = false, slug: slugArg = null, itemName: nameArg = null } = extra;
+    let slug = slugArg;
+    let itemName = nameArg;
     if (!slug) slug = guessItemSlug({ itemId, itemName });
     const file = process.env.PUBLISH_ITEM_MUTATION_FILE || './captures/publish-item.graphql';
     const op = process.env.PUBLISH_ITEM_OPERATION || 'publishItem';
     const gqlPath = process.env.PUBLISH_ITEM_GQL_PATH || '/products/[slug]';
     let referer = slug ? `https://playerok.com/products/${slug}` : null;
 
-    let itemMeta = await loadItemMeta(client, { itemId, slug });
-    if (!itemMeta && itemId && itemName) {
-        const guessed = guessItemSlug({ itemId, itemName, itemSlug: slug });
-        if (guessed && guessed !== slug) {
-            slug = guessed;
-            itemMeta = await loadItemMeta(client, { itemId, slug });
-        }
+    const cloneResolved = await resolveCloneSource(client, {
+        itemId,
+        itemSlug: slug,
+        itemName,
+        itemPriceRub: priceRub,
+        amountKk: parseAmountKk(itemName),
+    }, extra.completed || null);
+    if (cloneResolved.alreadyListed) {
+        console.log(
+            `[sell] лот ${cloneResolved.item.slug || slug}: уже APPROVED без buyer — ` +
+                `перевыставление не нужно`,
+        );
+        return { publishItem: cloneResolved.item, alreadyListed: true };
     }
+    let itemMeta = cloneResolved.item;
     if (!itemMeta) {
         throw new Error(
             `нет карточки лота (slug=${slug || '—'}) — createItem не из чего клонировать`,
         );
     }
+    slug = itemMeta.slug || slug;
+    referer = slug ? `https://playerok.com/products/${slug}` : referer;
 
     const salePrice = discountedPriceRub(itemMeta);
     const rawPrice = listingRawPriceRub(itemMeta);
@@ -219,12 +232,14 @@ export async function publishItemOnPlayerok(
     );
 
     if (
+        itemId &&
+        itemMeta.id === itemId &&
         itemMeta.status === 'APPROVED' &&
         !itemMeta.buyer?.id &&
         !itemMeta.buyer?.username
     ) {
         console.log(
-            `[sell] лот ${itemMeta.slug || slug}: уже APPROVED без buyer — ` +
+            `[sell] лот ${itemMeta.slug || slug}: этот id ещё APPROVED без buyer — ` +
                 `перевыставление не нужно`,
         );
         return { publishItem: itemMeta, alreadyListed: true };
@@ -392,6 +407,7 @@ async function runRepublishAttempt(client, _stateSnapshot, orderSnapshot, dealId
             profileLot: isMarkedProfileLot(fresh.itemName || itemName),
             slug,
             itemName,
+            completed,
         });
         setOrderPhase(state, dealId, getOrder(state, dealId)?.phase || 'new', {
             republishedAt: new Date().toISOString(),
