@@ -44,6 +44,22 @@ export function skipRepublishReason(order) {
     return null;
 }
 
+/** Снять флаги очереди у заказа, который больше не перевыставляем (· / нет kk). */
+function clearRepublishFlags(state, dealId, order, reason) {
+    if (!dealId || !order) return false;
+    if (!order.republishScheduled && !order.republishError && !order.republishAttempts) {
+        return false;
+    }
+    setOrderPhase(state, dealId, order.phase || 'new', {
+        republishScheduled: false,
+        republishError: null,
+        republishAttempts: 0,
+        republishSkippedAt: new Date().toISOString(),
+        republishSkipReason: reason || skipRepublishReason(order) || 'skip',
+    });
+    return true;
+}
+
 function publishDelayMs() {
     // Клон с нуля — ждать completed/buyer не нужно.
     return Number(process.env.PUBLISH_DELAY_MS || 10_000);
@@ -377,6 +393,17 @@ async function runRepublishAttempt(client, _stateSnapshot, orderSnapshot, dealId
 
     if (fresh.republishedAt) return;
 
+    if (!shouldRepublishOrder(order)) {
+        const why = skipRepublishReason(order);
+        if (clearRepublishFlags(state, dealId, fresh, why)) {
+            await saveState(state);
+        }
+        console.log(
+            `[sell] перевыставление пропуск: ${order?.itemName || '?'} (${why})`,
+        );
+        return;
+    }
+
     let itemId = fresh.itemId;
     let slug = fresh.itemSlug || guessItemSlug(fresh);
     let priceRub = fresh.itemPriceRub;
@@ -475,15 +502,19 @@ async function runRepublishAttempt(client, _stateSnapshot, orderSnapshot, dealId
 /** Через N мс после оплаты / выдачи — один раз на заказ */
 export function scheduleRepublishItem(client, state, order, { delayOverrideMs } = {}) {
     if (!publishEnabled()) return;
+    const dealId = order.dealId || order.orderId;
     if (!shouldRepublishOrder(order)) {
         const why = skipRepublishReason(order);
+        const existing = dealId ? getOrder(state, dealId) : null;
+        if (existing && clearRepublishFlags(state, dealId, existing, why)) {
+            /* flags cleared — caller saves state */
+        }
         console.log(
             `[sell] перевыставление пропуск: ${order?.itemName || '?'} (${why})`,
         );
         return;
     }
 
-    const dealId = order.dealId || order.orderId;
     const existing = getOrder(state, dealId);
     if (existing?.republishedAt) return;
     if (isRepublishQueued(dealId)) return;
@@ -512,12 +543,19 @@ export function scheduleRepublishItem(client, state, order, { delayOverrideMs } 
 export function recoverStuckRepublishes(client, state) {
     if (!publishEnabled()) return;
     const maxRetries = publishMaxRetries();
-    const staggerMs = Number(process.env.PUBLISH_RECOVER_STAGGER_MS || 8_000);
+    // Не долбить PlayerOK пачкой после рестарта — иначе вечный rate-limit.
+    const staggerMs = Number(process.env.PUBLISH_RECOVER_STAGGER_MS || 45_000);
     let n = 0;
+    let cleared = 0;
     for (const order of Object.values(state.orders || {})) {
         const dealId = order?.orderId || order?.dealId;
         if (!dealId || order.republishedAt) continue;
-        if (!shouldRepublishOrder(order)) continue;
+        if (!shouldRepublishOrder(order)) {
+            if (clearRepublishFlags(state, dealId, order, skipRepublishReason(order))) {
+                cleared++;
+            }
+            continue;
+        }
         let attempts = Number(order.republishAttempts || 0);
         if (
             attempts >= maxRetries
@@ -533,13 +571,18 @@ export function recoverStuckRepublishes(client, state) {
         if (!order.republishScheduled && !order.republishError) continue;
         if (isRepublishQueued(dealId)) continue;
         scheduleRepublishItem(client, state, order, {
-            delayOverrideMs: staggerMs * n,
+            delayOverrideMs: staggerMs * (n + 1),
         });
         n++;
     }
+    if (cleared) {
+        console.log(
+            `[sell] recover: снято ${cleared} платных/не-🎁 из очереди перевыставления`,
+        );
+    }
     if (n) {
         console.log(
-            `[sell] recover: ${n} зависших перевыставлений в очередь (stagger ${staggerMs / 1000}с)`,
+            `[sell] recover: ${n} зависших 🎁 в очередь (stagger ${staggerMs / 1000}с)`,
         );
     }
 }
