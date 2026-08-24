@@ -28,12 +28,20 @@ function publishEnabled() {
 }
 
 /**
- * Достаточно kk: цену PlayerOK часто не кладёт в ITEM_PAID (itemPriceRub=null).
- * Цену подтянем из completed-list / itemMeta при publish.
+ * Перевыставляем только бесплатные 🎁 (профиль).
+ * Платные премки в поиске (·) больше не клонируем — статус стоит ₽.
  */
 export function shouldRepublishOrder(order) {
     const kk = order?.amountKk ?? parseAmountKk(order?.itemName);
-    return Boolean(kk);
+    if (!kk) return false;
+    return isMarkedProfileLot(order?.itemName);
+}
+
+export function skipRepublishReason(order) {
+    const kk = order?.amountKk ?? parseAmountKk(order?.itemName);
+    if (!kk) return 'нет kk';
+    if (!isMarkedProfileLot(order?.itemName)) return 'платный лот, только 🎁';
+    return null;
 }
 
 function publishDelayMs() {
@@ -468,8 +476,9 @@ async function runRepublishAttempt(client, _stateSnapshot, orderSnapshot, dealId
 export function scheduleRepublishItem(client, state, order, { delayOverrideMs } = {}) {
     if (!publishEnabled()) return;
     if (!shouldRepublishOrder(order)) {
+        const why = skipRepublishReason(order);
         console.log(
-            `[sell] перевыставление пропуск: ${order?.itemName || '?'} (нет kk)`,
+            `[sell] перевыставление пропуск: ${order?.itemName || '?'} (${why})`,
         );
         return;
     }
