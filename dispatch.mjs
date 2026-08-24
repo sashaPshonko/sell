@@ -30,18 +30,24 @@ async function getTransport() {
  */
 export async function dispatchOrder(order, state = null, opts = {}) {
     const force = Boolean(opts.force || opts.resync);
-    if (state?.orders && !force) {
-        const oid = order.orderId || order.dealId;
-        const existing = state.orders[oid];
-        if (existing) {
-            const { canDispatchToSellbot } = await import('./lib/playerok-deal-sync.mjs');
-            if (!canDispatchToSellbot(existing)) {
-                console.log(
-                    `[dispatch] пропуск ${oid?.slice(0, 8)}… (заказ закрыт, phase=${existing.phase})`,
-                );
-                void dispatchCancelOrder(oid, state);
-                return { sent: 0, skipped: true };
-            }
+    const oid = order.orderId || order.dealId;
+    const existing = state?.orders?.[oid];
+    if (existing) {
+        const { canDispatchToSellbot, isBotFatalPaused } = await import(
+            './lib/playerok-deal-sync.mjs'
+        );
+        if (isBotFatalPaused(existing)) {
+            console.log(
+                `[dispatch] пропуск ${oid?.slice(0, 8)}… (bot fatal: ${existing.lastError})`,
+            );
+            return { sent: 0, skipped: true };
+        }
+        if (!force && !canDispatchToSellbot(existing)) {
+            console.log(
+                `[dispatch] пропуск ${oid?.slice(0, 8)}… (заказ закрыт, phase=${existing.phase})`,
+            );
+            void dispatchCancelOrder(oid, state);
+            return { sent: 0, skipped: true };
         }
     }
 
@@ -50,7 +56,6 @@ export async function dispatchOrder(order, state = null, opts = {}) {
         console.warn('[dispatch] WS отключён');
         return { sent: 0 };
     }
-    const existing = state?.orders?.[order.orderId || order.dealId];
     const priorWithdrawn = Number(
         existing?.clanPlayerWithdrawn ?? order.clanPlayerWithdrawn ?? 0,
     );

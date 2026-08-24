@@ -61,6 +61,7 @@ import {
     buyerHasPendingOrder,
     isOrderFulfilled,
     isDeliveryAttemptsExhausted,
+    isBotFatalPaused,
     MAX_DELIVERY_ATTEMPTS,
 } from './lib/playerok-deal-sync.mjs';
 
@@ -679,6 +680,15 @@ export async function applyNickCommandUpdates(
             const nickChanged = order.nick !== u.nick;
             const prevNick = order.nick;
 
+            if (isBotFatalPaused(order)) {
+                order.nick = u.nick;
+                nickApplied = true;
+                console.log(
+                    `[sell] ${order.orderId?.slice(0, 8)}…: ник ${u.nick} — бот на паузе (${order.lastError}), ждём замену`,
+                );
+                continue;
+            }
+
             order.nick = u.nick;
             order.pausedUntilNick = false;
             // Сброс подсказок только при СМЕНЕ ника (не при повторном том же нике)
@@ -896,6 +906,7 @@ function buildQueueStatusMessage(state, order, nick) {
 async function notifyDeliveryQueueStatus(client, state, chatId, order, nick, opts = {}) {
     if (!client || !order || order.queueStatusSentAt) return;
     if (isOrderFulfilled(order)) return;
+    if (isBotFatalPaused(order)) return;
     if (
         !isActionableOrder(order)
         && order.phase !== 'dispatched'

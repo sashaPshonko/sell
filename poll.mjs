@@ -30,7 +30,12 @@ import {
 } from './lib/delivery-queue.mjs';
 import { cancelClosedOrdersOnSellbot } from './lib/sellbot-cancel.mjs';
 import { isRetryableDeliveryFailure } from './sellbot/lib/delivery-retry.mjs';
-import { isOrderFulfilled, clanDeliveryRetryReset, playerokNeedsDelivery } from './lib/playerok-deal-sync.mjs';
+import {
+    isOrderFulfilled,
+    clanDeliveryRetryReset,
+    playerokNeedsDelivery,
+    recoverBotFatalPausedOrders,
+} from './lib/playerok-deal-sync.mjs';
 import { applyOrderPayBonus } from './lib/pay-bonus.mjs';
 import { setBotBalance, canAffordOrder } from './lib/bot-balance.mjs';
 import { composeInsufficientFundsHint } from './lib/insufficient-funds-hint.mjs';
@@ -329,6 +334,7 @@ async function handleBotEvents(client, state) {
                         (info.username ? ` (${info.username})` : ''),
                 );
             }
+            recoverBotFatalPausedOrders(state, { username: ev.username });
             continue;
         }
 
