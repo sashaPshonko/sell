@@ -25,11 +25,7 @@ import { setupProtocolResilience } from './lib/protocol-resilience.mjs';
 import { setupChatSafeGuard } from './lib/chat-safe.mjs';
 import { audit } from '../lib/audit.mjs';
 import { isRetryableDeliveryFailure } from './lib/delivery-retry.mjs';
-import {
-    listDukeNicks,
-    shuffleInPlace,
-    isPaySuccessLine,
-} from './lib/duke-pay.mjs';
+import { handleCaptchaLogin, attachMapCache, isCaptchaChat } from '../../4narek-1.12/lib/captcha/solve-flow.mjs';
 
 // --- маркеры чата ---
 const CLAN_INVITE_OK = '[⚔] Вы отправили приглашение в клан игроку';
@@ -95,10 +91,12 @@ const config = {
     timeJoinAnarchy: 0,
 };
 
-const anarchyCmd = `/an${config.anarchy}`;
+const CAPTCHA_SOLVER_URL = process.env.CAPTCHA_SOLVER_URL || 'http://127.0.0.1:8799';
 
 var bot = null;
+let liveBot = null;
 let connecting = false;
+let captchaBusy = false;
 let ready = false;
 let delivering = false;
 let currentOrder = null;
@@ -416,6 +414,39 @@ function notifyBanned(ban) {
     shutdown('banned');
 }
 
+async function solveCaptchaFromChat() {
+    const b = liveBot || bot;
+    if (!b || captchaBusy) return;
+    captchaBusy = true;
+    parentPort.postMessage(`${config.username} - решаю капчу`);
+    logInfo(`капча → солвер ${CAPTCHA_SOLVER_URL}`);
+    try {
+        const solved = await handleCaptchaLogin(b, {
+            password: config.password,
+            solverUrl: CAPTCHA_SOLVER_URL,
+            username: config.username,
+            log: (...a) => logInfo(a.join(' ')),
+        });
+        logOk(
+            `капча принята ${solved.pred} conf=${solved.conf} try=${solved.attempt}`,
+        );
+        parentPort.postMessage(`${config.username} - капча ок ${solved.pred}`);
+    } catch (err) {
+        logWarn(`капча fail: ${err?.message || err}`);
+        parentPort.postMessage(`${config.username} - ввести капчу`);
+        if (healthCheckActive) {
+            captchaBusy = false;
+            return finishHealth('captcha');
+        }
+        if (currentOrder) endDelivery('captcha');
+        else flushQueueAsFailed('captcha');
+        captchaBusy = false;
+        shutdown('captcha');
+        return;
+    }
+    captchaBusy = false;
+}
+
 function handleChatMessage(raw) {
     const text = plain(raw);
 
@@ -425,12 +456,8 @@ function handleChatMessage(raw) {
         return;
     }
 
-    if (text.toLowerCase().includes('botfilter >> введите номер с картинки')) {
-        if (healthCheckActive) return finishHealth('captcha');
-        parentPort.postMessage(`${config.username} - ввести капчу`);
-        if (currentOrder) endDelivery('captcha');
-        else flushQueueAsFailed('captcha');
-        shutdown('captcha');
+    if (isCaptchaChat(text)) {
+        void solveCaptchaFromChat();
         return;
     }
 
@@ -1051,6 +1078,9 @@ async function connectBot() {
         }
 
         const b = mineflayer.createBot(botOpts);
+        liveBot = b;
+        attachMapCache(b);
+        wireBot(b);
 
         let settled = false;
         const timer = setTimeout(() => {
@@ -1059,7 +1089,7 @@ async function connectBot() {
             connecting = false;
             try { b.quit(); } catch { /* */ }
             reject(new Error('таймаут spawn'));
-        }, 45_000);
+        }, 180_000);
 
         const done = (err, result) => {
             if (settled) return;
@@ -1070,10 +1100,12 @@ async function connectBot() {
             else resolve(result);
         };
 
-        wireBot(b);
-
         b.once('spawn', async () => {
             try {
+                const waitFrom = Date.now();
+                while (captchaBusy && Date.now() - waitFrom < 120_000) {
+                    await sleep(250);
+                }
                 logInfo('spawn → /l → joinAnarchy');
                 await rnd(1000, 3000);
                 b.chat(`/l ${config.password}`);
@@ -1111,8 +1143,9 @@ function shutdown(reason) {
     currentOrder = null;
     resetDeliveryFlags();
     resetGui();
-    try { bot?.quit(); } catch { /* */ }
+    try { (bot || liveBot)?.quit(); } catch { /* */ }
     bot = null;
+    liveBot = null;
     logInfo(`отключение (${reason})`);
     post('shutdown', { reason });
     if (reason === 'banned' || reason === 'captcha') {
