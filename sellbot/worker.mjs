@@ -425,6 +425,7 @@ async function solveCaptchaFromChat() {
             password: config.password,
             solverUrl: CAPTCHA_SOLVER_URL,
             username: config.username,
+            skipReg: true,
             log: (...a) => logInfo(a.join(' ')),
         });
         logOk(
