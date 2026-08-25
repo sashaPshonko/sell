@@ -257,6 +257,14 @@ export function buildDeliveryFailHint(reason, ctx = null) {
             );
             return lines.join('\n');
         case 'proxy_timeout':
+            lines.push(
+                '📋 Причина: проблема с прокси — бот не может зайти на сервер.',
+                'Это не твоя ошибка.',
+                '⏳ Когда заработает — неизвестно.',
+                '',
+                '❌ Верни оплату командой /cancel',
+            );
+            return lines.join('\n');
         case 'bot_offline':
             lines.push(
                 '📋 Причина: бот сейчас не работает (нет связи с сервером).',
