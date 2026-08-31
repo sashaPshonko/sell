@@ -21,6 +21,8 @@ import {
     publishRetryDelayMs,
     isPublishRateLimitError,
     notePublishRateLimit,
+    notePublishSuccess,
+    paidAtMsFromOrder,
 } from './lib/publish-queue.mjs';
 
 function publishEnabled() {
@@ -440,6 +442,7 @@ async function runRepublishAttempt(client, _stateSnapshot, orderSnapshot, dealId
                 `[sell] лот уже в продаже: ${fresh.itemName || slug || itemId}`,
             );
             await saveState(state);
+            notePublishSuccess();
             return;
         }
         if (completed?.id) {
@@ -461,6 +464,7 @@ async function runRepublishAttempt(client, _stateSnapshot, orderSnapshot, dealId
             republishAttempts: attempt + 1,
         });
         console.log(`[sell] лот перевыставлен: ${order.itemName || order.itemId}`);
+        notePublishSuccess();
     } catch (e) {
         const msg = String(e.message || e);
         const rateLimited = isPublishRateLimitError(msg);
@@ -495,8 +499,11 @@ async function runRepublishAttempt(client, _stateSnapshot, orderSnapshot, dealId
                 ...(getOrder(state, dealId) || {}),
                 republishAttempts: nextAttempt,
             };
-            queueRepublish(dealId, retryMs, () =>
-                runRepublishAttempt(client, state, retryOrder, dealId, nextAttempt),
+            queueRepublish(
+                dealId,
+                retryMs,
+                () => runRepublishAttempt(client, state, retryOrder, dealId, nextAttempt),
+                { paidAtMs: paidAtMsFromOrder(retryOrder) },
             );
             return;
         }
@@ -528,7 +535,7 @@ export function scheduleRepublishItem(client, state, order, { delayOverrideMs } 
 
     const existing = getOrder(state, dealId);
     if (existing?.republishedAt) return;
-    if (isRepublishQueued(dealId)) return;
+    if (isRepublishQueued(dealId) && !delayOverrideMs) return;
     if (existing?.republishScheduled && !existing?.republishError && !delayOverrideMs) return;
 
     const delayMs = delayOverrideMs ?? publishDelayMs();
@@ -545,8 +552,11 @@ export function scheduleRepublishItem(client, state, order, { delayOverrideMs } 
             `item=${itemRef}… (попытка ${attempt + 1}/${publishMaxRetries()}, очередь)`,
     );
 
-    queueRepublish(dealId, delayMs, () =>
-        runRepublishAttempt(client, state, order, dealId, attempt),
+    queueRepublish(
+        dealId,
+        delayMs,
+        () => runRepublishAttempt(client, state, order, dealId, attempt),
+        { paidAtMs: paidAtMsFromOrder(order) },
     );
 }
 
@@ -555,7 +565,7 @@ export function recoverStuckRepublishes(client, state) {
     if (!publishEnabled()) return;
     const maxRetries = publishMaxRetries();
     // Не долбить PlayerOK пачкой после рестарта — иначе вечный rate-limit.
-    const staggerMs = Number(process.env.PUBLISH_RECOVER_STAGGER_MS || 45_000);
+    const staggerMs = Number(process.env.PUBLISH_RECOVER_STAGGER_MS || 8_000);
     let n = 0;
     let cleared = 0;
     const pending = [];
@@ -590,7 +600,7 @@ export function recoverStuckRepublishes(client, state) {
     const take = pending.slice(0, republishRecoverMax());
     for (const order of take) {
         scheduleRepublishItem(client, state, order, {
-            delayOverrideMs: staggerMs * (n + 1),
+            delayOverrideMs: staggerMs * n,
         });
         n++;
     }
