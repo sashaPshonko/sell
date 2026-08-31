@@ -51,7 +51,6 @@ import { cancelDealOnPlayerok } from './cancel.mjs';
 import {
     isClanInvestCancelBlocked,
     isSubscriptionCancelBlocked,
-    latestPaidDealIsSubscription,
 } from './lib/order-cancel.mjs';
 import { DELIVERY_ANARCHY } from './messages.mjs';
 import { isStaleDeal, isActionableOrder } from './lib/deal-cutoff.mjs';
@@ -499,13 +498,6 @@ export async function applyCancelCommands(
         if (!isCancelCommand(msg.text)) continue;
 
         known.add(msg.id);
-
-        if (latestPaidDealIsSubscription(messages, buyerId, msgAt)) {
-            console.log(
-                `[sell] /cancel проигнорирован: подписка (чат ${chatId.slice(0, 8)}…)`,
-            );
-            continue;
-        }
 
         let cancelled = 0;
         let blocked = 0;

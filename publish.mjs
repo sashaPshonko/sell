@@ -31,17 +31,28 @@ function publishEnabled() {
  * Перевыставляем только бесплатные 🎁 (профиль).
  * Платные премки в поиске (·) больше не клонируем — статус стоит ₽.
  */
-export function shouldRepublishOrder(order) {
-    const kk = order?.amountKk ?? parseAmountKk(order?.itemName);
-    if (!kk) return false;
-    return isMarkedProfileLot(order?.itemName);
+export function republishMaxAgeMs() {
+    return Number(process.env.REPUBLISH_MAX_AGE_MS || 12 * 60 * 60 * 1000);
 }
 
-export function skipRepublishReason(order) {
+export function republishRecoverMax() {
+    return Number(process.env.REPUBLISH_RECOVER_MAX || 5);
+}
+
+export function skipRepublishReason(order, now = Date.now()) {
+    if (order?.phase === 'cancelled') return 'отменён';
     const kk = order?.amountKk ?? parseAmountKk(order?.itemName);
     if (!kk) return 'нет kk';
     if (!isMarkedProfileLot(order?.itemName)) return 'платный лот, только 🎁';
+    const paid = Date.parse(order?.paidAt || '');
+    if (Number.isFinite(paid) && paid > 0 && now - paid > republishMaxAgeMs()) {
+        return 'старше окна';
+    }
     return null;
+}
+
+export function shouldRepublishOrder(order, now = Date.now()) {
+    return skipRepublishReason(order, now) == null;
 }
 
 /** Снять флаги очереди у заказа, который больше не перевыставляем (· / нет kk). */
@@ -547,6 +558,7 @@ export function recoverStuckRepublishes(client, state) {
     const staggerMs = Number(process.env.PUBLISH_RECOVER_STAGGER_MS || 45_000);
     let n = 0;
     let cleared = 0;
+    const pending = [];
     for (const order of Object.values(state.orders || {})) {
         const dealId = order?.orderId || order?.dealId;
         if (!dealId || order.republishedAt) continue;
@@ -570,6 +582,13 @@ export function recoverStuckRepublishes(client, state) {
         if (attempts >= maxRetries) continue;
         if (!order.republishScheduled && !order.republishError) continue;
         if (isRepublishQueued(dealId)) continue;
+        pending.push(order);
+    }
+    pending.sort(
+        (a, b) => Date.parse(b.paidAt || 0) - Date.parse(a.paidAt || 0),
+    );
+    const take = pending.slice(0, republishRecoverMax());
+    for (const order of take) {
         scheduleRepublishItem(client, state, order, {
             delayOverrideMs: staggerMs * (n + 1),
         });
@@ -577,12 +596,17 @@ export function recoverStuckRepublishes(client, state) {
     }
     if (cleared) {
         console.log(
-            `[sell] recover: снято ${cleared} платных/не-🎁 из очереди перевыставления`,
+            `[sell] recover: снято ${cleared} устаревших/не-🎁 из очереди перевыставления`,
+        );
+    }
+    if (pending.length > take.length) {
+        console.log(
+            `[sell] recover: ${pending.length - take.length} 🎁 позже (лимит ${republishRecoverMax()})`,
         );
     }
     if (n) {
         console.log(
-            `[sell] recover: ${n} зависших 🎁 в очередь (stagger ${staggerMs / 1000}с)`,
+            `[sell] recover: ${n} свежих 🎁 в очередь (stagger ${staggerMs / 1000}с)`,
         );
     }
 }

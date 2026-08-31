@@ -1101,6 +1101,7 @@ async function tick() {
     if (!republishRecovered) {
         republishRecovered = true;
         recoverStuckRepublishes(client, state);
+        await saveState(state);
     }
     console.log(`[sell] ${viewerData.viewer.username} | чаты…`);
 
