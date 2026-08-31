@@ -48,7 +48,11 @@ import { canAffordOrder } from './lib/bot-balance.mjs';
 import { composeInsufficientFundsHint } from './lib/insufficient-funds-hint.mjs';
 import { isBuyerBanned } from './lib/banlist.mjs';
 import { cancelDealOnPlayerok } from './cancel.mjs';
-import { isBuyerOrderCancelBlocked } from './lib/order-cancel.mjs';
+import {
+    isClanInvestCancelBlocked,
+    isSubscriptionCancelBlocked,
+    latestPaidDealIsSubscription,
+} from './lib/order-cancel.mjs';
 import { DELIVERY_ANARCHY } from './messages.mjs';
 import { isStaleDeal, isActionableOrder } from './lib/deal-cutoff.mjs';
 import {
@@ -496,6 +500,13 @@ export async function applyCancelCommands(
 
         known.add(msg.id);
 
+        if (latestPaidDealIsSubscription(messages, buyerId, msgAt)) {
+            console.log(
+                `[sell] /cancel проигнорирован: подписка (чат ${chatId.slice(0, 8)}…)`,
+            );
+            continue;
+        }
+
         let cancelled = 0;
         let blocked = 0;
         let playerokCancelled = 0;
@@ -521,7 +532,13 @@ export async function applyCancelCommands(
         );
 
         for (const order of eligible.slice(0, 1)) {
-            if (isBuyerOrderCancelBlocked(order)) {
+            if (isSubscriptionCancelBlocked(order)) {
+                console.log(
+                    `[sell] /cancel проигнорирован: подписка ${order.orderId.slice(0, 8)}…`,
+                );
+                continue;
+            }
+            if (isClanInvestCancelBlocked(order)) {
                 blocked += 1;
                 console.log(
                     `[sell] /cancel отклонён: деньги в казне ${order.orderId.slice(0, 8)}…`,
