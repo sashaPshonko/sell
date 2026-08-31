@@ -16,6 +16,102 @@ export function isCurrencyKkLot(itemName) {
     return /^\d+(?:[.,]\d+)?\s*kk\b/i.test(n);
 }
 
+/**
+ * Подписка botpodpopcorn на PlayerOK.
+ * В {{ITEM_PAID}} есть только deal.item.name / slug / id — своего SKU нет.
+ * Маркеры: · = валюта с премкой, 🎁 = валюта без премки, 🤖 = подписка.
+ * Подписка — свободный матч: в названии есть 🤖 и есть число (дни). Надпись любая.
+ *
+ * Запас: BPP 7д; слово botpodpopcorn в name/slug. Не голое «popcorn».
+ * Точные id: POPCORN_ITEM_IDS=uuid,uuid
+ */
+const ROBOT_EMOJI = /🤖\uFE0F?/u;
+const SUB_TITLE_PREFIX = /^\s*bpp(?:\s+|[-_])/i;
+const SUB_NAME_WORD = /botpodpopcorn/i;
+
+/** Первое целое 1–3 цифры, не кусок более длинного числа. */
+function isolatedDaysInText(text) {
+    for (const m of String(text).matchAll(/(?<!\d)(\d{1,3})(?!\d)/g)) {
+        const n = Number(m[1]);
+        if (Number.isFinite(n) && n > 0) return n;
+    }
+    return null;
+}
+
+function subscriptionBlob(itemName, itemSlug, itemId) {
+    return `${itemName || ''} ${itemSlug || ''} ${itemId || ''}`.toLowerCase();
+}
+
+export function isSubscriptionLot(itemName, itemSlug = '', itemId = '') {
+    if (isCurrencyKkLot(itemName)) return false;
+    const name = String(itemName || '');
+    const blob = subscriptionBlob(itemName, itemSlug, itemId);
+    const ids = String(process.env.POPCORN_ITEM_IDS || '')
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+    if (ids.length && ids.some((id) => blob.includes(id))) return true;
+    const extra = String(process.env.POPCORN_ITEM_MATCH || '')
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+    if (extra.length && extra.some((m) => m && blob.includes(m))) return true;
+    if (ROBOT_EMOJI.test(name) && isolatedDaysInText(name) != null) return true;
+    if (SUB_TITLE_PREFIX.test(name)) return true;
+    return SUB_NAME_WORD.test(name) || SUB_NAME_WORD.test(String(itemSlug || ''));
+}
+
+function parseDaysFromBlob(s) {
+    const months = s.match(/(\d+)\s*(?:мес(?:яц(?:а|ев)?)?|month)/i);
+    if (months) return Math.max(1, Number(months[1]) * 30);
+    if (/(?:^|\s)(?:месяц|month)(?:\s|$)/i.test(s)) return 30;
+
+    const weeks = s.match(/(\d+)\s*(?:недел|week)/i);
+    if (weeks) return Math.max(1, Number(weeks[1]) * 7);
+
+    const days = s.match(/(\d+)\s*(?:дн(?:ей|я|ь)?|days?|d\b)/i);
+    if (days) return Math.max(1, Number(days[1]));
+
+    return null;
+}
+
+/**
+ * Дни: первое изолированное число в названии (у 🤖-лотов — любое место).
+ * Иначе хвост после BPP / слова. Нет срока → POPCORN_DEFAULT_DAYS (7).
+ */
+export function parseSubscriptionDays(itemName, itemSlug = '') {
+    if (!isSubscriptionLot(itemName, itemSlug)) return null;
+    const name = String(itemName || '');
+
+    if (ROBOT_EMOJI.test(name)) {
+        const n = isolatedDaysInText(name);
+        if (n != null) return n;
+    }
+
+    const afterBpp = name.match(/^\s*bpp(?:\s+|[-_])(.+)$/i)?.[1] || '';
+    const s = `${afterBpp || name} ${itemSlug || ''}`.toLowerCase().replace(/ё/g, 'е');
+
+    const fromWords = parseDaysFromBlob(s);
+    if (fromWords != null) return fromWords;
+
+    const trail = String(itemName || '').match(/(?:^|[^\d])(\d{1,3})\s*$/);
+    if (trail) return Math.max(1, Number(trail[1]));
+
+    const def = Number(process.env.POPCORN_DEFAULT_DAYS || 7);
+    return Number.isFinite(def) && def > 0 ? def : 7;
+}
+
+export function parseBuyerEmailText(text) {
+    const t = String(text || '').trim();
+    const m = t.match(/^\/mail\s+(\S+)/i) || t.match(/^почта\s+(\S+)/i);
+    if (m?.[1]) {
+        const addr = m[1].replace(/[<>]/g, '').trim();
+        return addr.includes('@') ? addr : null;
+    }
+    if (/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(t)) return t;
+    return null;
+}
+
 /** Сколько KK: «100KK FUNTIME», «50kk», «150кк spooky» */
 export function parseAmountKk(itemName) {
     if (!isCurrencyKkLot(itemName)) return null;
@@ -457,6 +553,7 @@ export function findIgnoredPaidDeals(messages) {
         if (msg.deal.direction !== 'OUT') continue;
         const name = msg.deal.item?.name;
         if (isCurrencyKkLot(name) && parseAmountKk(name) != null) continue;
+        if (isSubscriptionLot(name, msg.deal.item?.slug, msg.deal.item?.id)) continue;
         ignored.push({ dealId: msg.deal.id, itemName: name || '(без названия)' });
     }
     return ignored;
@@ -474,6 +571,56 @@ export function findAllCurrencyPaidDeals(messages) {
         }
     }
     return [...byId.values()].sort((a, b) => Date.parse(a.paidAt) - Date.parse(b.paidAt));
+}
+
+function buildSubscriptionDeal(msg) {
+    if (msg.text !== '{{ITEM_PAID}}' || !msg.deal) return null;
+    if (msg.deal.direction !== 'OUT') return null;
+    const item = msg.deal.item;
+    const name = item?.name;
+    const slug = item?.slug || '';
+    if (!isSubscriptionLot(name, slug, item?.id)) return null;
+    const days = parseSubscriptionDays(name, slug);
+    if (days == null) return null;
+    return {
+        dealId: msg.deal.id,
+        chatId: msg.deal.chat?.id,
+        status: msg.deal.status,
+        buyer: msg.deal.user?.username,
+        buyerId: msg.deal.user?.id,
+        buyerEmail: msg.deal.user?.email || null,
+        itemId: item?.id,
+        itemName: name,
+        itemSlug: slug,
+        days,
+        paidAt: msg.createdAt,
+    };
+}
+
+export function findAllSubscriptionPaidDeals(messages) {
+    const byId = new Map();
+    for (const msg of messages) {
+        const deal = buildSubscriptionDeal(msg);
+        if (!deal) continue;
+        const prev = byId.get(deal.dealId);
+        if (!prev || Date.parse(deal.paidAt) > Date.parse(prev.paidAt)) {
+            byId.set(deal.dealId, deal);
+        }
+    }
+    return [...byId.values()].sort((a, b) => Date.parse(a.paidAt) - Date.parse(b.paidAt));
+}
+
+export function findBuyerEmailInChat(messages, buyerId, afterIso) {
+    const after = afterIso ? Date.parse(afterIso) : 0;
+    let found = null;
+    for (const msg of messages) {
+        if (buyerId && !sameUserId(msg.user?.id, buyerId)) continue;
+        const at = Date.parse(msg.createdAt || 0);
+        if (after && Number.isFinite(at) && at < after) continue;
+        const email = parseBuyerEmailText(msg.text);
+        if (email) found = email;
+    }
+    return found;
 }
 
 /** Последняя оплата в чате */

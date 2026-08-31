@@ -22,6 +22,7 @@ import {
     hasDispatchStatusInChat,
     buildNewOrderTwinHint,
     buildOrderCancelledHint,
+    buildOrderCancelRefundFailedHint,
     buildOrderCancelDeniedHint,
     buildDispatchingHint,
     buildNickDeliveryActiveHint,
@@ -498,10 +499,19 @@ export async function applyCancelCommands(
         let cancelled = 0;
         let blocked = 0;
         let playerokCancelled = 0;
+        let playerokRefundFailed = 0;
+        let playerokRefundError = '';
+        const autoPok = process.env.AUTO_CANCEL_PLAYEROK === '1';
         const eligible = [];
         for (const order of ordersInChat(state, chatId)) {
             if (order.buyerId !== buyerId) continue;
-            if (order.phase === 'completed' || order.phase === 'cancelled') continue;
+            if (order.phase === 'completed') continue;
+            if (order.phase === 'cancelled') {
+                if (autoPok && !order.playerokCancelledAt) {
+                    eligible.push(order);
+                }
+                continue;
+            }
             const paidAtMs = order.paidAt ? Date.parse(order.paidAt) : 0;
             if (paidAtMs > msgAt) continue;
             eligible.push(order);
@@ -519,15 +529,18 @@ export async function applyCancelCommands(
                 continue;
             }
 
-            const wasDispatched = order.phase === 'dispatched';
-            setOrderPhase(state, order.orderId, 'cancelled', {
-                cancelledAt: new Date().toISOString(),
-            });
-            if (wasDispatched) {
-                await dispatchCancelOrder(order.orderId, state);
+            const retryRefund = order.phase === 'cancelled';
+            if (!retryRefund) {
+                const wasDispatched = order.phase === 'dispatched';
+                setOrderPhase(state, order.orderId, 'cancelled', {
+                    cancelledAt: new Date().toISOString(),
+                });
+                if (wasDispatched) {
+                    await dispatchCancelOrder(order.orderId, state);
+                }
             }
 
-            if (process.env.AUTO_CANCEL_PLAYEROK === '1') {
+            if (autoPok) {
                 try {
                     await cancelDealOnPlayerok(client, order.orderId);
                     setOrderPhase(state, order.orderId, 'cancelled', {
@@ -535,8 +548,10 @@ export async function applyCancelCommands(
                     });
                     playerokCancelled += 1;
                 } catch (e) {
+                    playerokRefundFailed += 1;
+                    playerokRefundError = e?.message || String(e);
                     console.warn(
-                        `[sell] PlayerOK отмена ${order.orderId.slice(0, 8)}…: ${e.message}`,
+                        `[sell] PlayerOK отмена ${order.orderId.slice(0, 8)}…: ${playerokRefundError}`,
                     );
                 }
             }
@@ -547,7 +562,18 @@ export async function applyCancelCommands(
             );
         }
 
-        if (cancelled > 0 && !replied) {
+        if (cancelled > 0 && playerokRefundFailed > 0 && !replied) {
+            try {
+                await sendChatMessage(
+                    client,
+                    chatId,
+                    buildOrderCancelRefundFailedHint(playerokRefundError),
+                );
+            } catch (e) {
+                console.warn(`[sell] отмена, ошибка возврата в чат: ${e.message}`);
+            }
+            replied = true;
+        } else if (cancelled > 0 && !replied) {
             try {
                 await sendChatMessage(
                     client,

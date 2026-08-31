@@ -104,6 +104,24 @@ export function buildOrderCancelledHint(playerokCancelled = false) {
     return lines.join('\n');
 }
 
+/** /cancel прошёл у нас, но PlayerOK не оформил возврат */
+export function buildOrderCancelRefundFailedHint(errMsg = '') {
+    const reason = String(errMsg || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 160);
+    const lines = [
+        '❌ Не получилось оформить возврат на PlayerOK.',
+        '',
+        'Попробуй /cancel ещё раз через минуту.',
+        'Если снова ошибка — напиши в поддержку PlayerOK.',
+    ];
+    if (reason) {
+        lines.push('', `⚠️ ${reason}`);
+    }
+    return lines.join('\n');
+}
+
 /** /cancel после /clan invest — деньги уже в казне, отмена невозможна */
 export function buildOrderCancelDeniedHint() {
     return [

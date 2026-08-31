@@ -55,6 +55,7 @@ import {
     DELIVERY_ANARCHY,
 } from './messages.mjs';
 import { confirmDealOnPlayerok } from './confirm.mjs';
+import { fulfillPopcornSubscriptions } from './lib/popcorn-license.mjs';
 import { scheduleRepublishItem, republishWhen, recoverStuckRepublishes } from './publish.mjs';
 import {
     registerDealOrders,
@@ -917,6 +918,8 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
         sellerUserId,
         new Set(chatForBan.processedBanMessageIds || []),
     );
+
+    await fulfillPopcornSubscriptions(client, state, chatId, messages);
 
     const dealsFromMessages = findAllCurrencyPaidDeals(messages);
 

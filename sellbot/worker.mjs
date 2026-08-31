@@ -225,6 +225,7 @@ async function joinAnarchy(b, { rejoin = false } = {}) {
 
     if (rejoin) config.timeJoinAnarchy = 0;
 
+    const anarchyCmd = `/an${config.anarchy}`;
     let anarchyCmdSentAt = 0;
 
     while (!config.timeJoinAnarchy) {
