@@ -101,17 +101,6 @@ export function parseSubscriptionDays(itemName, itemSlug = '') {
     return Number.isFinite(def) && def > 0 ? def : 7;
 }
 
-export function parseBuyerEmailText(text) {
-    const t = String(text || '').trim();
-    const m = t.match(/^\/mail\s+(\S+)/i) || t.match(/^почта\s+(\S+)/i);
-    if (m?.[1]) {
-        const addr = m[1].replace(/[<>]/g, '').trim();
-        return addr.includes('@') ? addr : null;
-    }
-    if (/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(t)) return t;
-    return null;
-}
-
 /** Сколько KK: «100KK FUNTIME», «50kk», «150кк spooky» */
 export function parseAmountKk(itemName) {
     if (!isCurrencyKkLot(itemName)) return null;
@@ -588,7 +577,6 @@ function buildSubscriptionDeal(msg) {
         status: msg.deal.status,
         buyer: msg.deal.user?.username,
         buyerId: msg.deal.user?.id,
-        buyerEmail: msg.deal.user?.email || null,
         itemId: item?.id,
         itemName: name,
         itemSlug: slug,
@@ -608,19 +596,6 @@ export function findAllSubscriptionPaidDeals(messages) {
         }
     }
     return [...byId.values()].sort((a, b) => Date.parse(a.paidAt) - Date.parse(b.paidAt));
-}
-
-export function findBuyerEmailInChat(messages, buyerId, afterIso) {
-    const after = afterIso ? Date.parse(afterIso) : 0;
-    let found = null;
-    for (const msg of messages) {
-        if (buyerId && !sameUserId(msg.user?.id, buyerId)) continue;
-        const at = Date.parse(msg.createdAt || 0);
-        if (after && Number.isFinite(at) && at < after) continue;
-        const email = parseBuyerEmailText(msg.text);
-        if (email) found = email;
-    }
-    return found;
 }
 
 /** Последняя оплата в чате */
