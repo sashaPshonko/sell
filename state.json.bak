@@ -1,0 +1,110 @@
+{
+  "orders": {
+    "1f158322-9d4f-6f70-de4a-1df74e539f78": {
+      "dealId": "1f158322-9d4f-6f70-de4a-1df74e539f78",
+      "chatId": "1f158322-9e74-6ef0-0393-9ea969f1d77b",
+      "status": "CONFIRMED",
+      "buyer": "artemka148",
+      "buyerId": "1f06320c-90f6-6ce0-15ae-44d80cbd721b",
+      "itemId": "1f15813a-4dbd-67d0-fe2c-3d1254ab0919",
+      "itemName": "150KK FUNTIME 1,21",
+      "amountKk": 150,
+      "server": "funtime",
+      "paidAt": "2026-05-25T12:06:29.993Z",
+      "orderId": "1f158322-9d4f-6f70-de4a-1df74e539f78",
+      "anarchy": "502",
+      "phase": "legacy"
+    },
+    "1f158270-e040-67b0-fc7b-ee4eb79834f9": {
+      "dealId": "1f158270-e040-67b0-fc7b-ee4eb79834f9",
+      "chatId": "1f1560ed-eb52-63a0-e28b-6eedb2bbc015",
+      "status": "CONFIRMED",
+      "buyer": "Res070qd",
+      "buyerId": "1f04a81e-952c-6e00-7845-0481847a07ef",
+      "itemId": "1f158133-a9b3-6870-4627-be3cf091f38d",
+      "itemName": "90KK FUNTIME 1.21",
+      "amountKk": 90,
+      "server": "funtime",
+      "paidAt": "2026-05-25T10:47:21.951Z",
+      "orderId": "1f158270-e040-67b0-fc7b-ee4eb79834f9",
+      "anarchy": "502",
+      "phase": "legacy"
+    },
+    "1f158253-f2d6-6590-502c-9bb87975276c": {
+      "dealId": "1f158253-f2d6-6590-502c-9bb87975276c",
+      "chatId": "1f15527e-9288-6b70-8044-17b61ca2e990",
+      "status": "SENT",
+      "buyer": "Plato5",
+      "buyerId": "1f0fa1d3-89ca-6170-2d80-68ed365157ce",
+      "itemId": "1f1581dc-4739-6100-ff73-96057c224cde",
+      "itemName": "80KK FUNTIME 1.21",
+      "amountKk": 80,
+      "server": "funtime",
+      "paidAt": "2026-05-25T10:34:02.481Z",
+      "orderId": "1f158253-f2d6-6590-502c-9bb87975276c",
+      "anarchy": "502",
+      "phase": "legacy"
+    },
+    "1f158583-2837-6b80-0349-8db5ee985525": {
+      "dealId": "1f158583-2837-6b80-0349-8db5ee985525",
+      "chatId": "1f14df17-5b4d-6b40-32ae-e6ab3fb27dac",
+      "status": "PAID",
+      "buyer": "helldyra",
+      "buyerId": "1f14df0a-615e-6aa0-be2e-8ed81d79e081",
+      "itemId": "1f158548-2d04-6360-ba6b-d96fd89ddf38",
+      "itemName": "60КК FUNTIME 1.21",
+      "amountKk": 60,
+      "server": "funtime",
+      "paidAt": "2026-05-25T16:39:52.068Z",
+      "orderId": "1f158583-2837-6b80-0349-8db5ee985525",
+      "anarchy": "502",
+      "phase": "legacy",
+      "greetedAt": "2026-05-25T16:40:07.132Z",
+      "nick": "jfdoowoejd"
+    },
+    "1f1585a6-6faa-6800-4e69-f80b5a39985f": {
+      "dealId": "1f1585a6-6faa-6800-4e69-f80b5a39985f",
+      "chatId": "1f14df17-5b4d-6b40-32ae-e6ab3fb27dac",
+      "status": "PAID",
+      "buyer": "helldyra",
+      "buyerId": "1f14df0a-615e-6aa0-be2e-8ed81d79e081",
+      "itemId": "1f15125d-0441-6a80-ee29-096aab757ee2",
+      "itemName": "50КК FUNTIME 1.21",
+      "amountKk": 50,
+      "server": "funtime",
+      "paidAt": "2026-05-25T16:54:43.828Z",
+      "orderId": "1f1585a6-6faa-6800-4e69-f80b5a39985f",
+      "anarchy": "502",
+      "phase": "completed",
+      "nick": "jfdoowoejd",
+      "dispatchedAt": "2026-05-25T16:58:22.444Z",
+      "playerokMarkedAt": "2026-05-25T16:58:30.519Z",
+      "playerokStatus": "SENT"
+    }
+  },
+  "confirmedDeals": {},
+  "chats": {
+    "1f14df17-5b4d-6b40-32ae-e6ab3fb27dac": {
+      "greetingSent": true,
+      "buyers": {
+        "1f14df0a-615e-6aa0-be2e-8ed81d79e081": {
+          "nickResetAt": "2026-05-25T16:47:15.053Z",
+          "nick": "jfdoowoejd",
+          "via": "plain",
+          "messageId": "1f1585a7-b27c-61a0-febe-fe6dd0398b1f",
+          "nickAt": "2026-05-25T16:55:06.170Z"
+        }
+      },
+      "greetingAt": "2026-05-25T16:40:07.132Z",
+      "processedNickMessageIds": [],
+      "processedCancelMessageIds": []
+    }
+  },
+  "pollStartedAt": "2026-05-25T16:58:20.122Z",
+  "_loggedSkips": {
+    "skip:1f158556-a5bc-66a0-16f0-e7a95e34ea98": true,
+    "skip:1f14df10-4e01-6f10-34a2-f795ee4d94f4": true,
+    "skip:1f158278-431a-6190-257d-b612956b1d21": true
+  },
+  "_sellSessionStartMs": 1779728300122
+}
