@@ -358,8 +358,20 @@ async function handleBotEvents(client, state) {
             console.warn(`[sell] ws: неизвестный заказ ${ev.orderId}`);
             continue;
         }
-        const chatId = order.chatId;
         const buyerId = order.buyerId;
+        let chatId = order.chatId;
+        if (!chatId && buyerId) {
+            for (const [cid, chat] of Object.entries(state.chats || {})) {
+                if (chat?.buyers?.[buyerId]) {
+                    chatId = cid;
+                    order.chatId = cid;
+                    console.log(
+                        `[sell] ws ${ev.orderId.slice(0, 8)}…: chatId с сессии покупателя`,
+                    );
+                    break;
+                }
+            }
+        }
 
         try {
             if (ev.type === 'order_missing') {
@@ -922,6 +934,15 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
     await fulfillPopcornSubscriptions(client, state, chatId, messages);
 
     const dealsFromMessages = findAllCurrencyPaidDeals(messages);
+    for (const d of dealsFromMessages) {
+        const o = d?.dealId ? getOrder(state, d.dealId) : null;
+        if (o && !o.chatId) {
+            o.chatId = chatId;
+            console.log(
+                `[sell] ${String(d.dealId).slice(0, 8)}…: восстановлен chatId (без него /nick не попадает в заказ)`,
+            );
+        }
+    }
 
     if (!dealsFromMessages.length && !chatHasOpenOrders(state, chatId) && !chatHasPendingOrders(state, chatId)) {
         for (const skip of findIgnoredPaidDeals(messages)) {

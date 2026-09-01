@@ -5,6 +5,9 @@ import { buildGreetingText } from './messages.mjs';
  * Нужен mutation из DevTools (см. captures/send-message.graphql).
  */
 export async function sendChatMessage(client, chatId, text) {
+    if (!chatId) {
+        throw new Error('sendChatMessage: нет chatId');
+    }
     const file = process.env.SEND_MESSAGE_MUTATION_FILE || './captures/send-message.graphql';
     const op = process.env.SEND_MESSAGE_OPERATION || 'createChatMessage';
 

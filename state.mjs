@@ -59,8 +59,12 @@ export function getOrder(state, dealId) {
 export function upsertOrder(state, deal) {
     const id = deal.dealId || deal.orderId;
     const prev = state.orders[id] || {};
-    state.orders[id] = { ...prev, ...deal, orderId: id, dealId: id };
-    return state.orders[id];
+    const next = { ...prev, ...deal, orderId: id, dealId: id };
+    if ((next.chatId == null || next.chatId === '') && prev.chatId) {
+        next.chatId = prev.chatId;
+    }
+    state.orders[id] = next;
+    return next;
 }
 
 export function setOrderPhase(state, dealId, phase, extra = {}) {
