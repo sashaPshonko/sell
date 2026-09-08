@@ -1,5 +1,8 @@
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 import { loadEnv } from './lib/env.mjs';
 import { audit } from './lib/audit.mjs';
+import { startLogRotate, pruneDirLogs } from './lib/log-rotate.mjs';
 import { createClient } from './playerok-client.mjs';
 import {
     findAllCurrencyPaidDeals,
@@ -1145,6 +1148,14 @@ async function tick() {
 }
 
 async function main() {
+    const root = dirname(fileURLToPath(import.meta.url));
+    startLogRotate([
+        join(root, 'sell.log'),
+        join(root, 'logs', `sell-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.log`),
+        process.env.AUDIT_FILE || join(root, 'audit.jsonl'),
+    ], { keepDays: 14, maxBytes: 80 * 1024 * 1024, intervalMs: 30 * 60 * 1000 });
+    const dropped = pruneDirLogs(join(root, 'logs'), { keepDays: 14, match: /\.log$/ });
+    if (dropped) console.log(`[sell] prune logs: ${dropped}`);
     await assertPlayerokAuth();
     console.log(`[sell] автопродажа | анархия ${DELIVERY_ANARCHY} | ws sellbot`);
     do {

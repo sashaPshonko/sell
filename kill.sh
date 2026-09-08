@@ -14,6 +14,9 @@ sleep 2
 
 mkdir -p logs
 TS=$(date +%Y%m%d)
+# старые дневные логи
+find logs -name 'sell-*.log' -mtime +14 -delete 2>/dev/null || true
+find logs -name 'sellbot-*.log' -mtime +14 -delete 2>/dev/null || true
 nohup bash scripts/run/sellbot.sh >> "logs/sellbot-${TS}.log" 2>&1 &
 sleep 1
 nohup bash scripts/run/sell.sh >> "logs/sell-${TS}.log" 2>&1 &
