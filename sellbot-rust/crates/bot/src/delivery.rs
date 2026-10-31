@@ -24,27 +24,42 @@ const HANDOFF_KEEP: f64 = 0.0;
 /// Страховка: лот в kk, не сырые монеты. 50k kk на витрине не бывает.
 const MAX_KK: f64 = 50_000.0;
 
-/// Живой FunTime (ферма, gigatuyn):
-/// `[✔] Необходимо подтверждение!` + `|| Введите повторно: /pay nick 27831258`
-/// `[✔] Успешно! Игроку nick отправлено $27,831,258`
+fn line_starts(text: &str, prefix: &str) -> bool {
+    text.lines().any(|l| l.trim().starts_with(prefix))
+}
+
+/// Системный `/pay`. Строка чата начинается с этих кусков — не обычный игрок.
 fn is_pay_ok(text: &str) -> bool {
-    text.contains("[✔] Успешно!") && text.contains("отправлено")
+    is_pay_ok_for(text, None)
+}
+
+fn is_pay_ok_for(text: &str, nick: Option<&str>) -> bool {
+    if let Some(n) = nick.filter(|s| !s.is_empty()) {
+        return line_starts(text, &format!("[✔] Успешно! Игроку {n} отправлено $"));
+    }
+    line_starts(text, "[✔] Успешно! Игроку ") && text.contains(" отправлено $")
 }
 
 fn is_pay_confirm(text: &str) -> bool {
-    text.contains("[✔] Необходимо подтверждение!")
+    line_starts(text, "[✔] Необходимо подтверждение!")
+}
+
+fn is_pay_offline(text: &str) -> bool {
+    line_starts(text, "[✔] Указанный игрок не найден!")
 }
 
 fn parse_repeat_pay(text: &str) -> Option<String> {
-    let key = "Введите повторно:";
-    let i = text.find(key)?;
-    let rest = text[i + key.len()..].trim();
-    let cmd = rest.lines().next()?.trim();
-    if cmd.starts_with("/pay ") {
-        Some(cmd.to_string())
-    } else {
-        None
+    let key = "|| Введите повторно: /pay ";
+    for line in text.lines() {
+        let l = line.trim();
+        if let Some(rest) = l.strip_prefix(key) {
+            let nick_amt = rest.trim();
+            if nick_ok(nick_amt.split_whitespace().next().unwrap_or("")) {
+                return Some(format!("/pay {nick_amt}"));
+            }
+        }
     }
+    None
 }
 
 pub fn on_chat(state: &Arc<Mutex<BotState>>, text: &str) {
@@ -58,7 +73,12 @@ pub fn on_chat(state: &Arc<Mutex<BotState>>, text: &str) {
     if let Some(cmd) = parse_repeat_pay(text) {
         st.pay_repeat_cmd = Some(cmd);
     }
-    if is_pay_ok(text) {
+    let expect = st
+        .delivery
+        .as_ref()
+        .map(|j| j.nick.as_str())
+        .or(st.handoff_to.as_deref());
+    if is_pay_ok_for(text, expect) {
         st.pay_outcome = Some(PayOutcome::Ok);
         return;
     }
@@ -66,16 +86,8 @@ pub fn on_chat(state: &Arc<Mutex<BotState>>, text: &str) {
         st.pay_outcome = Some(PayOutcome::NeedConfirm);
         return;
     }
-    if text.contains("Указанный игрок не найден") {
+    if is_pay_offline(text) {
         st.pay_outcome = Some(PayOutcome::Offline);
-        return;
-    }
-    if text.to_lowercase().contains("ник не найден") {
-        st.pay_outcome = Some(PayOutcome::Invalid);
-        return;
-    }
-    if text.contains("недостаточно денег") {
-        st.pay_outcome = Some(PayOutcome::Insufficient);
     }
 }
 
@@ -398,15 +410,22 @@ mod tests {
 
     #[test]
     fn live_funtime_pay_chat() {
-        let confirm = "[✔] Необходимо подтверждение!\n|| Введите повторно: /pay nebotovodt4n16 27831258";
-        let ok = "[✔] Успешно! Игроку nebotovodt4n16 отправлено $27,831,258";
+        let confirm = "[✔] Необходимо подтверждение!\n|| Введите повторно: /pay nebotovodt4n16 37275727";
+        let ok = "[✔] Успешно! Игроку nebotovodt4n16 отправлено $37,275,727";
+        let offline = "[✔] Указанный игрок не найден!";
         assert!(is_pay_confirm(confirm));
         assert!(!is_pay_ok(confirm));
-        assert!(is_pay_ok(ok));
+        assert!(is_pay_ok_for(ok, Some("nebotovodt4n16")));
+        assert!(!is_pay_ok_for(ok, Some("Steve")));
         assert!(!is_pay_confirm(ok));
+        assert!(is_pay_offline(offline));
+        assert!(!is_pay_offline("указанный игрок не найден, зайди"));
+        assert!(!is_pay_ok("чел Успешно! Игроку x отправлено $1"));
+        assert!(!is_pay_confirm("нужно подтверждение /pay"));
         assert_eq!(
             parse_repeat_pay(confirm).as_deref(),
-            Some("/pay nebotovodt4n16 27831258")
+            Some("/pay nebotovodt4n16 37275727")
         );
+        assert!(parse_repeat_pay("напиши /pay Steve 1").is_none());
     }
 }

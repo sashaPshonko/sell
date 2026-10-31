@@ -907,19 +907,17 @@ fn handle_chat(bot: &Client, text: &str) {
             let mut st = g.state.lock();
             st.last_payment = Some((nick, amount, std::time::Instant::now()));
         }
-    } else if text.contains("Успешно! Игроку") && text.contains("отправлено") {
+    } else if text.trim().starts_with("[✔] Успешно! Игроку ") && text.contains(" отправлено $") {
         if let Some(nick) = extract_pay_target(text) {
             info!("[pay] успешно → {nick}");
             let mut st = g.state.lock();
             st.last_my_nick_pay = Some(std::time::Instant::now());
         }
-        crate::delivery::on_chat(&g.state, text);
-    } else if text.contains("Необходимо подтверждение") {
+    } else if text.trim().starts_with("[✔] Необходимо подтверждение!") {
         info!("[pay] требует подтверждения — flush повторит");
-    } else if text.contains("Указанный игрок не найден") {
+    } else if text.trim().starts_with("[✔] Указанный игрок не найден!") {
         info!("[pay] получатель не найден — retry/forget");
         g.state.lock().treasurer_flush_in_flight = false;
-        crate::delivery::on_chat(&g.state, text);
     } else if let Some(bal) = parse_balance(text) {
         g.state.lock().balance = Some(bal);
         emit(&WorkerMsg {
