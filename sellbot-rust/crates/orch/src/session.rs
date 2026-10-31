@@ -1,7 +1,10 @@
-//! Рандомные сессии выдачи (детерминированно от ника + дня MSK).
+//! Смены выдачи: детерминированно от ника + дня MSK.
 //!
-//! У каждого бота **две** смены в сутки, каждая **не длиннее 2 часов**
-//! (50–120 мин). Старт размазан по кругу с джиттером ±50 мин.
+//! Две смены в сутки, привязаны к суточному онлайну FunTime (как в логах
+//! Go / capital: ночь 03–09 почти пустая, вечер — пик, corr(online, sales)≈0.5):
+//!   • ночь (старт ~00–05) — **3–4 часа** (мало людей, один бот закрывает тишину)
+//!   • вечер (старт ~16–22) — **1–2 часа** (пик, чаще меняем лицо)
+//!
 //! Непривязанные орк не смотрит на это окно.
 
 use std::collections::hash_map::DefaultHasher;
@@ -38,26 +41,32 @@ fn day_start_utc_ms(day: u64) -> u64 {
     day * DAY_MS - MSK_OFFSET_MS
 }
 
-/// Две смены за календарный день MSK: (start_utc_ms, end_utc_ms).
+/// Ночная смена (длинная) и вечерняя (короткая): (start_utc_ms, end_utc_ms).
 pub fn sessions_utc(nick: &str, index: usize, n: usize, salt: &str, day: u64) -> [(u64, u64); 2] {
     let n = n.max(1) as u64;
     let idx = index as u64;
     let h = mix(&[nick, salt], &[day, idx]);
-    let spread = DAY_MS / n;
-    let jitter = ((h % 101) as i64 - 50) * MIN_MS as i64; // ±50 мин
-    let base = (idx.wrapping_mul(spread)) as i64 + jitter;
-    let base = ((base % DAY_MS as i64) + DAY_MS as i64) as u64 % DAY_MS;
-
-    let dur1 = (50 + (h >> 8) % 71) * MIN_MS; // 50–120 мин
-    let gap = (10 * HOUR_MS) + ((h >> 16) % 180) * MIN_MS; // ~10–13ч до второй
-    let dur2 = (50 + (h >> 24) % 71) * MIN_MS; // 50–120 мин
-
     let start_day = day_start_utc_ms(day);
-    let s1 = start_day + base;
-    let e1 = s1 + dur1;
-    let s2 = s1 + gap;
-    let e2 = s2 + dur2;
-    [(s1, e1), (s2, e2)]
+
+    // Ночь: старты размазаны 00:00–05:00, джиттер ±25 мин, длина 180–240 мин.
+    let night_span = 5 * 60; // минут
+    let night_slot = (idx.wrapping_mul(night_span) / n) as i64;
+    let night_j = ((h % 51) as i64 - 25) * MIN_MS as i64;
+    let night_off = (night_slot * MIN_MS as i64 + night_j)
+        .clamp(0, 5 * 60 * MIN_MS as i64) as u64;
+    let night_dur = (180 + ((h >> 8) % 61)) * MIN_MS;
+
+    // Вечер/пик: старты 16:00–22:00, джиттер ±20 мин, длина 60–120 мин.
+    let peak_span = 6 * 60;
+    let peak_slot = (idx.wrapping_mul(peak_span) / n) as i64;
+    let peak_j = (((h >> 16) % 41) as i64 - 20) * MIN_MS as i64;
+    let peak_off = ((16 * 60 + peak_slot) * MIN_MS as i64 + peak_j)
+        .clamp(16 * 60 * MIN_MS as i64, 22 * 60 * MIN_MS as i64) as u64;
+    let peak_dur = (60 + ((h >> 24) % 61)) * MIN_MS;
+
+    let ns = start_day + night_off;
+    let ps = start_day + peak_off;
+    [(ns, ns + night_dur), (ps, ps + peak_dur)]
 }
 
 pub fn is_awake(nick: &str, index: usize, n: usize, salt: &str, now_ms: u64) -> bool {
@@ -89,6 +98,30 @@ pub fn session_end_ms(nick: &str, index: usize, n: usize, salt: &str, now_ms: u6
 mod tests {
     use super::*;
 
+    fn msk_hour_of(start_day: u64, t: u64) -> u64 {
+        ((t - start_day) / HOUR_MS) % 24
+    }
+
+    #[test]
+    fn night_long_peak_short() {
+        let day = 20_000u64;
+        let start = day_start_utc_ms(day);
+        for idx in 0..10 {
+            let [(ns, ne), (ps, pe)] = sessions_utc("bot", idx, 10, "s", day);
+            let nd = ne - ns;
+            let pd = pe - ps;
+            assert!(
+                nd >= 180 * MIN_MS && nd <= 240 * MIN_MS,
+                "night dur {nd}"
+            );
+            assert!(pd >= 60 * MIN_MS && pd <= 120 * MIN_MS, "peak dur {pd}");
+            let nh = msk_hour_of(start, ns);
+            let ph = msk_hour_of(start, ps);
+            assert!(nh <= 5, "night start hour {nh}");
+            assert!((16..=22).contains(&ph), "peak start hour {ph}");
+        }
+    }
+
     #[test]
     fn not_24h() {
         let nick = "testbot";
@@ -100,20 +133,7 @@ mod tests {
                 awake += 1;
             }
         }
-        assert!(awake >= 1 && awake <= 5, "awake hours {awake}");
-    }
-
-    #[test]
-    fn max_two_hours() {
-        for day in [100u64, 101, 500] {
-            for idx in 0..10 {
-                for (s, e) in sessions_utc("aaa", idx, 10, "x", day) {
-                    let d = e.saturating_sub(s);
-                    assert!(d <= 2 * HOUR_MS, "dur {d}");
-                    assert!(d >= 50 * MIN_MS, "dur {d}");
-                }
-            }
-        }
+        assert!(awake >= 2 && awake <= 8, "awake hours {awake}");
     }
 
     #[test]
