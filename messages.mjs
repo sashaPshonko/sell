@@ -423,26 +423,15 @@ export function buildProfileUpsellHint(opts) {
     return text;
 }
 
-/** Лот пробника botpodpopcorn (3 дня). `POPCORN_TRIAL_URL=0` — не слать. */
-export const DEFAULT_POPCORN_TRIAL_URL =
-    'https://playerok.com/products/7cbc10ea35b6-farm-bot-funtime-3-dnya';
+/** Старый апселл пробника ботов — больше не шлём в чат. */
+export const DEFAULT_POPCORN_TRIAL_URL = '';
 
 export function popcornTrialUrl() {
-    const raw = process.env.POPCORN_TRIAL_URL;
-    if (raw === '0' || String(raw || '').trim().toLowerCase() === 'off') return '';
-    const custom = String(raw || '').trim();
-    if (custom) return custom;
-    return DEFAULT_POPCORN_TRIAL_URL;
+    return '';
 }
 
-/** После выдачи валюты — апселл пробника ботов. */
-export function buildPopcornTrialHint(url = popcornTrialUrl()) {
-    const link = String(url || '').trim();
-    if (!link) return '';
-    return [
-        'Хочешь фармить как я — попробуй моих ботов (3 дня).',
-        link,
-    ].join('\n');
+export function buildPopcornTrialHint() {
+    return '';
 }
 
 export function buildProfileUpsellRepeatHint(opts) {
