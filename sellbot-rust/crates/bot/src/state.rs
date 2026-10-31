@@ -16,6 +16,7 @@ pub struct DeliveryJob {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PayOutcome {
     Ok,
+    NeedConfirm,
     Offline,
     Invalid,
     Insufficient,
@@ -118,6 +119,8 @@ pub struct BotState {
     pub delivery: Option<DeliveryJob>,
     pub handoff_to: Option<String>,
     pub pay_outcome: Option<PayOutcome>,
+    /// Уже отдали по этому заказу — второй `/pay` не шлём.
+    pub paid_order_ids: std::collections::HashSet<String>,
 
     pub buying_item: BuyingItem,
 
@@ -268,6 +271,7 @@ impl BotState {
             delivery: None,
             handoff_to: None,
             pay_outcome: None,
+            paid_order_ids: std::collections::HashSet::new(),
 
             buying_item: BuyingItem::default(),
 
@@ -416,6 +420,10 @@ impl BotState {
                 nick,
                 amount,
             } => {
+                if self.delivery.as_ref().map(|j| j.order_id.as_str()) == Some(order_id.as_str())
+                {
+                    return;
+                }
                 self.pay_outcome = None;
                 self.delivery = Some(DeliveryJob {
                     order_id,

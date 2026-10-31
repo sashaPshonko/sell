@@ -939,6 +939,11 @@ fn handle_chat(bot: &Client, text: &str) {
             return;
         }
 
+        // Выдача sell: не сливаем «излишек» казначею — это остаток для покупателей.
+        if g.boot.item == "sell" || g.state.lock().delivery.is_some() {
+            return;
+        }
+
         // Иначе — excess_money: bal > KEEP_SUM + EXCESS → /pay treasurer_nick.
         if bal > KEEP_SUM + EXCESS_THRESHOLD {
             let excess = (bal - KEEP_SUM).floor();
