@@ -30,13 +30,6 @@ fn line_starts(text: &str, prefix: &str) -> bool {
 
 /// Системный `/pay`. Строка чата начинается с этих кусков — не обычный игрок.
 fn is_pay_ok(text: &str) -> bool {
-    is_pay_ok_for(text, None)
-}
-
-fn is_pay_ok_for(text: &str, nick: Option<&str>) -> bool {
-    if let Some(n) = nick.filter(|s| !s.is_empty()) {
-        return line_starts(text, &format!("[✔] Успешно! Игроку {n} отправлено $"));
-    }
     line_starts(text, "[✔] Успешно! Игроку ") && text.contains(" отправлено $")
 }
 
@@ -44,8 +37,14 @@ fn is_pay_confirm(text: &str) -> bool {
     line_starts(text, "[✔] Необходимо подтверждение!")
 }
 
+/// Старый sell `settings.mjs`: `[✘] Ошибка! Указанный игрок не найден!`
+/// В клиенте тот же крестик иногда как ✖.
 fn is_pay_offline(text: &str) -> bool {
-    line_starts(text, "[✔] Указанный игрок не найден!")
+    let tail = "Ошибка! Указанный игрок не найден!";
+    text.lines().any(|l| {
+        let l = l.trim();
+        (l.starts_with("[✘]") || l.starts_with("[✖]")) && l.contains(tail)
+    })
 }
 
 fn parse_repeat_pay(text: &str) -> Option<String> {
@@ -73,12 +72,7 @@ pub fn on_chat(state: &Arc<Mutex<BotState>>, text: &str) {
     if let Some(cmd) = parse_repeat_pay(text) {
         st.pay_repeat_cmd = Some(cmd);
     }
-    let expect = st
-        .delivery
-        .as_ref()
-        .map(|j| j.nick.as_str())
-        .or(st.handoff_to.as_deref());
-    if is_pay_ok_for(text, expect) {
+    if is_pay_ok(text) {
         st.pay_outcome = Some(PayOutcome::Ok);
         return;
     }
@@ -411,14 +405,15 @@ mod tests {
     #[test]
     fn live_funtime_pay_chat() {
         let confirm = "[✔] Необходимо подтверждение!\n|| Введите повторно: /pay nebotovodt4n16 37275727";
-        let ok = "[✔] Успешно! Игроку nebotovodt4n16 отправлено $37,275,727";
-        let offline = "[✔] Указанный игрок не найден!";
+        let ok = "[✔] Успешно! Игроку NeBoToVodT4n16 отправлено $37,275,727";
+        let offline = "[✘] Ошибка! Указанный игрок не найден!";
+        let offline_ui = "[✖] Ошибка! Указанный игрок не найден!";
         assert!(is_pay_confirm(confirm));
         assert!(!is_pay_ok(confirm));
-        assert!(is_pay_ok_for(ok, Some("nebotovodt4n16")));
-        assert!(!is_pay_ok_for(ok, Some("Steve")));
+        assert!(is_pay_ok(ok));
         assert!(!is_pay_confirm(ok));
         assert!(is_pay_offline(offline));
+        assert!(is_pay_offline(offline_ui));
         assert!(!is_pay_offline("указанный игрок не найден, зайди"));
         assert!(!is_pay_ok("чел Успешно! Игроку x отправлено $1"));
         assert!(!is_pay_confirm("нужно подтверждение /pay"));

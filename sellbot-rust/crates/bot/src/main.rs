@@ -915,7 +915,9 @@ fn handle_chat(bot: &Client, text: &str) {
         }
     } else if text.trim().starts_with("[✔] Необходимо подтверждение!") {
         info!("[pay] требует подтверждения — flush повторит");
-    } else if text.trim().starts_with("[✔] Указанный игрок не найден!") {
+    } else if text.contains("Ошибка! Указанный игрок не найден!")
+        && (text.contains("[✘]") || text.contains("[✖]"))
+    {
         info!("[pay] получатель не найден — retry/forget");
         g.state.lock().treasurer_flush_in_flight = false;
     } else if let Some(bal) = parse_balance(text) {
