@@ -1,9 +1,7 @@
 //! Рандомные сессии выдачи (детерминированно от ника + дня MSK).
 //!
-//! У каждого бота **две** смены в сутки: длина 2.5–6.5ч, старт размазан
-//! по кругу с джиттером ±50 мин. Не сидим 24/7, но кто-то почти всегда
-//! в окне (при ≥3 ботах окна перекрываются).
-//!
+//! У каждого бота **две** смены в сутки, каждая **не длиннее 2 часов**
+//! (50–120 мин). Старт размазан по кругу с джиттером ±50 мин.
 //! Непривязанные орк не смотрит на это окно.
 
 use std::collections::hash_map::DefaultHasher;
@@ -50,9 +48,9 @@ pub fn sessions_utc(nick: &str, index: usize, n: usize, salt: &str, day: u64) ->
     let base = (idx.wrapping_mul(spread)) as i64 + jitter;
     let base = ((base % DAY_MS as i64) + DAY_MS as i64) as u64 % DAY_MS;
 
-    let dur1 = (150 + (h >> 8) % 241) * MIN_MS; // 2.5–6.5ч
+    let dur1 = (50 + (h >> 8) % 71) * MIN_MS; // 50–120 мин
     let gap = (10 * HOUR_MS) + ((h >> 16) % 180) * MIN_MS; // ~10–13ч до второй
-    let dur2 = (120 + (h >> 24) % 181) * MIN_MS; // 2–5ч
+    let dur2 = (50 + (h >> 24) % 71) * MIN_MS; // 50–120 мин
 
     let start_day = day_start_utc_ms(day);
     let s1 = start_day + base;
@@ -102,7 +100,20 @@ mod tests {
                 awake += 1;
             }
         }
-        assert!(awake >= 4 && awake <= 16, "awake hours {awake}");
+        assert!(awake >= 1 && awake <= 5, "awake hours {awake}");
+    }
+
+    #[test]
+    fn max_two_hours() {
+        for day in [100u64, 101, 500] {
+            for idx in 0..10 {
+                for (s, e) in sessions_utc("aaa", idx, 10, "x", day) {
+                    let d = e.saturating_sub(s);
+                    assert!(d <= 2 * HOUR_MS, "dur {d}");
+                    assert!(d >= 50 * MIN_MS, "dur {d}");
+                }
+            }
+        }
     }
 
     #[test]

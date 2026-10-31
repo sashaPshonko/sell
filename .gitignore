@@ -6,6 +6,7 @@ node_modules/
 sellbot/node_modules/
 
 state.json
+purchases.json
 clone-templates.json
 sellbot/last-balance.json
 captures/*.har

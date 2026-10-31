@@ -134,7 +134,7 @@ async fn deliver_one(
                     name: "delivery_ok".into(),
                     username: Some(boot.username.clone()),
                     id: Some(order_id.clone()),
-                    extra: json!({ "orderId": order_id, "nick": nick }),
+                    extra: json!({ "orderId": order_id, "nick": nick, "amountKk": amount_kk }),
                     ..empty()
                 });
                 state.lock().delivery = None;

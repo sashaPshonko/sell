@@ -33,6 +33,7 @@ import {
 } from './lib/delivery-queue.mjs';
 import { cancelClosedOrdersOnSellbot } from './lib/sellbot-cancel.mjs';
 import { isRetryableDeliveryFailure } from './lib/delivery-retry.mjs';
+import { recordPurchase } from './lib/purchases.mjs';
 import {
     isOrderFulfilled,
     clanDeliveryRetryReset,
@@ -473,6 +474,13 @@ async function handleBotEvents(client, state) {
                 console.log(
                     `[sell] выдано: ${ev.orderId} (${payKk}kk, лот ${order.amountKk}kk)`,
                 );
+                recordPurchase({
+                    kind: 'delivered',
+                    orderId: ev.orderId,
+                    amountKk: payKk,
+                    buyer: order.buyer,
+                    nick: order.nick,
+                });
             } else if (ev.type === 'delivery_stalled') {
                 if (!shouldProcessBotRetryEvent(order)) {
                     console.log(
@@ -821,6 +829,16 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
         cutoffIso,
         dealTimeline,
     );
+    for (const o of newlyRegistered) {
+        recordPurchase({
+            kind: 'paid',
+            atMs: o.paidAt ? Date.parse(o.paidAt) : Date.now(),
+            orderId: o.orderId || o.dealId,
+            amountKk: o.amountKk,
+            buyer: o.buyer,
+            nick: o.nick,
+        });
+    }
     syncChatOrdersFromPlayerok(state, chatId, dealTimeline);
     await rejectBannedBuyerOrdersInChat(client, state, chatId);
 
