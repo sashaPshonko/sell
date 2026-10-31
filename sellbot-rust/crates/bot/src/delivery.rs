@@ -24,6 +24,29 @@ const HANDOFF_KEEP: f64 = 0.0;
 /// Страховка: лот в kk, не сырые монеты. 50k kk на витрине не бывает.
 const MAX_KK: f64 = 50_000.0;
 
+/// Живой FunTime (ферма, gigatuyn):
+/// `[✔] Необходимо подтверждение!` + `|| Введите повторно: /pay nick 27831258`
+/// `[✔] Успешно! Игроку nick отправлено $27,831,258`
+fn is_pay_ok(text: &str) -> bool {
+    text.contains("[✔] Успешно!") && text.contains("отправлено")
+}
+
+fn is_pay_confirm(text: &str) -> bool {
+    text.contains("[✔] Необходимо подтверждение!")
+}
+
+fn parse_repeat_pay(text: &str) -> Option<String> {
+    let key = "Введите повторно:";
+    let i = text.find(key)?;
+    let rest = text[i + key.len()..].trim();
+    let cmd = rest.lines().next()?.trim();
+    if cmd.starts_with("/pay ") {
+        Some(cmd.to_string())
+    } else {
+        None
+    }
+}
+
 pub fn on_chat(state: &Arc<Mutex<BotState>>, text: &str) {
     let mut st = state.lock();
     if matches!(
@@ -32,12 +55,14 @@ pub fn on_chat(state: &Arc<Mutex<BotState>>, text: &str) {
     ) {
         return;
     }
-    if text.contains("[✔] Успешно") || (text.contains("Успешно!") && text.contains("отправлено"))
-    {
+    if let Some(cmd) = parse_repeat_pay(text) {
+        st.pay_repeat_cmd = Some(cmd);
+    }
+    if is_pay_ok(text) {
         st.pay_outcome = Some(PayOutcome::Ok);
         return;
     }
-    if text.contains("Необходимо подтверждение") {
+    if is_pay_confirm(text) {
         st.pay_outcome = Some(PayOutcome::NeedConfirm);
         return;
     }
@@ -70,6 +95,15 @@ async fn pay_twice(bot: &Client, nick: &str, amount: i64) {
     cmd::say(bot, format!("/pay {nick} {amount}"));
     tokio::time::sleep(PAY_GAP).await;
     cmd::say(bot, format!("/pay {nick} {amount}"));
+}
+
+async fn say_confirm(bot: &Client, state: &Arc<Mutex<BotState>>, nick: &str, amount: i64) {
+    let cmd = state
+        .lock()
+        .pay_repeat_cmd
+        .clone()
+        .unwrap_or_else(|| format!("/pay {nick} {amount}"));
+    cmd::say(bot, cmd);
 }
 
 async fn wait_outcome(state: &Arc<Mutex<BotState>>, d: Duration) -> Option<PayOutcome> {
@@ -183,12 +217,16 @@ async fn deliver_one(
         return;
     }
 
-    state.lock().pay_outcome = None;
+    {
+        let mut st = state.lock();
+        st.pay_outcome = None;
+        st.pay_repeat_cmd = None;
+    }
     pay_twice(bot, &nick, amount).await;
     let mut outcome = wait_outcome(state, WAIT_CHAT).await;
 
     if outcome == Some(PayOutcome::NeedConfirm) {
-        cmd::say(bot, format!("/pay {nick} {amount}"));
+        say_confirm(bot, state, &nick, amount).await;
         outcome = wait_outcome(state, WAIT_CHAT).await;
     }
 
@@ -255,11 +293,15 @@ async fn run_handoff(bot: &Client, state: &Arc<Mutex<BotState>>, to: &str) {
         state.lock().handoff_to = None;
         return;
     }
-    state.lock().pay_outcome = None;
+    {
+        let mut st = state.lock();
+        st.pay_outcome = None;
+        st.pay_repeat_cmd = None;
+    }
     pay_twice(bot, to, send).await;
     let mut outcome = wait_outcome(state, WAIT_CHAT).await;
     if outcome == Some(PayOutcome::NeedConfirm) {
-        cmd::say(bot, format!("/pay {to} {send}"));
+        say_confirm(bot, state, to, send).await;
         outcome = wait_outcome(state, WAIT_CHAT).await;
     }
     if outcome == Some(PayOutcome::Ok) {
@@ -352,5 +394,19 @@ mod tests {
         assert!(!nick_ok("a"));
         assert!(!nick_ok("bad nick"));
         assert!(!nick_ok("x; /pay Steve 999"));
+    }
+
+    #[test]
+    fn live_funtime_pay_chat() {
+        let confirm = "[✔] Необходимо подтверждение!\n|| Введите повторно: /pay nebotovodt4n16 27831258";
+        let ok = "[✔] Успешно! Игроку nebotovodt4n16 отправлено $27,831,258";
+        assert!(is_pay_confirm(confirm));
+        assert!(!is_pay_ok(confirm));
+        assert!(is_pay_ok(ok));
+        assert!(!is_pay_confirm(ok));
+        assert_eq!(
+            parse_repeat_pay(confirm).as_deref(),
+            Some("/pay nebotovodt4n16 27831258")
+        );
     }
 }

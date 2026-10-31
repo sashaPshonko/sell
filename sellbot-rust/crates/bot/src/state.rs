@@ -119,6 +119,8 @@ pub struct BotState {
     pub delivery: Option<DeliveryJob>,
     pub handoff_to: Option<String>,
     pub pay_outcome: Option<PayOutcome>,
+    /// Точная команда из «Введите повторно: /pay …».
+    pub pay_repeat_cmd: Option<String>,
     /// Уже отдали по этому заказу — второй `/pay` не шлём.
     pub paid_order_ids: std::collections::HashSet<String>,
 
@@ -271,6 +273,7 @@ impl BotState {
             delivery: None,
             handoff_to: None,
             pay_outcome: None,
+            pay_repeat_cmd: None,
             paid_order_ids: std::collections::HashSet::new(),
 
             buying_item: BuyingItem::default(),
@@ -425,6 +428,7 @@ impl BotState {
                     return;
                 }
                 self.pay_outcome = None;
+                self.pay_repeat_cmd = None;
                 self.delivery = Some(DeliveryJob {
                     order_id,
                     nick,
