@@ -2,15 +2,11 @@ import { DELIVERY_ANARCHY } from './config.mjs';
 
 export { DELIVERY_ANARCHY };
 
-function askNickInChatLine() {
-    return '💬 Напиши в этом чате свой ник (не в Minecraft).';
-}
-
-/** Предупреждение: выдача через клан — риск бана, только твинк. */
+/** Предупреждение: выдача через /pay — только с твинка, иначе бан. */
 export function twinAccountWarningLines() {
     return [
         '⛔⛔⛔ ОБЯЗАТЕЛЬНО ТВИНК ⛔⛔⛔',
-        'Выдача через клан — на основном аккаунте часто дают БАН.',
+        'Выдача даже с моей системой может дать БАН.',
         'Указывай ник ЗАПАСНОГО аккаунта (твинка), не основного!',
         '————————————————',
     ];
@@ -33,8 +29,7 @@ export function buildGreetingText(_ctx = null) {
         '',
         '✅ выдача автоматическая - бот выдаст сам',
         '❗ Валюта только на Minecraft 1.21 (FunTime).',
-        'На 1.16 не выдаём — отмена: /cancel',
-        '💸 Выдача через клан: приглашение → казна → ты снимешь /clan withdraw',
+        'На бедрок не выдаём — отмена: /cancel',
         '🔁 Ошибся в нике или бот не выдал — напиши ник в этом чате снова',
         '❌ Отмена: /cancel',
     ].join('\n');
@@ -120,17 +115,6 @@ export function buildOrderCancelRefundFailedHint(errMsg = '') {
         lines.push('', `⚠️ ${reason}`);
     }
     return lines.join('\n');
-}
-
-/** /cancel после /clan invest — деньги уже в казне, отмена невозможна */
-export function buildOrderCancelDeniedHint() {
-    return [
-        '⛔ Отменить заказ уже нельзя.',
-        '',
-        '💰 Деньги уже вложены в казну клана — сними их в игре (/clan withdraw).',
-        '',
-        '💬 Если нужна помощь — напиши в поддержку PlayerOK.',
-    ].join('\n');
 }
 
 export function buildWrongNickHint() {
@@ -249,31 +233,6 @@ export function buildDeliveryFailHint(reason, ctx = null) {
                 `🎮 Зайди на анархию ${anka} и будь в сети.`,
             );
             break;
-        case 'player_in_other_clan':
-            lines.push(
-                '📋 Причина: твой ник уже состоит в другом клане на сервере.',
-                '',
-                '🎮 Выйди из текущего клана в игре (/clan leave),',
-                `зайди на анархию ${anka} и будь в сети.`,
-            );
-            break;
-        case 'invite_declined':
-            lines.push(
-                '📋 Причина: ты отклонил приглашение в клан — нужно было принять.',
-                '',
-                `🎮 Будь на анархии ${anka} в сети и прими invite,`,
-                'когда бот пришлёт его снова.',
-            );
-            break;
-        case 'bot_not_in_clan':
-            lines.push(
-                '📋 Причина: продавец забыл создать клан на сервере.',
-                'Это не твоя ошибка — бот без клана не может выдать заказ.',
-                '',
-                '⏳ Можешь подождать, пока продавец создаст клан.',
-                '❌ Или верни оплату командой /cancel',
-            );
-            return lines.join('\n');
         case 'proxy_timeout':
             lines.push(
                 '📋 Причина: проблема с прокси — бот не может зайти на сервер.',
@@ -315,7 +274,7 @@ export function buildDeliveryAttemptsExceededHint(maxAttempts = 3) {
 export function buildQueueStallHint() {
     const anka = DELIVERY_ANARCHY;
     return [
-        '⏱ Не успели завершить выдачу через клан (таймаут 1 мин на шаг).',
+        '⏱ Не успели завершить выдачу (таймаут).',
         '',
         `🎮 Будь на анархии ${anka} и в сети.`,
         askNickInChatLine(),
@@ -464,10 +423,6 @@ export function buildProfileUpsellHint(opts) {
     return text;
 }
 
-/**
- * Повтор через 40с — только ссылка + «65кк, вместо 60кк по этой же цене» (без эмодзи).
- * @param {{ upsellKk: number, baseKk?: number, url: string }} opts
- */
 /** Лот пробника botpodpopcorn (3 дня). `POPCORN_TRIAL_URL=0` — не слать. */
 export const DEFAULT_POPCORN_TRIAL_URL =
     'https://playerok.com/products/7cbc10ea35b6-farm-bot-funtime-3-dnya';
@@ -523,12 +478,6 @@ export function buildOrderClosedOnPlayerokHint() {
     ].join('\n');
 }
 
-/**
- * Сразу после ника — перед выдачей на сервере.
- * @param {string} nick
- * @param {number} amountKk — сумма лота
- * @param {object|null} [bonus] — payAmountKk и поля бонуса (как у buildDeliveryOkHint)
- */
 /** /nick — сейчас выдаём этому покупателю */
 export function buildNickDeliveryActiveHint(nick, amountKk) {
     const anka = DELIVERY_ANARCHY;
@@ -569,86 +518,9 @@ export function buildDispatchingHint(nick, amountKk, bonus = null) {
     lines.push(
         '',
         `🎮 Будь на анархии ${anka} и в сети (FunTime 1.21).`,
-        '⛔ Ник должен быть твинка — на основном высокий риск бана.',
         'Если не пришло за минуту — напиши ник в этом чате.',
     );
     return lines.join('\n');
-}
-
-/** После отправки приглашения в клан */
-export function buildClanInviteHint(nick) {
-    const anka = DELIVERY_ANARCHY;
-    return [
-        `📨 Приглашение в клан отправлено игроку «${nick}».`,
-        '',
-        `🎮 Зайди на анархию ${anka} и ПРИМИ приглашение в клан.`,
-        '⏳ Жди — после вступления бот вложит деньги в казну.',
-    ].join('\n');
-}
-
-/** Полная сумма заказа в монетах (kk × 1M) */
-export function clanFullAmountRaw(orderOrKk, multiplier = 1_000_000) {
-    const kk =
-        typeof orderOrKk === 'object'
-            ? (orderOrKk.payAmountKk ?? orderOrKk.amountKk)
-            : orderOrKk;
-    return String(Math.round(Number(kk) * multiplier));
-}
-
-function clanAmountDigits(raw) {
-    return String(raw || '').replace(/\D/g, '') || '?';
-}
-
-/** После /clan invest — снять сумму из казны */
-export function buildClanWithdrawHint(nick, withdrawAmountRaw) {
-    const anka = DELIVERY_ANARCHY;
-    const amount = clanAmountDigits(withdrawAmountRaw);
-    return [
-        `💰 Деньги вложены в казну клана для «${nick}».`,
-        '',
-        `🎮 На анархии ${anka} сними:`,
-        `/clan withdraw ${amount}`,
-    ].join('\n');
-}
-
-/** Снял не всё — остаток (во время выдачи) */
-export function buildClanRemainderHint(nick, remainAmountRaw) {
-    const anka = DELIVERY_ANARCHY;
-    const amount = clanAmountDigits(remainAmountRaw);
-    return [
-        `🎮 На анархии ${anka} досними:`,
-        `/clan withdraw ${amount}`,
-    ].join('\n');
-}
-
-/** Покупатель пишет /nick, пока ждём withdraw в игре */
-export function buildClanWithdrawWaitHint(nick, remainAmountRaw) {
-    const anka = DELIVERY_ANARCHY;
-    const amount = clanAmountDigits(remainAmountRaw);
-    return [
-        `⏳ Ник «${nick}» уже принят — выдача идёт.`,
-        '',
-        `🎮 Сначала досними на анархии ${anka}:`,
-        `/clan withdraw ${amount}`,
-        '',
-        '💬 Пока выдача идёт — только /clan withdraw в Minecraft.',
-        '⏱ Если тебя нет на анке — через ~1 мин бот остановит попытку; тогда напиши /nick снова.',
-    ].join('\n');
-}
-
-/** Снял не всё — остаток + повтор /nick после сбоя */
-export function buildClanPartialWithdrawHint(nick, remainAmountRaw) {
-    const anka = DELIVERY_ANARCHY;
-    const amount = clanAmountDigits(remainAmountRaw);
-    return [
-        `⚠️ Снята не вся сумма.`,
-        '',
-        `🎮 На анархии ${anka} досними:`,
-        `/clan withdraw ${amount}`,
-        '',
-        askNickInChatLine(),
-        '💰 Бот продолжит выдачу после /nick.',
-    ].join('\n');
 }
 
 /** Коротко: новая оплата, когда полное приветствие уже было в чате. */
@@ -661,7 +533,6 @@ export function buildNewOrderTwinHint(ctx = null) {
         '',
         ...twinAccountWarningLines(),
         `🎮 Анархия ${anka} — будь в сети.`,
-        '💸 Выдача через клан: приглашение → казна → /clan withdraw',
         '',
         askNickInChatLine(),
     ];
@@ -679,8 +550,8 @@ export function hasGreetingInChat(messages, sellerUserId) {
         const text = msg.text.toLowerCase();
         if (text.includes(marker)) return true;
         // Twin / кастом тоже считаем «уже писали» — иначе полное + twin подряд
-        if (text.includes('оплата получена') && text.includes('твинк')) return true;
-        if (text.includes('заходи на анархию') && text.includes('твинк')) return true;
+        if (text.includes('оплата получена')) return true;
+        if (text.includes('заходи на анархию')) return true;
     }
     return false;
 }
@@ -704,7 +575,6 @@ export function hasPaymentAckInChat(messages, sellerUserId, opts = null) {
         }
         const text = msg.text.toLowerCase();
         if (!text.includes('оплата получена')) continue;
-        if (!text.includes('твинк')) continue;
         if (lotNeedle && !text.includes(lotNeedle)) continue;
         return true;
     }

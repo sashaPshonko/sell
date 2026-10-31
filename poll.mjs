@@ -32,7 +32,7 @@ import {
     localLiveQueueIds,
 } from './lib/delivery-queue.mjs';
 import { cancelClosedOrdersOnSellbot } from './lib/sellbot-cancel.mjs';
-import { isRetryableDeliveryFailure } from './sellbot/lib/delivery-retry.mjs';
+import { isRetryableDeliveryFailure } from './lib/delivery-retry.mjs';
 import {
     isOrderFulfilled,
     clanDeliveryRetryReset,
@@ -49,11 +49,6 @@ import {
     buildBotBalanceRefillingHint,
     buildQueueStallHint,
     buildDeliveryOkHint,
-    buildClanInviteHint,
-    buildClanWithdrawHint,
-    buildClanRemainderHint,
-    buildClanPartialWithdrawHint,
-    clanFullAmountRaw,
     buildOrderAlreadyDoneHint,
     DELIVERY_ANARCHY,
 } from './messages.mjs';
@@ -434,77 +429,7 @@ async function handleBotEvents(client, state) {
                 continue;
             }
 
-            if (ev.type === 'clan_invite_sent') {
-                const fresh = getOrder(state, ev.orderId) || order;
-                if (fresh.clanInviteHintSentAt) continue;
-                const nick = ev.nick || fresh.nick || '?';
-                setOrderPhase(state, ev.orderId, fresh.phase, {
-                    clanInviteHintSentAt: new Date().toISOString(),
-                });
-                try {
-                    await sendChatMessage(client, chatId, buildClanInviteHint(nick));
-                } catch (e) {
-                    setOrderPhase(state, ev.orderId, fresh.phase, {
-                        clanInviteHintSentAt: undefined,
-                    });
-                    throw e;
-                }
-                console.log(`[sell] clan invite hint → ${ev.orderId.slice(0, 8)}…`);
-            } else if (ev.type === 'clan_joined') {
-                setOrderPhase(state, ev.orderId, order.phase, {
-                    clanJoinedAt: new Date().toISOString(),
-                });
-                console.log(`[sell] clan joined ${ev.orderId.slice(0, 8)}…`);
-            } else if (ev.type === 'clan_invested') {
-                const fresh = getOrder(state, ev.orderId) || order;
-                if (fresh.clanWithdrawHintSentAt) continue;
-                const nick = ev.nick || fresh.nick || '?';
-                const withdrawAmount =
-                    ev.withdrawAmount ||
-                    ev.investAmount ||
-                    ev.fullInvestAmount ||
-                    clanFullAmountRaw(fresh);
-                setOrderPhase(state, ev.orderId, fresh.phase, {
-                    clanWithdrawHintSentAt: new Date().toISOString(),
-                    clanRemainderHintSentAt: null,
-                    clanInvestedAt: new Date().toISOString(),
-                });
-                try {
-                    await sendChatMessage(
-                        client,
-                        chatId,
-                        buildClanWithdrawHint(nick, withdrawAmount),
-                    );
-                } catch (e) {
-                    setOrderPhase(state, ev.orderId, fresh.phase, {
-                        clanWithdrawHintSentAt: undefined,
-                    });
-                    throw e;
-                }
-                console.log(`[sell] clan withdraw hint → ${ev.orderId.slice(0, 8)}…`);
-            } else if (ev.type === 'clan_withdraw_partial') {
-                const fresh = getOrder(state, ev.orderId) || order;
-                const nick = ev.nick || fresh.nick || '?';
-                const full = Number(ev.full || clanFullAmountRaw(fresh));
-                const withdrawn = Number(ev.withdrawn || 0);
-                const remain = Math.max(0, full - withdrawn);
-                if (remain <= 0) continue;
-                if (withdrawn <= Number(fresh.clanRemainderHintWithdrawn || 0)) continue;
-                await sendChatMessage(
-                    client,
-                    chatId,
-                    buildClanRemainderHint(nick, remain),
-                );
-                setOrderPhase(state, ev.orderId, fresh.phase, {
-                    clanRemainderHintSentAt: new Date().toISOString(),
-                    clanRemainderHintWithdrawn: withdrawn,
-                    clanPlayerWithdrawn: Math.max(
-                        fresh.clanPlayerWithdrawn || 0,
-                        withdrawn,
-                    ),
-                });
-                console.log(`[sell] clan remainder hint → ${ev.orderId.slice(0, 8)}…`);
-            } else if (ev.type === 'delivery_ok') {
+            if (ev.type === 'delivery_ok') {
                 if (order.gameDeliveryAt || order.buyerNotifiedAt) {
                     console.log(
                         `[sell] delivery_ok ${ev.orderId.slice(0, 8)}… дубликат, пропуск`,
@@ -557,13 +482,6 @@ async function handleBotEvents(client, state) {
                 }
                 const nick =
                     getBuyerSession(state, chatId, buyerId).nick || order.nick;
-                const withdrawn = Number(ev.playerWithdrawn || 0);
-                const fullAmount = Number(clanFullAmountRaw(order));
-                const remain = Math.max(0, fullAmount - withdrawn);
-                const partialWithdraw =
-                    ev.reason === 'clan_withdraw_timeout' &&
-                    withdrawn > 0 &&
-                    remain > 0;
                 markDeliveryPaused(
                     state,
                     ev.orderId,
@@ -571,36 +489,17 @@ async function handleBotEvents(client, state) {
                     clanDeliveryRetryReset({
                         lastError: 'stall_queue',
                         nick,
-                        ...(withdrawn > 0
-                            ? {
-                                  clanPlayerWithdrawn: Math.max(
-                                      order.clanPlayerWithdrawn || 0,
-                                      withdrawn,
-                                  ),
-                              }
-                            : {}),
                     }),
                 );
                 void dispatchCancelOrder(ev.orderId);
-                if (partialWithdraw) {
-                    await sendChatMessage(
-                        client,
-                        chatId,
-                        buildClanPartialWithdrawHint(nick, remain),
-                    );
-                    setOrderPhase(state, ev.orderId, order.phase, {
-                        deliveryHintSentAt: new Date().toISOString(),
-                    });
-                } else {
-                    await sendDeliveryHintOnce(
-                        client,
-                        state,
-                        chatId,
-                        ev.orderId,
-                        getOrder(state, ev.orderId) || order,
-                        buildQueueStallHint,
-                    );
-                }
+                await sendDeliveryHintOnce(
+                    client,
+                    state,
+                    chatId,
+                    ev.orderId,
+                    getOrder(state, ev.orderId) || order,
+                    buildQueueStallHint,
+                );
                 console.warn(`[sell] stall ${ev.orderId} (очередь ${ev.queued ?? '?'})`);
             } else if (ev.type === 'delivery_failed') {
                 if (!shouldProcessBotRetryEvent(order)) {
@@ -705,56 +604,6 @@ async function handleBotEvents(client, state) {
                     ev.orderId,
                     getOrder(state, ev.orderId) || order,
                     () => buildDeliveryFailHint('player_offline'),
-                );
-            } else if (ev.type === 'player_in_other_clan') {
-                if (!shouldProcessBotRetryEvent(order)) {
-                    console.log(
-                        `[sell] other_clan ${ev.orderId.slice(0, 8)}… игнор (заказ уже закрыт)`,
-                    );
-                    continue;
-                }
-                markDeliveryPaused(
-                    state,
-                    ev.orderId,
-                    'awaiting_nick',
-                    clanDeliveryRetryReset({
-                        lastError: 'player_in_other_clan',
-                        nick: getBuyerSession(state, chatId, buyerId).nick || order.nick,
-                    }),
-                );
-                void dispatchCancelOrder(ev.orderId);
-                await sendDeliveryHintOnce(
-                    client,
-                    state,
-                    chatId,
-                    ev.orderId,
-                    getOrder(state, ev.orderId) || order,
-                    () => buildDeliveryFailHint('player_in_other_clan'),
-                );
-            } else if (ev.type === 'invite_declined') {
-                if (!shouldProcessBotRetryEvent(order)) {
-                    console.log(
-                        `[sell] invite_declined ${ev.orderId.slice(0, 8)}… игнор (заказ уже закрыт)`,
-                    );
-                    continue;
-                }
-                markDeliveryPaused(
-                    state,
-                    ev.orderId,
-                    'awaiting_nick',
-                    clanDeliveryRetryReset({
-                        lastError: 'invite_declined',
-                        nick: getBuyerSession(state, chatId, buyerId).nick || order.nick,
-                    }),
-                );
-                void dispatchCancelOrder(ev.orderId);
-                await sendDeliveryHintOnce(
-                    client,
-                    state,
-                    chatId,
-                    ev.orderId,
-                    getOrder(state, ev.orderId) || order,
-                    () => buildDeliveryFailHint('invite_declined'),
                 );
             } else if (ev.type === 'insufficient_funds') {
                 if (ev.balance != null) {

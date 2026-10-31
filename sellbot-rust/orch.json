@@ -1,0 +1,7 @@
+{
+  "anarchy": 221,
+  "farm_root": ".",
+  "go_ws": "ws://127.0.0.1:8080/ws",
+  "local_mode": true,
+  "schedule_salt": "sell-session"
+}

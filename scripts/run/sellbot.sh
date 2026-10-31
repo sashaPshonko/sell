@@ -1,14 +1,15 @@
 #!/bin/bash
-# Как 4narek: цикл + node в foreground. Без trap/CHILD — pkill убивает и обёртку, и node.
-cd "$(dirname "$0")/../../sellbot" || exit 1
+# Rust sell-orch (выдача /pay). Не mineflayer.
+cd "$(dirname "$0")/../../sellbot-rust" || exit 1
 
+BIN=./target/release/sell-orch
 while true; do
-    node orchestrator.mjs
-    code=$?
-    if [ "$code" -eq 2 ]; then
-        echo "[sellbot] уже запущен (pid lock) — выход"
+    if [ ! -x "$BIN" ]; then
+        echo "[sellbot] нет $BIN — cargo build -p orch --bin sell-orch --release -p bot"
         exit 1
     fi
-    echo "[sellbot] orchestrator exit $code — через 5s"
+    "$BIN"
+    code=$?
+    echo "[sellbot] sell-orch exit $code — через 5s"
     sleep 5
 done

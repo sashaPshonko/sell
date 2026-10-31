@@ -17,4 +17,18 @@ captures/env.generated
 logs/
 *.log
 
+sellbot-rust/target/
+sellbot-rust/node_modules/
+sellbot-rust/bots/
+sellbot-rust/ip.json
+sellbot-rust/owner-ip.json
+sellbot-rust/clan-owners.json
+sellbot-rust/bindings.json
+sellbot-rust/queue.json
+sellbot-rust/dumps/
+sellbot-rust/listings-state/
+sellbot-rust/*.log
+sellbot-rust/.aider*
+sellbot-rust/.DS_Store
+
 .DS_Store

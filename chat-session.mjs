@@ -28,9 +28,7 @@ import {
     buildNickDeliveryActiveHint,
     buildNickQueueWaitingHint,
     buildPremiumRefundUpsellHint,
-    buildClanWithdrawWaitHint,
     buildDeliveryAttemptsExceededHint,
-    clanFullAmountRaw,
 } from './messages.mjs';
 import {
     resolveProfileUpsell,
@@ -610,32 +608,6 @@ export async function applyCancelCommands(
 /**
  * Новый /nick — обновить сессию и перезапустить выдачу у dispatched (если завис).
  */
-function clanRemainAmount(order) {
-    const full = Number(clanFullAmountRaw(order));
-    const withdrawn = Math.max(
-        Number(order.clanRemainderHintWithdrawn || 0),
-        Number(order.clanPlayerWithdrawn || 0),
-    );
-    return Math.max(0, full - withdrawn);
-}
-
-async function notifyClanWithdrawWaitHint(client, state, chatId, order, nick) {
-    if (!client || !order || order.clanWithdrawNickHintSentAt) return;
-    if (!order.clanWithdrawHintSentAt && !order.clanRemainderHintSentAt) return;
-
-    const remain = clanRemainAmount(order);
-    if (remain <= 0) return;
-
-    try {
-        await sendChatMessage(client, chatId, buildClanWithdrawWaitHint(nick, remain));
-        setOrderPhase(state, order.orderId, order.phase, {
-            clanWithdrawNickHintSentAt: new Date().toISOString(),
-        });
-    } catch (e) {
-        console.warn(`[sell] clan withdraw wait hint: ${e.message}`);
-    }
-}
-
 export async function applyNickCommandUpdates(
     state,
     chatId,
@@ -879,19 +851,6 @@ export async function applyNickCommandUpdates(
             session.messageId = u.messageId;
             session.nickAt = u.at;
         }
-        // Повторный ник на активной выдаче — не спамим «Сейчас выдаю» (как месяц назад)
-        if (blockedByActiveDelivery && client) {
-            const active = buyerOrders.find(
-                (o) =>
-                    !isOrderFulfilled(o)
-                    && (o.phase === 'dispatched' || o.phase === 'ws_pending')
-                    && !o.pausedUntilNick,
-            );
-            if (active) {
-                await notifyClanWithdrawWaitHint(client, state, chatId, active, u.nick);
-            }
-        }
-
         if (!queuedForDelivery && client && nickApplied) {
             if (buyerHasPendingOrder(state, chatId, buyerId)) {
                 console.log(

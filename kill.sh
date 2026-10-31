@@ -5,6 +5,8 @@ cd ~/sell || exit 1
 pkill -f 'scripts/run/sellbot.sh' 2>/dev/null || true
 pkill -f 'scripts/run/sell.sh' 2>/dev/null || true
 pkill -f 'orchestrator.mjs' 2>/dev/null || true
+pkill -f 'sell-orch' 2>/dev/null || true
+pkill -f 'sell-bot' 2>/dev/null || true
 pkill -f 'poll.mjs' 2>/dev/null || true
 kill $(lsof -t -i :8790) 2>/dev/null || true
 rm -f .poll.pid sellbot/.orchestrator.pid
@@ -24,5 +26,5 @@ ln -sf "logs/sellbot-${TS}.log" sellbot.log
 ln -sf "logs/sell-${TS}.log" sell.log
 
 echo "[sell] запущено. Проверка:"
-pgrep -af 'sell\.sh|sellbot\.sh|poll\.mjs|orchestrator\.mjs' || true
+pgrep -af 'sell\.sh|sellbot\.sh|poll\.mjs|sell-orch|sell-bot' || true
 tail -f sellbot.log
