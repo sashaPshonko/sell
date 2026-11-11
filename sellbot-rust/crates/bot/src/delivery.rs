@@ -61,7 +61,36 @@ fn parse_repeat_pay(text: &str) -> Option<String> {
     None
 }
 
+/// Нам пришёл перевод: «[$] От игрока tezimabuk получено +$47,240,861» (системная строка, не чат игрока).
+fn parse_received(text: &str) -> Option<(String, f64)> {
+    for l in text.lines() {
+        let l = l.trim();
+        let Some(rest) = l.strip_prefix("[$] От игрока ") else { continue };
+        let mut it = rest.splitn(2, " получено +$");
+        let nick = it.next()?.trim();
+        let amt = it.next()?;
+        if !nick_ok(nick) {
+            continue;
+        }
+        let digits: String = amt.chars().take_while(|c| c.is_ascii_digit() || *c == ',').filter(|c| *c != ',').collect();
+        if let Ok(n) = digits.parse::<f64>() {
+            return Some((nick.to_string(), n));
+        }
+    }
+    None
+}
+
 pub fn on_chat(state: &Arc<Mutex<BotState>>, text: &str) {
+    if let Some((from, amount)) = parse_received(text) {
+        info!("получен перевод от {from}: {amount}");
+        let user = state.lock().username.clone();
+        emit(&WorkerMsg {
+            name: "payment_received".into(),
+            username: Some(user),
+            extra: json!({ "from": from, "amount": amount }),
+            ..empty()
+        });
+    }
     let mut st = state.lock();
     if matches!(
         st.pay_outcome,
@@ -289,7 +318,9 @@ async fn run_handoff(bot: &Client, state: &Arc<Mutex<BotState>>, to: &str) {
         return;
     }
     let Some(bal) = refresh_balance(bot, state).await else {
+        // сбрасываем задачу, иначе цикл сразу возьмёт её снова и будет без конца спрашивать /balance
         emit_handoff(state, to, false, 0.0);
+        state.lock().handoff_to = None;
         return;
     };
     let send = (bal - HANDOFF_KEEP).floor() as i64;
@@ -400,6 +431,16 @@ mod tests {
         assert!(!nick_ok("a"));
         assert!(!nick_ok("bad nick"));
         assert!(!nick_ok("x; /pay Steve 999"));
+    }
+
+    #[test]
+    fn received_payment_line() {
+        assert_eq!(
+            parse_received("[$] От игрока tezimabuk получено +$47,240,861"),
+            Some(("tezimabuk".to_string(), 47_240_861.0))
+        );
+        assert!(parse_received("чел: От игрока tezimabuk получено +$5").is_none());
+        assert!(parse_received("[$] От игрока bad nick получено +$5").is_none());
     }
 
     #[test]

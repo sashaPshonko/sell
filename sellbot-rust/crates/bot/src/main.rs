@@ -435,7 +435,8 @@ fn handle_chat(bot: &Client, text: &str) {
             std::thread::sleep(Duration::from_millis(400));
             std::process::exit(0);
         });
-    } else if low.contains("/vk") {
+    } else if low.contains("чтобы двигаться и писать в чат") {
+        // аккаунт не привязан: сервер просит привязку этой фразой (как у фермы, 4narek-azalea/crates/bot)
         {
             let mut st = g.state.lock();
             if st.funauth_restarting {

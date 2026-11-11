@@ -23,7 +23,7 @@ pub struct OrchConfig {
     /// Локально: clan-setup без ожидания Go `run_clan_setup`.
     #[serde(default = "default_true")]
     pub local_mode: bool,
-    /// Соль джиттера смен (не секрет — только разброс окон).
+    /// Seed расписания смен (фиксируется в queue.json при создании расписания).
     #[serde(default = "default_salt")]
     pub schedule_salt: String,
 }
@@ -37,11 +37,11 @@ fn default_farm_root() -> String {
 fn default_go_ws() -> String {
     "ws://127.0.0.1:8080/ws".into()
 }
-fn default_true() -> bool {
-    true
-}
 fn default_salt() -> String {
     "sell-session".into()
+}
+fn default_true() -> bool {
+    true
 }
 
 impl Default for OrchConfig {
