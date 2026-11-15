@@ -2,14 +2,16 @@ import { DELIVERY_ANARCHY } from './config.mjs';
 
 export { DELIVERY_ANARCHY };
 
-/** Предупреждение: выдача через /pay — только с твинка, иначе бан. */
+function askNickInChatLine() {
+    return '💬 Напиши сюда, в этот чат, свой игровой ник из Minecraft.';
+}
+
+/**
+ * Раньше здесь было грозное «ОБЯЗАТЕЛЬНО ТВИНК, возможен БАН». Убрано: мы не проверяли, банят ли за такую выдачу,
+ * а угроза в момент оплаты только отпугивает. Оставлено пустым, чтобы не трогать места вызова.
+ */
 export function twinAccountWarningLines() {
-    return [
-        '⛔⛔⛔ ОБЯЗАТЕЛЬНО ТВИНК ⛔⛔⛔',
-        'Выдача даже с моей системой может дать БАН.',
-        'Указывай ник ЗАПАСНОГО аккаунта (твинка), не основного!',
-        '————————————————',
-    ];
+    return [];
 }
 
 /**
@@ -27,9 +29,6 @@ export function buildGreetingText(_ctx = null) {
         ...twinAccountWarningLines(),
         askNickInChatLine(),
         '',
-        '✅ выдача автоматическая - бот выдаст сам',
-        '❗ Валюта только на Minecraft 1.21 (FunTime).',
-        'На бедрок не выдаём — отмена: /cancel',
         '🔁 Ошибся в нике или бот не выдал — напиши ник в этом чате снова',
         '❌ Отмена: /cancel',
     ].join('\n');
@@ -82,9 +81,9 @@ export function buildBannedBuyerRefundHint(playerokCancelled = false) {
     ], footer);
 }
 
-export function buildOrderCancelledHint(playerokCancelled = false) {
+export function buildOrderCancelledHint(playerokCancelled = false, count = 1) {
     const lines = [
-        '❌ Заказ отменён.',
+        count > 1 ? `❌ Заказы отменены (${count}).` : '❌ Заказ отменён.',
         '',
         '💰 Валюта не будет выдана.',
     ];
@@ -117,6 +116,45 @@ export function buildOrderCancelRefundFailedHint(errMsg = '') {
     return lines.join('\n');
 }
 
+/** Бот выдачи заходит на сервер и решает капчу — просим немного подождать (не ошибка, отмена не нужна). */
+export function buildCaptchaWaitHint() {
+    return '🤖 Бот усердно решает капчу — подожди 2–3 минуты. Выдача начнётся сама.';
+}
+
+/** /cancel на заказе, который отменить нельзя (подписка). */
+/** Номера вариантов в меню /cancel. */
+export const CANCEL_MENU_KEYS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+
+/**
+ * /cancel, когда у покупателя несколько заказов: выбрать, какой отменить.
+ * @param {string[]} labels — подписи заказов («70кк»); последним пунктом добавляется «Все заказы».
+ */
+export function buildCancelMenuHint(labels) {
+    const items = [...labels, 'Все заказы'];
+    return [
+        '❓ Какой заказ отменить? Ответь цифрой:',
+        '',
+        ...items.map((l, i) => `${CANCEL_MENU_KEYS[i]} ${l}`),
+    ].join('\n');
+}
+
+export function buildCancelMenuExpiredHint() {
+    return '⌛ Время выбора вышло — напиши /cancel ещё раз.';
+}
+
+/** /cancel, а перевод (несколько заказов одним переводом) уже в работе у бота. */
+export function buildOrderCancelInDeliveryHint() {
+    return `⏳ Перевод уже в работе — отменить сейчас нельзя. Будь на анархии ${DELIVERY_ANARCHY}.`;
+}
+
+export function buildOrderCancelDeniedHint() {
+    return [
+        '⛔ Этот заказ отменить через бота нельзя.',
+        '',
+        '💬 Если нужна помощь — напиши в поддержку PlayerOK.',
+    ].join('\n');
+}
+
 export function buildWrongNickHint() {
     return [
         '⚠️ Ник не подошёл.',
@@ -130,14 +168,13 @@ function retryNickAfterFailLines() {
     return [askNickInChatLine()];
 }
 
+/** Общий текст «не получилось, зайди и напиши ник снова». */
+function buildTryAgainHint() {
+    return `⏳ Не получилось выдать. Зайди на анархию ${DELIVERY_ANARCHY} и напиши ник в чат ещё раз.`;
+}
+
 export function buildRetryNickHint() {
-    const anka = DELIVERY_ANARCHY;
-    return [
-        '⏳ Сейчас не удалось выдать (сервер занят или ты не в сети в игре).',
-        '',
-        `🎮 Зайди на анархию ${anka} и будь в сети.`,
-        ...retryNickAfterFailLines(),
-    ].join('\n');
+    return buildTryAgainHint();
 }
 
 /**
@@ -195,92 +232,42 @@ export function buildInsufficientFundsHint(ctx = null) {
  */
 export function buildDeliveryFailHint(reason, ctx = null) {
     const anka = DELIVERY_ANARCHY;
-    const lines = ['❌ Не удалось выдать.', ''];
 
     switch (reason) {
         case 'captcha':
-            lines.push(
-                '📋 Причина: капча на сервере (бот не смог зайти).',
-                '⏳ Это не твоя ошибка — попробуем снова чуть позже.',
-                '',
-                '🤖 Боту нужно ввести капчу в Minecraft — выдача временно стоит.',
-            );
-            break;
+            return buildCaptchaWaitHint();
         case 'banned':
-            lines.push(
-                '📋 Причина: аккаунт бота забанили на сервере FunTime.',
-                'Это не твоя ошибка — выдача сейчас остановлена.',
-                '',
-                '⏳ Можешь подождать: когда бота заменим/разбанят — напиши ник в этот чат снова.',
-                '❌ Или верни оплату командой /cancel',
-            );
-            return lines.join('\n');
+            return [
+                '❌ Аккаунт бота забанили на FunTime — это не твоя ошибка, выдача остановлена.',
+                '⏳ Когда заменим бота — неизвестно. Можешь подождать и написать ник в чат снова,',
+                '❌ или вернуть оплату: /cancel',
+            ].join('\n');
         case 'insufficient_funds':
             return buildInsufficientFundsHint(ctx);
         case 'balance_unread':
-            lines.push(
-                '📋 Сейчас не удалось проверить баланс бота (сбой на сервере).',
-                'Это не «закончилась валюта» — просто не прочитали /balance.',
-                '',
-                `🎮 Будь на анархии ${anka} в сети и напиши ник в этот чат снова.`,
-            );
-            return lines.join('\n');
+            return `❌ Не удалось проверить баланс бота (сбой на сервере). Будь на анархии ${anka} и напиши ник в чат ещё раз.`;
         case 'player_offline':
         case 'offline':
-            lines.push(
-                '📋 Причина: тебя нет на сервере (или не на нужной анархии).',
-                '',
-                `🎮 Зайди на анархию ${anka} и будь в сети.`,
-            );
-            break;
+            return `❌ Тебя нет на анархии ${anka}. Зайди и напиши ник в чат ещё раз.`;
         case 'proxy_timeout':
-            lines.push(
-                '📋 Причина: проблема с прокси — бот не может зайти на сервер.',
-                'Это не твоя ошибка.',
-                '⏳ Когда заработает — неизвестно.',
-                '',
-                '❌ Верни оплату командой /cancel',
-            );
-            return lines.join('\n');
         case 'bot_offline':
-            lines.push(
-                '📋 Причина: бот сейчас не работает (нет связи с сервером).',
-                '⏳ Когда заработает — неизвестно.',
-                '',
-                '❌ Верни оплату командой /cancel',
-            );
-            return lines.join('\n');
+            return [
+                '❌ Бот сейчас не может зайти на сервер (не твоя ошибка), когда заработает — неизвестно.',
+                '❌ Вернуть оплату: /cancel',
+            ].join('\n');
         default:
             return buildRetryNickHint();
     }
-
-    lines.push('', ...retryNickAfterFailLines());
-    return lines.join('\n');
 }
 
 /** Лимит попыток на один /nick — нужен новый /nick с анархии */
 export function buildDeliveryAttemptsExceededHint(maxAttempts = 3) {
-    const anka = DELIVERY_ANARCHY;
-    return [
-        `⏹ Не вышло выдать за ${maxAttempts} попытки.`,
-        '',
-        `🎮 Зайди на анархию ${anka} и будь в сети.`,
-        askNickInChatLine(),
-        '💰 После нового /nick бот попробует снова (счётчик сбросится).',
-    ].join('\n');
+    return buildTryAgainHint();
 }
 
 /** Таймаут выдачи — заказ сброшен, нужен повторный /nick */
 export function buildQueueStallHint() {
-    const anka = DELIVERY_ANARCHY;
-    return [
-        '⏱ Не успели завершить выдачу (таймаут).',
-        '',
-        `🎮 Будь на анархии ${anka} и в сети.`,
-        askNickInChatLine(),
-        '',
-        '💰 Валюта придёт после того, как напишешь ник.',
-    ].join('\n');
+    return buildTryAgainHint();
 }
 
 function fmtKk(n) {
@@ -340,59 +327,63 @@ function buildPayoutBreakdownLines(bonus, defaultLotKk = 0, opts = null) {
  * @param {number} [bonus.bonusWheelKk]
  */
 export function buildDeliveryOkHint(amountKk, bonus = null, opts = {}) {
-    const breakdown = buildPayoutBreakdownLines(bonus, amountKk, { totalLabel: 'Итого выдано' });
-    const lines = ['✅ Валюта выдана!', ''];
-
-    if (breakdown.length) {
-        lines.push(...breakdown, '', '🎮 Приятной игры!');
-    } else {
-        lines.push('🎮 Приятной игры!');
-    }
-
-    const orderId = String(opts.orderId || '').trim();
-    const lotKk = opts.lotKk != null ? Math.round(Number(opts.lotKk)) : Math.round(Number(amountKk) || 0);
-    const orderTag = orderId
-        ? `${lotKk}кк · #${orderId.slice(0, 8)}`
-        : `${lotKk}кк`;
-
-    lines.push(
+    return [
+        '✅ Валюта выдана!',
         '',
-        `⭐ Подтверди на PlayerOK заказ: ${orderTag}`,
-        '⭐ Оставь отзыв — это очень помогает!',
-    );
-    return lines.join('\n');
+        '⭐ Пожалуйста, подтверди заказ',
+        '⭐ Если всё устроило, можешь оставить отзыв',
+    ].join('\n');
 }
 
 /**
- * Ссылка на лот-аналог: пустая строка + стрелки с пробелами (URL кликабельный).
+ * Ссылка на лот-аналог: пустая строка и сама ссылка отдельной строкой (кликабельна).
  * @param {string} url
  */
 export function formatUpsellLinkLine(url) {
     const u = String(url || '').trim();
     if (!u) return '';
-    return `\n\n➡️ ${u} ⬅️`;
+    return `\n\n${u}`;
 }
 
 /**
  * Автовозврат прошёл — деньги уже на балансе, сразу на 🎁-лот.
  * @param {{ upsellKk?: number, baseKk?: number, url?: string }} opts
  */
+/** Повторному покупателю сразу после оплаты: 🎁-аналог по той же цене или возврат. */
+export function buildRepeatBuyerOfferHint(opts = {}) {
+    const upsellKk = Math.round(Number(opts.upsellKk) || 0);
+    const url = String(opts.url || '').trim();
+    const head = upsellKk > 0 ? `🎁 Есть ${upsellKk}кк по этой же цене` : '🎁 Есть выгоднее по этой же цене';
+    return [head, url, '', '❌ Возврат — /cancel'].filter((x, i) => x !== '' || i === 2).join('\n');
+}
+
 export function buildPremiumRefundUpsellHint(opts = {}) {
     const upsellKk = Math.round(Number(opts.upsellKk) || 0);
     const baseKk = Math.round(Number(opts.baseKk) || 0);
     const url = String(opts.url || '').trim();
+    const more = upsellKk > 0 && baseKk > 0 ? `${upsellKk}кк вместо ${baseKk}кк` : upsellKk > 0 ? `${upsellKk}кк` : 'больше валюты';
+    const lines = [
+        '↩️ Этот заказ отменён, деньги уже вернулись на твой баланс PlayerOK.',
+        '',
+        `🎁 За ту же цену есть ${more} — купи по ссылке и напиши ник, выдам сразу:`,
+    ];
+    if (url) lines.push(url);
+    return lines.join('\n');
+}
 
-    let body;
-    if (upsellKk > 0 && baseKk > 0) {
-        body = `деньги уже на твоем балансе, так что сразу можешь взять ${upsellKk}кк за цену ${baseKk}кк`;
-    } else if (upsellKk > 0) {
-        body = `деньги уже на твоем балансе, так что сразу можешь взять ${upsellKk}кк по этой же цене`;
-    } else {
-        body = 'деньги уже на твоем балансе — бери лот по ссылке';
-    }
-
-    if (!url) return body;
-    return `${body}\n\n${url}`;
+/** Покупатель пишет в чат после автовозврата (ник, /cancel…) — заказа уже нет, напоминаем. */
+export function buildUpsellRefundReminderHint(opts = {}) {
+    const upsellKk = Math.round(Number(opts.upsellKk) || 0);
+    const baseKk = Math.round(Number(opts.baseKk) || 0);
+    const url = String(opts.url || '').trim();
+    const what = baseKk > 0 ? `Заказ на ${baseKk}кк отменён` : 'Заказ отменён';
+    const lines = [
+        `↩️ ${what}, деньги на твоём балансе PlayerOK — по нему ничего не выдам.`,
+        '',
+        `🎁 Купи ${upsellKk > 0 ? `${upsellKk}кк` : 'лот'} по той же цене, потом напиши сюда ник:`,
+    ];
+    if (url) lines.push(url);
+    return lines.join('\n');
 }
 
 /** Нет конкретного лота-аналога — подсказка про 🎁 на профиле (без ссылки). */
@@ -469,66 +460,25 @@ export function buildOrderClosedOnPlayerokHint() {
 
 /** /nick — сейчас выдаём этому покупателю */
 export function buildNickDeliveryActiveHint(nick, amountKk) {
-    const anka = DELIVERY_ANARCHY;
-    return [
-        `⏳ Сейчас выдаю валюту на ник «${nick}».`,
-        `💰 Сумма: ${fmtKk(amountKk)}`,
-        '',
-        `🎮 Будь на анархии ${anka} и в сети.`,
-    ].join('\n');
+    return `⏳ Выдаю на ник «${nick}» (${fmtKk(amountKk)}). Будь на анархии ${DELIVERY_ANARCHY}.`;
 }
 
 /** /nick — в очереди, сейчас выдают другому */
 export function buildNickQueueWaitingHint(position, amountKk = null) {
-    const anka = DELIVERY_ANARCHY;
-    const posLine =
-        position <= 2 ? 'Ты следующий в очереди.' : `Твоя очередь: ${position}.`;
-    const lines = ['⏳ Сейчас валюта выдаётся другому покупателю.', posLine];
-    if (amountKk != null) lines.push(`💰 Твой заказ: ${fmtKk(amountKk)}`);
-    lines.push('', `🎮 Будь на анархии ${anka} — выдадим, когда подойдёт очередь.`);
-    return lines.join('\n');
+    const posLine = position <= 2 ? 'Ты следующий в очереди' : `Твоя очередь: ${position}`;
+    return `⏳ ${posLine}, будь на анархии ${DELIVERY_ANARCHY}.`;
 }
 
 export function buildDispatchingHint(nick, amountKk, bonus = null) {
-    const anka = DELIVERY_ANARCHY;
-    const payoutBonus =
-        bonus && typeof bonus === 'object'
-            ? bonus
-            : bonus != null && Number(bonus) > 0
-              ? { payAmountKk: bonus, lotKk: amountKk }
-              : { lotKk: amountKk, payAmountKk: amountKk };
-
-    const breakdown = buildPayoutBreakdownLines(payoutBonus, amountKk);
-
-    const lines = [`⏳ Сейчас выдаю на ник «${nick}»:`];
-    if (breakdown.length) {
-        lines.push('', ...breakdown);
-    }
-    lines.push(
-        '',
-        `🎮 Будь на анархии ${anka} и в сети (FunTime 1.21).`,
-        'Если не пришло за минуту — напиши ник в этом чате.',
-    );
-    return lines.join('\n');
+    return `⏳ Выдаю на ник «${nick}». Будь на анархии ${DELIVERY_ANARCHY}.`;
 }
 
 /** Коротко: новая оплата, когда полное приветствие уже было в чате. */
 export function buildNewOrderTwinHint(ctx = null) {
-    const anka = DELIVERY_ANARCHY;
-    const lotKk = Number(ctx?.lotKk);
-
-    const lines = [
-        '✅ Оплата получена.',
-        '',
-        ...twinAccountWarningLines(),
-        `🎮 Анархия ${anka} — будь в сети.`,
-        '',
-        askNickInChatLine(),
-    ];
-    if (lotKk > 0) {
-        lines.push('', `📦 Лот: ${lotKk}кк`);
-    }
-    return lines.join('\n');
+    return [
+        `🎮 Сначала зайди на анархию ${DELIVERY_ANARCHY}, потом напиши в этот чат ник (не в Minecraft).`,
+        '✅ Это сложная выдача через /pay БЕЗ БАНОВ',
+    ].join('\n');
 }
 
 /** Полное приветствие в чате (не короткий twin-hint после повторной оплаты). */
@@ -541,6 +491,7 @@ export function hasGreetingInChat(messages, sellerUserId) {
         // Twin / кастом тоже считаем «уже писали» — иначе полное + twin подряд
         if (text.includes('оплата получена')) return true;
         if (text.includes('заходи на анархию')) return true;
+        if (text.includes('сначала зайди на анархию')) return true;
     }
     return false;
 }
@@ -563,7 +514,10 @@ export function hasPaymentAckInChat(messages, sellerUserId, opts = null) {
             if (Number.isFinite(at) && at < sinceMs - 5000) continue;
         }
         const text = msg.text.toLowerCase();
-        if (!text.includes('оплата получена')) continue;
+        const twinHint =
+            text.includes('потом напиши в этот чат ник (не в minecraft)')
+            || text.includes('сложная выдача через /pay');
+        if (!text.includes('оплата получена') && !twinHint) continue;
         if (lotNeedle && !text.includes(lotNeedle)) continue;
         return true;
     }
