@@ -154,7 +154,19 @@ async fn wait_outcome(state: &Arc<Mutex<BotState>>, d: Duration) -> Option<PayOu
     state.lock().pay_outcome.clone()
 }
 
-async fn refresh_balance(bot: &Client, state: &Arc<Mutex<BotState>>) -> Option<f64> {
+/// Баланс бота. Если он уже приходит из сайдбара (`sidebar_known`), команда `/balance` не нужна: ждём `settle`
+/// (чтобы TAB успел обновить строку после перевода) и берём текущее значение. Иначе — старый путь через чат.
+async fn refresh_balance(bot: &Client, state: &Arc<Mutex<BotState>>, settle: Duration) -> Option<f64> {
+    {
+        let st = state.lock();
+        if st.sidebar_known && st.balance.is_some() {
+            drop(st);
+            if !settle.is_zero() {
+                tokio::time::sleep(settle).await;
+            }
+            return state.lock().balance;
+        }
+    }
     state.lock().balance = None;
     cmd::say(bot, "/balance");
     for _ in 0..25 {
@@ -165,6 +177,11 @@ async fn refresh_balance(bot: &Client, state: &Arc<Mutex<BotState>>) -> Option<f
     }
     None
 }
+
+/// Сколько ждём обновления сайдбара после перевода, прежде чем сверять баланс.
+const BALANCE_SETTLE: Duration = Duration::from_secs(3);
+/// При передаче остатка: меньше — считаем ошибкой чтения (не шлём 1 монету).
+const MIN_HANDOFF_COINS: f64 = 2_000_000.0;
 
 pub async fn run_loop(bot: Client, boot: Arc<BotBoot>, state: Arc<Mutex<BotState>>) {
     let mut idle_since = Instant::now();
@@ -184,7 +201,9 @@ pub async fn run_loop(bot: Client, boot: Arc<BotBoot>, state: Arc<Mutex<BotState
             afk::un_afk(&bot).await;
         }
 
-        if let Some(to) = state.lock().handoff_to.clone() {
+        // Гард state нельзя держать в теле `if let` — run_handoff сам лочит state (дедлок).
+        let handoff = state.lock().handoff_to.clone();
+        if let Some(to) = handoff {
             run_handoff(&bot, &state, &to).await;
             idle_since = Instant::now();
             continue;
@@ -245,7 +264,7 @@ async fn deliver_one(
 
     info!("выдача {}… {nick} {amount_kk}kk", &order_id[..order_id.len().min(8)]);
 
-    let before = refresh_balance(bot, state).await.unwrap_or(0.0);
+    let before = refresh_balance(bot, state, Duration::ZERO).await.unwrap_or(0.0);
     if before + 1.0 < amount as f64 {
         fail(boot, &order_id, "insufficient_funds");
         clear_job(state, &order_id);
@@ -291,7 +310,7 @@ async fn deliver_one(
         _ => {}
     }
 
-    let after = refresh_balance(bot, state).await.unwrap_or(before);
+    let after = refresh_balance(bot, state, BALANCE_SETTLE).await.unwrap_or(before);
     let delta = before - after;
     if delta >= (amount as f64) * 0.9 {
         if delta > (amount as f64) * 1.5 {
@@ -310,6 +329,12 @@ async fn deliver_one(
     clear_job(state, &order_id);
 }
 
+/// Баланс для передачи остатка: только `/balance`, не кэш TAB (там бывает «1»).
+async fn handoff_balance(bot: &Client, state: &Arc<Mutex<BotState>>) -> Option<f64> {
+    state.lock().balance = None;
+    refresh_balance(bot, state, BALANCE_SETTLE).await
+}
+
 async fn run_handoff(bot: &Client, state: &Arc<Mutex<BotState>>, to: &str) {
     info!("хэндофф остатка → {to}");
     if !nick_ok(to) {
@@ -317,16 +342,30 @@ async fn run_handoff(bot: &Client, state: &Arc<Mutex<BotState>>, to: &str) {
         state.lock().handoff_to = None;
         return;
     }
-    let Some(bal) = refresh_balance(bot, state).await else {
+    info!("хэндофф: читаю баланс через /balance");
+    let mut bal = handoff_balance(bot, state).await;
+    if bal.map_or(true, |b| b > 0.0 && b < MIN_HANDOFF_COINS) {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        bal = handoff_balance(bot, state).await.or(bal);
+    }
+    let Some(bal) = bal else {
+        warn!("хэндофф: баланс не получен");
         // сбрасываем задачу, иначе цикл сразу возьмёт её снова и будет без конца спрашивать /balance
         emit_handoff(state, to, false, 0.0);
         state.lock().handoff_to = None;
         return;
     };
     let send = (bal - HANDOFF_KEEP).floor() as i64;
+    info!("хэндофф: баланс {bal}, шлю {send}");
     if send <= 0 {
         info!("хэндофф: пустой баланс");
         emit_handoff(state, to, true, 0.0);
+        state.lock().handoff_to = None;
+        return;
+    }
+    if (send as f64) < MIN_HANDOFF_COINS {
+        warn!("хэндофф: на счету {bal} — слишком мало для передачи, не шлём");
+        emit_handoff(state, to, false, bal);
         state.lock().handoff_to = None;
         return;
     }
@@ -346,7 +385,7 @@ async fn run_handoff(bot: &Client, state: &Arc<Mutex<BotState>>, to: &str) {
         state.lock().handoff_to = None;
         return;
     }
-    let after = refresh_balance(bot, state).await.unwrap_or(bal);
+    let after = handoff_balance(bot, state).await.unwrap_or(bal);
     if bal - after >= (send as f64) * 0.9 {
         emit_handoff(state, to, true, send as f64);
         state.lock().handoff_to = None;
@@ -395,7 +434,7 @@ fn fail(boot: &Arc<BotBoot>, order_id: &str, reason: &str) {
         username: Some(boot.username.clone()),
         reason: Some(reason.into()),
         id: Some(order_id.into()),
-        extra: json!({ "orderId": order_id, "reason": reason }),
+        extra: json!({ "orderId": order_id }),
         ..empty()
     });
 }

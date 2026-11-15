@@ -39,7 +39,22 @@ const HANDOFF_DONE_TIMEOUT: Duration = Duration::from_secs(90);
 const HANDOFF_RETRY_GAP: Duration = Duration::from_secs(15);
 const HANDOFF_MAX_TRIES: u32 = 3;
 /// После неудачной передачи не пробуем снова столько (держатель продолжает выдавать).
-const HANDOFF_BLOCK: Duration = Duration::from_secs(600);
+const HANDOFF_BLOCK: Duration = Duration::from_secs(30);
+/// Сколько неудачных передач подряд терпим, не выдавая заказы с «выработанного» держателя.
+/// После этого выдаём с него (лучше лишняя выдача, чем покупатель без валюты).
+const HANDOFF_ABORTS_BEFORE_FALLBACK: u32 = 4;
+/// Бот не смог зайти (2FA/привязка/пароль/прокси) — столько не выбираем его получателем передачи.
+const LOGIN_FAIL_SKIP: Duration = Duration::from_secs(30 * 60);
+
+impl Orch {
+    /// Нельзя брать получателем передачи: забанен или недавно не смог зайти (и с тех пор не заходил).
+    fn unusable(&self, n: &str) -> bool {
+        self.bans.contains_key(n)
+            || self.stuck_2fa.contains(n)
+            || (!self.ready.contains(n)
+                && self.login_fail.get(n).map_or(false, |t| t.elapsed() < LOGIN_FAIL_SKIP))
+    }
+}
 /// Минимальный интервал между запусками одного бота. Непривязанный перезаходит снова и снова
 /// (бот сам выходит после запроса привязки), но не чаще, чем раз в это время.
 const SPAWN_GAP: Duration = Duration::from_secs(20);
@@ -80,6 +95,8 @@ const RETRY_DELAY: Duration = Duration::from_secs(20);
 /// Передача остатка: следующий заходит и ждёт, держатель переводит, следующий сообщает «получено».
 struct Handoff {
     to: String,
+    /// Обычная смена: `None` = отправитель текущий держатель. Спасение залипших денег: `Some(nick)`.
+    from: Option<String>,
     started: Instant,
     sent_at: Option<Instant>,
     not_before: Option<Instant>,
@@ -92,16 +109,81 @@ struct Handoff {
 
 impl Handoff {
     fn new(to: String) -> Self {
-        Self { to, started: Instant::now(), sent_at: None, not_before: None, tries: 0, sent_amount: None, received: None }
+        Self {
+            to,
+            from: None,
+            started: Instant::now(),
+            sent_at: None,
+            not_before: None,
+            tries: 0,
+            sent_amount: None,
+            received: None,
+        }
+    }
+
+    fn rescue(from: String, to: String) -> Self {
+        Self {
+            to,
+            from: Some(from),
+            started: Instant::now(),
+            sent_at: None,
+            not_before: None,
+            tries: 0,
+            sent_amount: None,
+            received: None,
+        }
+    }
+
+    fn sender<'a>(&'a self, duty: Option<&'a str>) -> Option<&'a str> {
+        self.from.as_deref().or(duty)
     }
 }
 
 /// Допуск при сверке суммы (округление).
 const VERIFY_TOLERANCE: f64 = 0.98;
+/// Меньше — не принимаем «успешную» передачу (ошибка чтения баланса, как 1 монета).
+const MIN_HANDOFF_ACCEPT: f64 = 2_000_000.0;
 /// Перевод ушёл, а сообщения «получено» нет столько секунд — всё равно передаём очередь (отправитель пуст).
 const RECEIPT_WAIT: Duration = Duration::from_secs(60);
 
 /// Журнал денег: каждая выдача и передача (одна строка JSON). Нужен, чтобы после сбоя понять, где деньги.
+/// id заказов с `delivery_ok` в ledger.jsonl.
+fn load_delivered(farm: &Path) -> HashSet<String> {
+    let mut out = HashSet::new();
+    if let Ok(raw) = std::fs::read_to_string(farm.join("ledger.jsonl")) {
+        for line in raw.lines() {
+            if let Ok(v) = serde_json::from_str::<Value>(line) {
+                if v.get("ev").and_then(|x| x.as_str()) == Some("delivery_ok") {
+                    if let Some(o) = v.get("order").and_then(|x| x.as_str()) {
+                        if !o.is_empty() {
+                            out.insert(o.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Одноразовый триггер без Go: `sellbot-rust/rescue.pending.json` → `{"from":"…","to":"…"}` (to опционален).
+fn take_rescue_pending(farm: &Path) -> Option<(String, String)> {
+    let p = farm.join("rescue.pending.json");
+    let raw = std::fs::read_to_string(&p).ok()?;
+    let _ = std::fs::remove_file(&p);
+    let v: Value = serde_json::from_str(&raw).ok()?;
+    let from = v.get("from")?.as_str()?.trim().to_string();
+    if from.is_empty() {
+        return None;
+    }
+    let to = v
+        .get("to")
+        .and_then(|x| x.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    Some((from, to.unwrap_or_default()))
+}
+
 fn ledger(farm: &Path, mut ev: Value) {
     use std::io::Write;
     if let Some(o) = ev.as_object_mut() {
@@ -136,12 +218,41 @@ struct Orch {
     attempts: HashMap<String, u32>,
     handoff: Option<Handoff>,
     rotate_block_until: Option<Instant>,
+    handoff_aborts: u32,
     /// Когда последний раз запускали воркера (чтобы непривязанные не переподключались чаще раза в SPAWN_GAP).
     last_spawn: HashMap<String, Instant>,
     sell_clients: HashSet<usize>,
     next_client: usize,
     client_tx: HashMap<usize, mpsc::UnboundedSender<String>>,
     go_out: Option<mpsc::UnboundedSender<Value>>,
+    /// Последний известный баланс каждого бота: ник → (сумма, unix мс). Хранится в balances.json, чтобы пережить перезапуск.
+    balances: HashMap<String, (f64, u64)>,
+    /// Кнопка «принять перевод» во вкладке Go: держатель сидит онлайн, пока ему не придёт перевод.
+    wait_pay: Option<WaitPay>,
+    /// Последний принятый держателем перевод (для вкладки): ник, от кого, сколько, когда.
+    last_payment: Option<(String, String, f64, u64)>,
+    /// Забаненные на FunTime боты выдачи: ник → (причина, unix мс). Показываются на странице банов в Go.
+    bans: HashMap<String, (String, u64)>,
+    /// Сбои входа: ник → (kind: proxy_error | bad_password, причина, unix мс).
+    faults: HashMap<String, (String, String, u64)>,
+    /// Последний неудачный вход (нужен 2FA / привязка / пароль / прокси). Такого бота не берём
+    /// получателем передачи остатка `LOGIN_FAIL_SKIP` или пока он не зайдёт (`funauth_verified`).
+    login_fail: HashMap<String, Instant>,
+    /// Уже выданные заказы (из ledger.jsonl + текущий запуск). Повторно присланный такой заказ
+    /// не платим второй раз, а сразу подтверждаем выдачу poll'у (его delivery_ok мог потеряться).
+    delivered: HashSet<String>,
+    /// FunTime просит подтвердить вход через Telegram (2FA), а Go не знает его Telegram-аккаунт:
+    /// бот привязан, но зайти не может. Не запускаем и не берём в ротацию, пока не зайдёт сам
+    /// (рестарт sell-orch даёт одну попытку) или ник не заменят.
+    stuck_2fa: HashSet<String>,
+    /// Когда заказ впервые увидели в очереди на выдачу; уведомление «бот решает капчу» шлём один раз на заказ.
+    wait_seen: HashMap<String, Instant>,
+    wait_notified: HashSet<String>,
+}
+
+struct WaitPay {
+    since_ms: u64,
+    nick: String,
 }
 
 #[tokio::main]
@@ -214,6 +325,10 @@ async fn main() -> Result<()> {
         bot_bin.display()
     );
 
+    let balances0 = load_balances(&farm);
+    let bans0 = load_bans(&farm);
+    let delivered0 = load_delivered(&farm);
+
     let state = Arc::new(Mutex::new(Orch {
         farm_root: farm,
         bot_bin,
@@ -229,11 +344,22 @@ async fn main() -> Result<()> {
         attempts: HashMap::new(),
         handoff: None,
         rotate_block_until: None,
+        handoff_aborts: 0,
         last_spawn: HashMap::new(),
         sell_clients: HashSet::new(),
         next_client: 0,
         client_tx: HashMap::new(),
         go_out: None,
+        balances: balances0,
+        wait_pay: None,
+        last_payment: None,
+        bans: bans0,
+        faults: HashMap::new(),
+        login_fail: HashMap::new(),
+        delivered: delivered0,
+        stuck_2fa: HashSet::new(),
+        wait_seen: HashMap::new(),
+        wait_notified: HashSet::new(),
     }));
 
     let (restart_tx, mut restart_rx) = mpsc::unbounded_channel::<String>();
@@ -247,6 +373,7 @@ async fn main() -> Result<()> {
         tokio::spawn(async move {
             loop {
                 pump(&st).await;
+                notify_waiting(&st).await;
                 let _ = tick_spawns(st.clone(), rtx.clone()).await;
                 sleep(Duration::from_secs(1)).await;
             }
@@ -325,16 +452,21 @@ fn needed(g: &Orch) -> HashSet<String> {
     let mut out: HashSet<String> = g
         .bots
         .iter()
-        .filter(|(_, rt)| rt.bound != Some(true))
+        .filter(|(n, rt)| rt.bound != Some(true) && !g.bans.contains_key(*n))
         .map(|(n, _)| n.clone())
         .collect();
     if let Some(duty) = g.queue.duty() {
-        if !g.pending.is_empty() || g.in_flight.is_some() || g.handoff.is_some() {
+        // баланс держателя неизвестен (первый запуск): один раз заходим, чтобы вкладка «Автопродажа» его показала
+        let unknown_balance = !g.balances.contains_key(duty);
+        if unknown_balance || g.wait_pay.is_some() || !g.pending.is_empty() || g.in_flight.is_some() || g.handoff.is_some() {
             out.insert(duty.to_string());
         }
     }
     if let Some(h) = &g.handoff {
         out.insert(h.to.clone());
+        if let Some(from) = h.from.as_ref() {
+            out.insert(from.clone());
+        }
     }
     out
 }
@@ -372,8 +504,22 @@ async fn pump(state: &Arc<Mutex<Orch>>) {
         let now = Instant::now();
         let duty = g.queue.duty().map(|s| s.to_string());
         let mut act = Act::None;
+        if g.handoff.is_none() {
+            if let Some((from, mut to)) = take_rescue_pending(&g.farm_root) {
+                if to.is_empty() {
+                    to = g.queue.duty().map(|s| s.to_string()).unwrap_or_default();
+                }
+                if !from.is_empty() && to != from && g.bots.contains_key(&from) {
+                    info!("rescue.pending: {from} → {to}");
+                    ledger(&g.farm_root, json!({ "ev": "rescue_start", "from": from, "to": to, "via": "file" }));
+                    g.handoff = Some(Handoff::rescue(from.clone(), to));
+                    save_state(&g);
+                }
+            }
+        }
         if let Some(h) = g.handoff.as_ref() {
-            let both = duty.as_ref().map(|d| g.ready.contains(d)).unwrap_or(false) && g.ready.contains(&h.to);
+            let sender = h.sender(duty.as_deref()).map(|s| s.to_string());
+            let both = sender.as_ref().map(|s| g.ready.contains(s)).unwrap_or(false) && g.ready.contains(&h.to);
             if let Some(amount) = h.sent_amount {
                 // перевод ушёл: ждём, пока получатель увидит «получено»
                 if let Some(got) = h.received {
@@ -388,18 +534,26 @@ async fn pump(state: &Arc<Mutex<Orch>>) {
             } else if h.started.elapsed() > HANDOFF_READY_TIMEOUT {
                 act = Act::Abort("участники передачи не зашли за отведённое время".into());
             } else if both && h.not_before.map_or(true, |t| now >= t) {
-                act = Act::SendHandoff(duty.clone().unwrap_or_default(), h.to.clone());
+                if let Some(from) = sender {
+                    act = Act::SendHandoff(from, h.to.clone());
+                }
             }
         } else if g.in_flight.is_none() {
             let block = g.rotate_block_until.map_or(false, |t| now < t);
-            if g.queue.rotation_due() && !block {
-                if let Some(to) = g.queue.next().map(|s| s.to_string()) {
+            let next_alive = g.queue.next_alive(&|n| g.unusable(n)).map(|s| s.to_string());
+            if g.queue.rotation_due() && !block && next_alive.is_some() {
+                if let Some(to) = next_alive {
                     info!("{} выдачи у {} → третий перевод {to}", rotation::PAYS_BEFORE_ROTATE, duty.clone().unwrap_or_default());
                     g.handoff = Some(Handoff::new(to));
                     save_state(&g);
                 }
             } else if let Some(d) = duty.clone() {
-                if g.ready.contains(&d) {
+                // Держатель выработал лимит выдач — новые заказы только после передачи (иначе третья выдача с одного акка).
+                let worn_out = g.queue.rotation_due() && next_alive.is_some() && g.handoff_aborts < HANDOFF_ABORTS_BEFORE_FALLBACK;
+                if worn_out && !g.pending.is_empty() {
+                    warn_once_worn(&d);
+                }
+                if g.ready.contains(&d) && !worn_out {
                     let pos = g.pending.iter().position(|p| p.not_before.map_or(true, |t| now >= t));
                     if let Some(i) = pos {
                         let job = g.pending.remove(i).unwrap();
@@ -418,26 +572,66 @@ async fn pump(state: &Arc<Mutex<Orch>>) {
             warn!("передача остатка отменена: {why}; держатель остаётся, повтор через {} мин", HANDOFF_BLOCK.as_secs() / 60);
             ledger(&g.farm_root, json!({ "ev": "handoff_abort", "from": g.queue.duty(), "why": why }));
             g.handoff = None;
+            g.handoff_aborts += 1;
             g.rotate_block_until = Some(Instant::now() + HANDOFF_BLOCK);
             save_state(&g);
         }
         Act::Done { to, amount, got } => {
-            let duty = state.lock().await.queue.duty().map(|s| s.to_string()).unwrap_or_default();
-            let ok = got.map_or(false, |g| g >= amount * VERIFY_TOLERANCE);
+            let (duty, sender, rescue) = {
+                let g = state.lock().await;
+                let duty = g.queue.duty().map(|s| s.to_string()).unwrap_or_default();
+                let sender = g
+                    .handoff
+                    .as_ref()
+                    .and_then(|h| h.sender(g.queue.duty()))
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| duty.clone());
+                let rescue = g.handoff.as_ref().and_then(|h| h.from.clone());
+                (duty, sender, rescue)
+            };
+            let mut ok = got.map_or(false, |g| g >= amount * VERIFY_TOLERANCE);
+            if ok && amount > 0.0 && amount < MIN_HANDOFF_ACCEPT {
+                warn!(
+                    "передача остатка: подозрительно мало ({}) — не считаем успехом",
+                    fmt_money(amount)
+                );
+                ok = false;
+            }
             if ok {
-                info!("{to}: получил {} от {duty}", fmt_money(got.unwrap_or(0.0)));
+                info!("{to}: получил {} от {sender}", fmt_money(got.unwrap_or(0.0)));
             } else {
-                warn!("{to}: не подтвердил получение {} от {duty} (получено: {}) — см. ledger.jsonl", fmt_money(amount), got.map(fmt_money).unwrap_or_else(|| "нет сообщения".into()));
+                warn!(
+                    "{to}: не подтвердил получение {} от {sender} (получено: {}) — см. ledger.jsonl",
+                    fmt_money(amount),
+                    got.map(fmt_money).unwrap_or_else(|| "нет сообщения".into())
+                );
             }
             {
                 let g = state.lock().await;
-                ledger(&g.farm_root, json!({
-                    "ev": if ok { "handoff_ok" } else { "handoff_mismatch" },
-                    "from": duty, "to": to, "sent": amount, "received": got,
-                }));
+                ledger(
+                    &g.farm_root,
+                    json!({
+                        "ev": if ok { "handoff_ok" } else { "handoff_mismatch" },
+                        "from": sender,
+                        "to": to,
+                        "sent": amount,
+                        "received": got,
+                        "rescue": rescue.is_some(),
+                    }),
+                );
             }
-            // отправитель уже пуст: в любом случае передаём очередь, расхождение остаётся в журнале
-            let _ = finish_rotate(state, &duty).await;
+            if rescue.is_some() {
+                if ok {
+                    let _ = finish_rescue(state, &sender).await;
+                } else {
+                    let mut g = state.lock().await;
+                    g.handoff = None;
+                    save_state(&g);
+                }
+            } else {
+                // отправитель уже пуст: в любом случае передаём очередь, расхождение остаётся в журнале
+                let _ = finish_rotate(state, &sender).await;
+            }
         }
         Act::SendHandoff(duty, to) => {
             info!("{duty}: передаю остаток → {to}");
@@ -627,14 +821,22 @@ async fn on_worker_line(state: &Arc<Mutex<Orch>>, username: &str, line: &str) ->
                     rt.bound = Some(true);
                 }
                 let first = g.ready.insert(username.to_string());
+                g.login_fail.remove(username);
+                if g.stuck_2fa.remove(username) {
+                    g.faults.remove(username);
+                }
                 (g.farm_root.clone(), first)
             };
             save_binding(&farm, username, true);
             if first {
                 info!("{username}: на анархии, готов");
             }
-            if let Some(tx) = state.lock().await.go_out.clone() {
-                let an = state.lock().await.anarchy;
+            // не держим блокировку состояния в теле `if let`: повторный `lock()` внутри вешал весь оркестратор
+            let (go, an) = {
+                let g = state.lock().await;
+                (g.go_out.clone(), g.anarchy)
+            };
+            if let Some(tx) = go {
                 let _ = tx.send(json!({
                     "action": "funauth_verified",
                     "anarchy": an,
@@ -642,13 +844,70 @@ async fn on_worker_line(state: &Arc<Mutex<Orch>>, username: &str, line: &str) ->
                 }));
             }
         }
-        "funauth_bind" | "funauth_2fa" | "auth_fault" => {
+        "banned" => {
+            let reason = msg.reason.clone().unwrap_or_else(|| "бан".into());
+            warn!("{username}: БАН на FunTime — {reason}");
+            let mut g = state.lock().await;
+            g.bans.insert(username.to_string(), (reason.clone(), session::now_unix_ms()));
+            save_bans(&g.farm_root, &g.bans);
+            g.ready.remove(username);
+            // Получатель передачи забанен — отменяем её сразу, следующий тик возьмёт другого.
+            if g.handoff.as_ref().map_or(false, |h| h.to == username && h.sent_at.is_none()) {
+                warn!("{username}: получатель передачи забанен — выбираю следующего");
+                g.handoff = None;
+                g.rotate_block_until = None;
+                save_state(&g);
+            }
+            ledger(&g.farm_root, json!({ "ev": "bot_banned", "bot": username, "reason": reason }));
+        }
+        "proxy_ok" => {
+            let mut g = state.lock().await;
+            if g.faults.get(username).map_or(false, |f| f.0 == "proxy_error") {
+                g.faults.remove(username);
+                info!("{username}: прокси снова рабочий");
+            }
+        }
+        "auth_fault" if msg.data.as_ref().and_then(|d| d.get("kind")).and_then(|k| k.as_str()) == Some("proxy_error") => {
+            // сбой прокси ничего не говорит о привязке аккаунта: bound не трогаем, только показываем в Go
+            let reason = msg.reason.clone().unwrap_or_default();
+            warn!("{username}: прокси не работает — {reason}");
+            let mut g = state.lock().await;
+            g.faults.insert(username.to_string(), ("proxy_error".into(), reason, session::now_unix_ms()));
+            mark_login_fail(&mut g, username);
+        }
+        "funauth_2fa" => {
+            // Аккаунт ПРИВЯЗАН (иначе FunTime просил бы привязку), но вход надо подтвердить в Telegram.
+            // Один раз просим Go подтвердить; бота больше не запускаем и не берём в очередь.
+            let (go, an, first) = {
+                let mut g = state.lock().await;
+                if let Some(rt) = g.bots.get_mut(username) {
+                    rt.bound = Some(true);
+                }
+                g.ready.remove(username);
+                mark_login_fail(&mut g, username);
+                let first = g.stuck_2fa.insert(username.to_string());
+                g.faults.insert(
+                    username.to_string(),
+                    ("2fa".into(), "FunTime просит подтвердить вход через Telegram, а Telegram-аккаунт ника неизвестен".into(), session::now_unix_ms()),
+                );
+                let an = g.bots.get(username).map(|rt| if rt.cfg.anarchy == 0 { g.anarchy } else { rt.cfg.anarchy }).unwrap_or(g.anarchy);
+                (g.go_out.clone(), an, first)
+            };
+            if first {
+                if let Some(tx) = go {
+                    let _ = tx.send(json!({ "action": "funauth_2fa", "nick": username, "anarchy": an }));
+                }
+                warn!("{username}: нужен 2FA через Telegram — бот исключён из очереди и не перезапускается (замени ник или подтверди вход)");
+            }
+        }
+        "funauth_bind" | "auth_fault" => {
             let (farm, go, pw, an) = {
                 let mut g = state.lock().await;
                 if let Some(rt) = g.bots.get_mut(username) {
                     rt.bound = Some(false);
                 }
                 g.ready.remove(username);
+                mark_login_fail(&mut g, username);
                 let (pw, an) = g
                     .bots
                     .get(username)
@@ -657,6 +916,10 @@ async fn on_worker_line(state: &Arc<Mutex<Orch>>, username: &str, line: &str) ->
                 (g.farm_root.clone(), g.go_out.clone(), pw, an)
             };
             save_binding(&farm, username, false);
+            if msg.name == "auth_fault" {
+                let reason = msg.reason.clone().unwrap_or_default();
+                state.lock().await.faults.insert(username.to_string(), ("bad_password".into(), reason, session::now_unix_ms()));
+            }
             // как у фермы: просим Go привязать ник (Telegram-аккаунты Go), он сам не даёт запустить второй job на ник
             if let Some(tx) = go {
                 match msg.name.as_str() {
@@ -674,11 +937,26 @@ async fn on_worker_line(state: &Arc<Mutex<Orch>>, username: &str, line: &str) ->
                 warn!("{username}: нужна привязка, но Go не подключён — перезайдёт через {} с", SPAWN_GAP.as_secs());
             }
         }
+        "balance" => {
+            if let Some(b) = msg.balance {
+                let now = session::now_unix_ms();
+                let mut g = state.lock().await;
+                g.balances.insert(username.to_string(), (b, now));
+                save_balances(&g.farm_root, &g.balances);
+            }
+        }
         "payment_received" => {
             let from = msg.extra.get("from").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let amount = msg.extra.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
             let mut g = state.lock().await;
             let duty = g.queue.duty().map(|s| s.to_string());
+            if duty.as_deref() == Some(username) {
+                g.last_payment = Some((username.to_string(), from.clone(), amount, session::now_unix_ms()));
+                if g.wait_pay.take().is_some() {
+                    info!("{username}: перевод получен ({}) — кнопка «принять перевод» снята", fmt_money(amount));
+                    ledger(&g.farm_root, json!({ "ev": "wait_pay_done", "nick": username, "from": from, "amount": amount }));
+                }
+            }
             if let Some(h) = g.handoff.as_mut() {
                 if h.to == username && duty.as_deref().map_or(false, |d| d.eq_ignore_ascii_case(&from)) {
                     h.received = Some(h.received.unwrap_or(0.0) + amount);
@@ -699,6 +977,9 @@ async fn on_worker_line(state: &Arc<Mutex<Orch>>, username: &str, line: &str) ->
                 }
                 g.jobs.remove(&oid);
                 g.attempts.remove(&oid);
+                if !oid.is_empty() {
+                    g.delivered.insert(oid.clone());
+                }
                 if g.queue.duty() == Some(username) {
                     g.queue.on_delivery_ok();
                     if g.queue.order.len() < 2 && g.queue.pays >= rotation::PAYS_BEFORE_ROTATE {
@@ -755,11 +1036,22 @@ async fn on_worker_line(state: &Arc<Mutex<Orch>>, username: &str, line: &str) ->
         "handoff_done" => {
             let ok = msg.extra.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
             let amount = msg.extra.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let mut ok = ok;
+            if ok && amount > 0.0 && amount < MIN_HANDOFF_ACCEPT {
+                warn!(
+                    "{username}: передача остатка {amount} — подозрительно мало, отклоняем"
+                );
+                ok = false;
+            }
             if ok {
                 info!("{username}: перевод остатка ушёл ({}) — сверяю у получателя", fmt_money(amount));
                 if amount <= 0.0 {
-                    // нечего переводить (у держателя пусто): сверять нечего
-                    finish_rotate(state, username).await?;
+                    let rescue = state.lock().await.handoff.as_ref().and_then(|h| h.from.clone());
+                    if rescue.is_some() {
+                        finish_rescue(state, username).await?;
+                    } else {
+                        finish_rotate(state, username).await?;
+                    }
                 } else {
                     let mut g = state.lock().await;
                     if let Some(h) = g.handoff.as_mut() {
@@ -803,13 +1095,60 @@ async fn on_worker_line(state: &Arc<Mutex<Orch>>, username: &str, line: &str) ->
     Ok(())
 }
 
+/// Бот не смог зайти. Если он получатель ещё не отправленной передачи — отменяем её сразу
+/// (иначе ждём HANDOFF_READY_TIMEOUT и выбираем его же снова), следующий тик возьмёт другого.
+fn mark_login_fail(g: &mut Orch, username: &str) {
+    g.login_fail.insert(username.to_string(), Instant::now());
+    if g.handoff.as_ref().map_or(false, |h| h.to == username && h.sent_at.is_none() && h.sent_amount.is_none()) {
+        warn!("{username}: получатель передачи не может зайти — выбираю следующего");
+        g.handoff = None;
+        g.rotate_block_until = None;
+        save_state(g);
+    }
+}
+
+fn warn_once_worn(duty: &str) {
+    static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+    let mut l = LAST.lock().unwrap();
+    if l.map_or(true, |t| t.elapsed() > Duration::from_secs(60)) {
+        warn!("{duty}: лимит выдач выработан, заказ ждёт передачи остатка");
+        *l = Some(Instant::now());
+    }
+}
+
+/// Застрявший остаток у не-дежурного бота → дежурному, очередь не крутим.
+async fn finish_rescue(state: &Arc<Mutex<Orch>>, from: &str) -> Result<()> {
+    let mut g = state.lock().await;
+    g.handoff = None;
+    save_state(&g);
+    info!("спасение остатка: {from} офлайн");
+    if g.bots.get(from).map(is_bound).unwrap_or(false) {
+        if let Some(mut w) = g.workers.remove(from) {
+            let _ = w.child.start_kill();
+        }
+        g.ready.remove(from);
+    }
+    Ok(())
+}
+
 /// Остаток ушёл следующему: он становится держателем, бывший уходит в конец и офлайн.
 async fn finish_rotate(state: &Arc<Mutex<Orch>>, old: &str) -> Result<()> {
     let mut g = state.lock().await;
     let now = session::now_unix_ms();
-    g.queue.rotate(now);
+    // Держателем становится тот, кому ушёл остаток (боты между ним и прежним уходят в конец).
+    let to = g.handoff.as_ref().map(|h| h.to.clone());
+    match to {
+        Some(to) if g.queue.order.iter().any(|n| *n == to) => {
+            g.queue.rotate_skipping(now, &|n| n != to);
+        }
+        _ => {
+            let bans: std::collections::HashSet<String> = g.bans.keys().cloned().collect();
+            g.queue.rotate_skipping(now, &|n| bans.contains(n));
+        }
+    }
     g.handoff = None;
     g.rotate_block_until = None;
+    g.handoff_aborts = 0;
     save_state(&g);
     info!(
         "держатель → {} · передач всего {} · порядок: {}",
@@ -824,6 +1163,31 @@ async fn finish_rotate(state: &Arc<Mutex<Orch>>, old: &str) -> Result<()> {
         g.ready.remove(old);
     }
     Ok(())
+}
+
+/// Заказ ждёт держателя дольше `WAIT_NOTICE_AFTER` — бот ещё заходит (капча, привязка): один раз просим покупателя подождать.
+const WAIT_NOTICE_AFTER: Duration = Duration::from_secs(40);
+
+async fn notify_waiting(state: &Arc<Mutex<Orch>>) {
+    let due: Vec<String> = {
+        let mut g = state.lock().await;
+        let ids: Vec<String> = g.pending.iter().map(|p| p.order_id.clone()).collect();
+        g.wait_seen.retain(|k, _| ids.contains(k));
+        g.wait_notified.retain(|k| ids.contains(k));
+        let duty_ready = g.queue.duty().map_or(false, |d| g.ready.contains(d));
+        let mut due = Vec::new();
+        for id in ids {
+            let seen = *g.wait_seen.entry(id.clone()).or_insert_with(Instant::now);
+            if !duty_ready && seen.elapsed() >= WAIT_NOTICE_AFTER && !g.wait_notified.contains(&id) {
+                g.wait_notified.insert(id.clone());
+                due.push(id);
+            }
+        }
+        due
+    };
+    for oid in due {
+        emit_sell(state, json!({ "type": "delivery_waiting", "orderId": oid, "reason": "captcha" })).await;
+    }
 }
 
 async fn emit_sell(state: &Arc<Mutex<Orch>>, ev: Value) {
@@ -897,6 +1261,15 @@ async fn on_sell_msg(state: &Arc<Mutex<Orch>>, msg: Value) {
     match typ {
         "order" => {
             let amount = msg.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let already = state.lock().await.delivered.contains(&oid);
+            if already {
+                warn!(
+                    "заказ {} уже выдан (ledger) — второй раз не плачу, подтверждаю выдачу poll",
+                    &oid[..oid.len().min(8)]
+                );
+                emit_sell(state, json!({ "type": "delivery_ok", "orderId": oid, "nick": nick })).await;
+                return;
+            }
             let mut g = state.lock().await;
             if g.in_flight.as_deref() == Some(oid.as_str()) || g.pending.iter().any(|p| p.order_id == oid) {
                 return;
@@ -950,6 +1323,198 @@ async fn on_sell_msg(state: &Arc<Mutex<Orch>>, msg: Value) {
     }
 }
 
+/// Секунды из текста «Разбан через: 13 д, 9 ч, 50 м, 13 с».
+fn ban_duration_secs(reason: &str) -> Option<u64> {
+    let i = reason.find("Разбан через")?;
+    let tail = &reason[i..];
+    let tail = tail.split('\n').next().unwrap_or(tail);
+    let mut total = 0u64;
+    let mut num = String::new();
+    let mut found = false;
+    for ch in tail.chars() {
+        if ch.is_ascii_digit() {
+            num.push(ch);
+        } else if ch.is_whitespace() {
+            continue;
+        } else if !num.is_empty() {
+            let n: u64 = num.parse().unwrap_or(0);
+            let mult = match ch {
+                'д' => 86_400,
+                'ч' => 3_600,
+                'м' => 60,
+                'с' => 1,
+                _ => 0,
+            };
+            if mult > 0 {
+                total += n * mult;
+                found = true;
+            }
+            num.clear();
+        }
+    }
+    found.then_some(total)
+}
+
+/// Баны переживают рестарт; истёкшие отбрасываются (срок берём из текста бана, иначе 24 ч).
+fn load_bans(farm: &Path) -> HashMap<String, (String, u64)> {
+    let now = session::now_unix_ms();
+    std::fs::read_to_string(farm.join("bans.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<HashMap<String, (String, u64)>>(&s).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, (r, at))| {
+            let secs = ban_duration_secs(r).unwrap_or(86_400);
+            at + secs * 1000 > now
+        })
+        .collect()
+}
+
+fn save_bans(farm: &Path, b: &HashMap<String, (String, u64)>) {
+    if let Ok(s) = serde_json::to_string(b) {
+        let _ = std::fs::write(farm.join("bans.json"), s);
+    }
+}
+
+fn load_balances(farm: &Path) -> HashMap<String, (f64, u64)> {
+    std::fs::read_to_string(farm.join("balances.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<HashMap<String, (f64, u64)>>(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_balances(farm: &Path, b: &HashMap<String, (f64, u64)>) {
+    if let Ok(s) = serde_json::to_string(b) {
+        let _ = std::fs::write(farm.join("balances.json"), s);
+    }
+}
+
+/// Состояние автопродажи для вкладки «Автопродажа» в Go: активный селлер, балансы, очередь, заказы.
+async fn sell_state_msg(state: &Arc<Mutex<Orch>>) -> Value {
+    let g = state.lock().await;
+    let duty = g.queue.duty().map(|s| s.to_string());
+    let bal = |n: &str| g.balances.get(n).copied();
+    let queue: Vec<Value> = g
+        .queue
+        .order
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            let b = bal(n);
+            json!({
+                "nick": n,
+                "pos": i,
+                "balance": b.map(|x| x.0),
+                "balance_at_ms": b.map(|x| x.1),
+                "online": g.workers.contains_key(n),
+                "ready": g.ready.contains(n),
+                "bound": g.bots.get(n).and_then(|rt| rt.bound),
+                "fault": g.faults.get(n).map(|f| f.0.clone()),
+            })
+        })
+        .collect();
+    let total: f64 = g.queue.order.iter().filter_map(|n| bal(n)).map(|x| x.0).sum();
+    let handoff = g.handoff.as_ref().map(|h| {
+        json!({
+            "from": h.from,
+            "to": h.to,
+            "sent_amount": h.sent_amount,
+            "received": h.received,
+            "tries": h.tries,
+            "age_s": h.started.elapsed().as_secs(),
+            "rescue": h.from.is_some(),
+        })
+    });
+    json!({
+        "action": "sell_state",
+        "anarchy": g.anarchy,
+        "duty": duty,
+        "duty_balance": duty.as_deref().and_then(|d| bal(d)).map(|x| x.0),
+        "duty_balance_at_ms": duty.as_deref().and_then(|d| bal(d)).map(|x| x.1),
+        "pays": g.queue.pays,
+        "pays_before_rotate": rotation::PAYS_BEFORE_ROTATE,
+        "shift_no": g.queue.shift_no,
+        "pending": g.pending.len(),
+        "in_flight": g.in_flight,
+        "handoff": handoff,
+        "total_balance": total,
+        // только ники, которые сейчас в конфиге селла (заменённые боты в панели не показываем)
+        "banned": g.bans.iter().filter(|(n, _)| g.bots.contains_key(*n)).map(|(n, (r, t))| json!({
+            "username": n, "anarchy": g.anarchy, "go_type": "netherite-1.21", "reason": r,
+            "banned_at": session::fmt_msk(*t), "source": "sell",
+            "ip": g.bots.get(n).map(|rt| proxy_host_only(&rt.cfg.proxy)).unwrap_or_default(),
+        })).collect::<Vec<_>>(),
+        "auth_faults": g.faults.iter().map(|(n, (k, r, t))| json!({
+            "username": n, "anarchy": g.anarchy, "go_type": "netherite-1.21", "kind": k, "reason": r,
+            "at": session::fmt_msk(*t),
+            "ip": g.bots.get(n).map(|rt| proxy_host_only(&rt.cfg.proxy)).unwrap_or_default(),
+        })).collect::<Vec<_>>(),
+        "wait_pay": g.wait_pay.as_ref().map(|w| json!({ "nick": w.nick, "since_ms": w.since_ms })),
+        "last_payment": g.last_payment.as_ref().map(|(n, f, a, t)| json!({ "nick": n, "from": f, "amount": a, "at_ms": t })),
+        "queue": queue,
+        "at_ms": session::now_unix_ms(),
+    })
+}
+
+/// Команды из Go (вкладка «Автопродажа»): `sell_wait`, `sell_rescue`.
+async fn on_go_command(state: &Arc<Mutex<Orch>>, text: &str) {
+    let Ok(v) = serde_json::from_str::<Value>(text) else { return };
+    match v.get("action").and_then(|a| a.as_str()) {
+        Some("sell_wait") => {
+            let on = v.get("on").and_then(|x| x.as_bool()).unwrap_or(true);
+            let mut g = state.lock().await;
+            if on {
+                let Some(duty) = g.queue.duty().map(|s| s.to_string()) else { return };
+                if g.wait_pay.is_none() {
+                    info!("{duty}: кнопка «принять перевод» — заходит и ждёт");
+                    ledger(&g.farm_root, json!({ "ev": "wait_pay_start", "nick": duty }));
+                    g.wait_pay = Some(WaitPay { since_ms: session::now_unix_ms(), nick: duty });
+                }
+            } else if g.wait_pay.take().is_some() {
+                info!("кнопка «принять перевод» снята вручную");
+            }
+        }
+        Some("sell_rescue") => {
+            let from = v
+                .get("from")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if from.is_empty() {
+                return;
+            }
+            let mut g = state.lock().await;
+            if g.handoff.is_some() {
+                warn!("sell_rescue: уже идёт передача остатка");
+                return;
+            }
+            let Some(to) = v
+                .get("to")
+                .and_then(|x| x.as_str())
+                .map(|s| s.trim().to_string())
+                .or_else(|| g.queue.duty().map(|s| s.to_string()))
+            else {
+                warn!("sell_rescue: нет держателя");
+                return;
+            };
+            if from == to {
+                warn!("sell_rescue: from==to");
+                return;
+            }
+            if !g.bots.contains_key(&from) {
+                warn!("sell_rescue: неизвестный {from}");
+                return;
+            }
+            info!("sell_rescue: {from} → {to}");
+            ledger(&g.farm_root, json!({ "ev": "rescue_start", "from": from, "to": to }));
+            g.handoff = Some(Handoff::rescue(from, to));
+            save_state(&g);
+        }
+        _ => {}
+    }
+}
+
 fn spawn_go(state: Arc<Mutex<Orch>>) -> mpsc::UnboundedSender<Value> {
     let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
     tokio::spawn(async move {
@@ -961,6 +1526,7 @@ fn spawn_go(state: Arc<Mutex<Orch>>) -> mpsc::UnboundedSender<Value> {
                     let (mut sink, mut src) = ws.split();
                     let mut fleet = fleet_msg(&state).await;
                     let _ = sink.send(Message::Text(fleet.to_string().into())).await;
+                    let mut tick_n: u32 = 0;
                     loop {
                         tokio::select! {
                             Some(v) = rx.recv() => {
@@ -969,12 +1535,24 @@ fn spawn_go(state: Arc<Mutex<Orch>>) -> mpsc::UnboundedSender<Value> {
                                 }
                             }
                             m = src.next() => {
-                                if m.is_none() { break; }
+                                match m {
+                                    None => break,
+                                    Some(Ok(Message::Text(t))) => on_go_command(&state, t.as_str()).await,
+                                    Some(Ok(_)) => {}
+                                    Some(Err(_)) => break,
+                                }
                             }
-                            _ = sleep(Duration::from_secs(20)) => {
-                                fleet = fleet_msg(&state).await;
-                                if sink.send(Message::Text(fleet.to_string().into())).await.is_err() {
+                            _ = sleep(Duration::from_secs(5)) => {
+                                let st = sell_state_msg(&state).await;
+                                if sink.send(Message::Text(st.to_string().into())).await.is_err() {
                                     break;
+                                }
+                                tick_n += 1;
+                                if tick_n % 4 == 0 {
+                                    fleet = fleet_msg(&state).await;
+                                    if sink.send(Message::Text(fleet.to_string().into())).await.is_err() {
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -1003,6 +1581,40 @@ async fn fleet_msg(state: &Arc<Mutex<Orch>>) -> Value {
             })
         })
         .collect();
-    json!({ "action": "fleet", "bots": bots, "types": ["netherite-1.21"] })
+    // Прокси выдачи — отсюда, а не с диска Go: Go живёт отдельно и файлов селла не видит. Только хост, без логина и пароля.
+    let proxies: Vec<Value> = g
+        .bots
+        .values()
+        .filter(|rt| !rt.cfg.proxy.trim().is_empty())
+        .map(|rt| json!({ "slot": rt.cfg.username, "kind": "sell", "ip": proxy_host_only(&rt.cfg.proxy) }))
+        .collect();
+    json!({ "action": "fleet", "bots": bots, "types": ["netherite-1.21"], "proxies": proxies })
 }
 
+/// `socks5://user:pass@host:port` → `host:port`.
+fn proxy_host_only(proxy: &str) -> String {
+    let p = proxy.trim();
+    let p = p.split_once("://").map_or(p, |(_, rest)| rest);
+    p.rsplit_once('@').map_or(p, |(_, host)| host).to_string()
+}
+
+#[cfg(test)]
+mod proxy_host_tests {
+    use super::proxy_host_only;
+    #[test]
+    fn strips_credentials() {
+        assert_eq!(proxy_host_only("socks5://u:p@1.2.3.4:8000"), "1.2.3.4:8000");
+        assert_eq!(proxy_host_only("1.2.3.4:8000"), "1.2.3.4:8000");
+    }
+}
+
+
+#[cfg(test)]
+mod ban_tests {
+    #[test]
+    fn ban_duration_parses() {
+        let r = "ВЫ ЗАБАНЕНЫ!\nРазбан через: 13 д, 9 ч, 50 м, 13 с\n\nОбжаловать";
+        assert_eq!(super::ban_duration_secs(r), Some(13 * 86_400 + 9 * 3_600 + 50 * 60 + 13));
+        assert_eq!(super::ban_duration_secs("бан"), None);
+    }
+}
