@@ -476,7 +476,7 @@ export function buildDispatchingHint(nick, amountKk, bonus = null) {
 /** Коротко: новая оплата, когда полное приветствие уже было в чате. */
 export function buildNewOrderTwinHint(ctx = null) {
     return [
-        `🎮 Сначала зайди на анархию ${DELIVERY_ANARCHY}, потом напиши в этот чат ник (не в Minecraft).`,
+        `🎮 Сначала зайди на анархию ${DELIVERY_ANARCHY}, потом напиши ник сюда`,
         '✅ Это сложная выдача через /pay БЕЗ БАНОВ',
     ].join('\n');
 }
@@ -515,7 +515,7 @@ export function hasPaymentAckInChat(messages, sellerUserId, opts = null) {
         }
         const text = msg.text.toLowerCase();
         const twinHint =
-            text.includes('потом напиши в этот чат ник (не в minecraft)')
+            text.includes('потом напиши ник сюда')
             || text.includes('сложная выдача через /pay');
         if (!text.includes('оплата получена') && !twinHint) continue;
         if (lotNeedle && !text.includes(lotNeedle)) continue;
