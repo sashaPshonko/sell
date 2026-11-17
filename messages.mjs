@@ -6,6 +6,11 @@ function askNickInChatLine() {
     return '💬 Напиши сюда, в этот чат, свой игровой ник из Minecraft.';
 }
 
+/** Безопасная выдача — в приветствии и в коротком hint повторной оплаты. */
+export function safePayDeliveryLine() {
+    return '✅ Это сложная выдача через /pay БЕЗ БАНОВ';
+}
+
 /**
  * Раньше здесь было грозное «ОБЯЗАТЕЛЬНО ТВИНК, возможен БАН». Убрано: мы не проверяли, банят ли за такую выдачу,
  * а угроза в момент оплаты только отпугивает. Оставлено пустым, чтобы не трогать места вызова.
@@ -29,6 +34,7 @@ export function buildGreetingText(_ctx = null) {
         ...twinAccountWarningLines(),
         askNickInChatLine(),
         '',
+        safePayDeliveryLine(),
         '🔁 Ошибся в нике или бот не выдал — напиши ник в этом чате снова',
         '❌ Отмена: /cancel',
     ].join('\n');
@@ -477,7 +483,7 @@ export function buildDispatchingHint(nick, amountKk, bonus = null) {
 export function buildNewOrderTwinHint(ctx = null) {
     return [
         `🎮 Сначала зайди на анархию ${DELIVERY_ANARCHY}, потом напиши ник сюда`,
-        '✅ Это сложная выдача через /pay БЕЗ БАНОВ',
+        safePayDeliveryLine(),
     ].join('\n');
 }
 
