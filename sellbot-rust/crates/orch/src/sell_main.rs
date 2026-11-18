@@ -38,11 +38,9 @@ const HANDOFF_READY_TIMEOUT: Duration = Duration::from_secs(240);
 const HANDOFF_DONE_TIMEOUT: Duration = Duration::from_secs(90);
 const HANDOFF_RETRY_GAP: Duration = Duration::from_secs(15);
 const HANDOFF_MAX_TRIES: u32 = 3;
-/// После неудачной передачи не пробуем снова столько (держатель продолжает выдавать).
+/// После неудачной передачи не пробуем снова столько. Выдачи с этого ника всё равно нет,
+/// пока остаток не уйдёт следующему.
 const HANDOFF_BLOCK: Duration = Duration::from_secs(30);
-/// Сколько неудачных передач подряд терпим, не выдавая заказы с «выработанного» держателя.
-/// После этого выдаём с него (лучше лишняя выдача, чем покупатель без валюты).
-const HANDOFF_ABORTS_BEFORE_FALLBACK: u32 = 4;
 /// Бот не смог зайти (2FA/привязка/пароль/прокси) — столько не выбираем его получателем передачи.
 const LOGIN_FAIL_SKIP: Duration = Duration::from_secs(30 * 60);
 
@@ -548,8 +546,8 @@ async fn pump(state: &Arc<Mutex<Orch>>) {
                     save_state(&g);
                 }
             } else if let Some(d) = duty.clone() {
-                // Держатель выработал лимит выдач — новые заказы только после передачи (иначе третья выдача с одного акка).
-                let worn_out = g.queue.rotation_due() && next_alive.is_some() && g.handoff_aborts < HANDOFF_ABORTS_BEFORE_FALLBACK;
+                // Две выдачи уже были — с этого ника больше не платим, пока остаток не уйдёт следующему.
+                let worn_out = g.queue.rotation_due() && next_alive.is_some();
                 if worn_out && !g.pending.is_empty() {
                     warn_once_worn(&d);
                 }
