@@ -488,7 +488,6 @@ async fn tick_spawns(
 async fn pump(state: &Arc<Mutex<Orch>>) {
     enum Act {
         None,
-        Abort(String),
         SendHandoff(String, String),
         Done { to: String, amount: f64, got: Option<f64> },
         Deliver(String, Pending),
@@ -555,15 +554,6 @@ async fn pump(state: &Arc<Mutex<Orch>>) {
     };
     match act {
         Act::None => {}
-        Act::Abort(why) => {
-            let mut g = state.lock().await;
-            warn!("передача остатка отменена: {why}; держатель остаётся, повтор через {} мин", HANDOFF_BLOCK.as_secs() / 60);
-            ledger(&g.farm_root, json!({ "ev": "handoff_abort", "from": g.queue.duty(), "why": why }));
-            g.handoff = None;
-            g.handoff_aborts += 1;
-            g.rotate_block_until = Some(Instant::now() + HANDOFF_BLOCK);
-            save_state(&g);
-        }
         Act::Done { to, amount, got } => {
             let (duty, sender, rescue) = {
                 let g = state.lock().await;
