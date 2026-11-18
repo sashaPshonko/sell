@@ -32,10 +32,6 @@ use tokio::{
 use tokio_tungstenite::{accept_async, connect_async, tungstenite::Message};
 use tracing::{info, warn};
 
-/// Сколько ждём, пока и держатель, и следующий зайдут для передачи остатка.
-const HANDOFF_READY_TIMEOUT: Duration = Duration::from_secs(240);
-/// Сколько ждём `handoff_done` после команды.
-const HANDOFF_DONE_TIMEOUT: Duration = Duration::from_secs(90);
 const HANDOFF_RETRY_GAP: Duration = Duration::from_secs(15);
 const HANDOFF_MAX_TRIES: u32 = 3;
 /// После неудачной передачи не пробуем снова столько. Выдачи с этого ника всё равно нет,
@@ -525,13 +521,7 @@ async fn pump(state: &Arc<Mutex<Orch>>) {
                 } else if h.sent_at.map_or(false, |t| t.elapsed() > RECEIPT_WAIT) {
                     act = Act::Done { to: h.to.clone(), amount, got: None };
                 }
-            } else if let Some(sent) = h.sent_at {
-                if sent.elapsed() > HANDOFF_DONE_TIMEOUT {
-                    act = Act::Abort("передача остатка не подтвердилась".into());
-                }
-            } else if h.started.elapsed() > HANDOFF_READY_TIMEOUT {
-                act = Act::Abort("участники передачи не зашли за отведённое время".into());
-            } else if both && h.not_before.map_or(true, |t| now >= t) {
+            } else if h.sent_at.is_none() && both && h.not_before.map_or(true, |t| now >= t) {
                 if let Some(from) = sender {
                     act = Act::SendHandoff(from, h.to.clone());
                 }
@@ -1093,8 +1083,7 @@ async fn on_worker_line(state: &Arc<Mutex<Orch>>, username: &str, line: &str) ->
     Ok(())
 }
 
-/// Бот не смог зайти. Если он получатель ещё не отправленной передачи — отменяем её сразу
-/// (иначе ждём HANDOFF_READY_TIMEOUT и выбираем его же снова), следующий тик возьмёт другого.
+/// Бот не смог зайти. Если он получатель ещё не отправленной передачи — берём следующего.
 fn mark_login_fail(g: &mut Orch, username: &str) {
     g.login_fail.insert(username.to_string(), Instant::now());
     if g.handoff.as_ref().map_or(false, |h| h.to == username && h.sent_at.is_none() && h.sent_amount.is_none()) {
