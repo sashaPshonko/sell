@@ -145,6 +145,18 @@ mod tests {
     }
 
     #[test]
+    fn banned_duty_rotates_to_first_alive_and_resets_pays() {
+        let mut q = QueueState::from_nicks(&nicks(&["a", "b", "c"]), "s");
+        q.on_delivery_ok();
+        // держатель a забанен, b тоже — роль уходит к c, a оказывается в конце, счётчик с нуля
+        q.rotate_skipping(5_000, &|n| n == "a" || n == "b");
+        assert_eq!(q.duty(), Some("c"));
+        assert_eq!(q.pays, 0);
+        assert_eq!(q.order.last().map(|s| s.as_str()), Some("a"));
+        assert!(q.order.iter().any(|n| n == "b"));
+    }
+
+    #[test]
     fn two_pays_then_rotate() {
         let mut q = QueueState::from_nicks(&nicks(&["a", "b", "c"]), "s");
         assert_eq!(q.duty(), Some("a"));

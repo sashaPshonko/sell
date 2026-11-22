@@ -849,18 +849,58 @@ async fn on_worker_line(state: &Arc<Mutex<Orch>>, username: &str, line: &str) ->
         "banned" => {
             let reason = msg.reason.clone().unwrap_or_else(|| "бан".into());
             warn!("{username}: БАН на FunTime — {reason}");
-            let mut g = state.lock().await;
-            g.bans.insert(username.to_string(), (reason.clone(), session::now_unix_ms()));
-            save_bans(&g.farm_root, &g.bans);
-            g.ready.remove(username);
-            // Получатель передачи забанен — отменяем её сразу, следующий тик возьмёт другого.
-            if g.handoff.as_ref().map_or(false, |h| h.to == username && h.sent_at.is_none()) {
-                warn!("{username}: получатель передачи забанен — выбираю следующего");
-                g.handoff = None;
-                g.rotate_block_until = None;
-                save_state(&g);
+            let gave_up = {
+                let mut g = state.lock().await;
+                g.bans.insert(username.to_string(), (reason.clone(), session::now_unix_ms()));
+                save_bans(&g.farm_root, &g.bans);
+                g.ready.remove(username);
+                // Получатель передачи забанен — отменяем её сразу, следующий тик возьмёт другого.
+                if g.handoff.as_ref().map_or(false, |h| h.to == username && h.sent_at.is_none()) {
+                    warn!("{username}: получатель передачи забанен — выбираю следующего");
+                    g.handoff = None;
+                    g.rotate_block_until = None;
+                    save_state(&g);
+                }
+                ledger(&g.farm_root, json!({ "ev": "bot_banned", "bot": username, "reason": reason }));
+                let mut gave_up = None;
+                if g.queue.duty() == Some(username) {
+                    // Перевод остатка уже ушёл — дорабатывает обычная передача (подтверждение получателя → finish_rotate).
+                    let transfer_sent = g.handoff.as_ref().map_or(false, |h| h.sent_at.is_some() || h.sent_amount.is_some());
+                    if !transfer_sent {
+                        // Забаненный держатель отдать остаток не может: роль сразу следующему, без передачи.
+                        if let Some(oid) = g.in_flight.clone() {
+                            warn!("{username}: бан посреди выдачи {} — заказ вернётся в очередь", &oid[..oid.len().min(8)]);
+                            if !requeue(&mut g, &oid) {
+                                gave_up = Some(oid);
+                            }
+                        }
+                        g.handoff = None;
+                        let now = session::now_unix_ms();
+                        let skip: std::collections::HashSet<String> =
+                            g.bans.keys().cloned().chain(g.stuck_2fa.iter().cloned()).collect();
+                        g.queue.rotate_skipping(now, &|n| skip.contains(n));
+                        g.rotate_block_until = None;
+                        g.handoff_aborts = 0;
+                        if let Some(mut w) = g.workers.remove(username) {
+                            let _ = w.child.start_kill();
+                        }
+                        save_state(&g);
+                        ledger(&g.farm_root, json!({
+                            "ev": "duty_banned_rotate", "from": username,
+                            "to": g.queue.duty().unwrap_or(""),
+                        }));
+                        warn!(
+                            "держатель {username} забанен — роль без передачи остатка → {} · порядок: {}",
+                            g.queue.duty().unwrap_or("?"),
+                            g.queue.order.join(" → ")
+                        );
+                    }
+                }
+                gave_up
+            };
+            if let Some(oid) = gave_up {
+                give_up(state, &oid, "max_retries").await;
             }
-            ledger(&g.farm_root, json!({ "ev": "bot_banned", "bot": username, "reason": reason }));
         }
         "proxy_ok" => {
             let mut g = state.lock().await;
