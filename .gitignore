@@ -33,3 +33,11 @@ sellbot-rust/.aider*
 sellbot-rust/.DS_Store
 
 .DS_Store
+funpay-state.json
+funpay-orders.jsonl
+audit.jsonl
+state.json.tmp
+sellbot-rust/balances.json
+sellbot-rust/bans.json
+sellbot-rust/ledger.jsonl
+*.log

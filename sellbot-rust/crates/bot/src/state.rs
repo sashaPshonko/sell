@@ -23,6 +23,8 @@ pub struct BotState {
     pub username: String,
     pub shutdown: bool,
     pub balance: Option<f64>,
+    /// `balance` обновляется из сайдбара TAB сам (пришло хотя бы одно изменение), `/balance` не нужен.
+    pub sidebar_known: bool,
     pub afk: bool,
     pub funauth_verified: bool,
     pub funauth_restarting: bool,
@@ -47,6 +49,7 @@ impl BotState {
             username: boot.username.clone(),
             shutdown: false,
             balance: None,
+            sidebar_known: false,
             afk: false,
             funauth_verified: false,
             funauth_restarting: false,

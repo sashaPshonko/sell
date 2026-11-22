@@ -73,6 +73,7 @@ test('покупал 🎁 раньше — премка без рассылки'
 });
 
 test('schedule: 🎁 не ставит очередь, премка ставит profile_upsell', () => {
+    process.env.POST_DELIVERY_UPSELL = '1'; // рассылка после выдачи по умолчанию выключена
     const giftId = 'g2';
     const premId = 'p2';
     const state = orderState([

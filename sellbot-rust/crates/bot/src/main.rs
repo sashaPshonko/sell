@@ -39,6 +39,23 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(boot::stdin_loop(g.state.clone()));
 
     let proxy = parse_proxy(&boot.proxy)?;
+    // Живой ли прокси: azalea в сборке селла не сообщает об ошибке соединения, поэтому проверяем сами.
+    if let Some(hp) = proxy_hostport(&boot.proxy) {
+        let probe = tokio::task::spawn_blocking(move || {
+            use std::net::ToSocketAddrs;
+            let addr = hp.to_socket_addrs().ok().and_then(|mut a| a.next());
+            match addr {
+                Some(a) => std::net::TcpStream::connect_timeout(&a, Duration::from_secs(8)).map(|_| ()).map_err(|e| e.to_string()),
+                None => Err(format!("не разобрал адрес прокси {hp}")),
+            }
+        })
+        .await;
+        if let Ok(Err(e)) = probe {
+            on_connection_failed(format!("прокси недоступен: {e}"));
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            return Ok(());
+        }
+    }
     let account = Account::offline(&boot.username);
     let opts = JoinOpts::new().server_proxy(proxy);
     let server = boot.server.clone();
@@ -54,6 +71,17 @@ async fn main() -> anyhow::Result<()> {
 struct HandleState {
     phase: Arc<AtomicU8>,
     loop_armed: Arc<AtomicBool>,
+}
+
+/// `host:port` прокси из `socks5://user:pass@host:port`; для пустого и `direct` — None.
+fn proxy_hostport(url: &str) -> Option<String> {
+    let t = url.trim();
+    if t.is_empty() || t == "direct" {
+        return None;
+    }
+    let raw = if t.contains("://") { t.to_string() } else { format!("socks5://{t}") };
+    let u = url::Url::parse(&raw).ok()?;
+    Some(format!("{}:{}", u.host_str()?, u.port().unwrap_or(1080)))
 }
 
 fn parse_proxy(url: &str) -> anyhow::Result<Proxy> {
@@ -77,6 +105,7 @@ async fn handle(bot: Client, event: Event, state: HandleState) -> anyhow::Result
     let g = boot::global();
     match event {
         Event::Spawn => {
+            report_proxy_ok();
             *g.bot_client.lock() = Some(bot.clone());
             let boot = g.boot.clone();
             info!("логин → /reg + /l");
@@ -106,13 +135,22 @@ async fn handle(bot: Client, event: Event, state: HandleState) -> anyhow::Result
                             phase.store(2, Ordering::SeqCst);
                         }
                         inner.lock().funauth_verified = false;
-                        if !anarchy::wait_until_on_anarchy(&bot2, &boot2, &inner).await {
+                        // Ждём анку, пока не зайдём: капча/рестарт анки могут занять и больше 90 с.
+                        // Бот не умирает после одного таймаута; выходим только по бану/shutdown.
+                        let mut round = 0u32;
+                        loop {
+                            if anarchy::wait_until_on_anarchy(&bot2, &boot2, &inner).await {
+                                break;
+                            }
                             if inner.lock().banned {
                                 warn!("бан — выдачу не стартую");
-                            } else {
-                                warn!("на анку не зашли — выдачу не стартую");
+                                return false;
                             }
-                            return false;
+                            if inner.lock().shutdown {
+                                return false;
+                            }
+                            round += 1;
+                            warn!("на анку пока не зашли (круг {round}) — продолжаю ждать");
                         }
                         tokio::time::sleep(Duration::from_secs(5)).await;
                         {
@@ -229,6 +267,7 @@ async fn handle(bot: Client, event: Event, state: HandleState) -> anyhow::Result
             ClientboundGamePacket::Transfer(_) => {
                 anarchy::clear_anarchy(&g.state, "transfer");
             }
+            ClientboundGamePacket::SetPlayerTeam(p) => on_sidebar_team(&g, p),
             other => {
                 captcha::on_packet(&g.captcha_maps, other);
             }
@@ -535,4 +574,87 @@ fn is_staff_check_text(raw: &str) -> bool {
         return true;
     }
     false
+}
+
+static PROXY_OK_SENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static PROXY_DEAD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Заспавнились через прокси — значит, он рабочий: один раз сообщаем оркестратору, чтобы он снял пометку `proxy_error`.
+fn report_proxy_ok() {
+    if PROXY_OK_SENT.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    emit(&WorkerMsg {
+        name: "proxy_ok".into(),
+        username: Some(boot::global().boot.username.clone()),
+        ..empty_msg()
+    });
+}
+
+/// Не удалось создать соединение. Через SOCKS-прокси это ошибка прокси: `auth_fault` kind=proxy_error и выход 72
+/// (как у фермы), оркестратор покажет её на странице банов в Go. Без прокси azalea просто повторит попытку.
+fn on_connection_failed(error: String) {
+    let g = boot::global();
+    warn!("подключение не удалось: {error}");
+    let proxy = g.boot.proxy.trim();
+    if proxy.is_empty() || proxy == "direct" {
+        return;
+    }
+    if PROXY_DEAD.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    emit(&WorkerMsg {
+        name: "auth_fault".into(),
+        username: Some(g.boot.username.clone()),
+        reason: Some(error),
+        data: Some(json!({ "kind": "proxy_error" })),
+        ..empty_msg()
+    });
+    std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_millis(400));
+        std::process::exit(72);
+    });
+}
+
+/// Строка сайдбара TAB «$ Монет: 712,071,992» → число.
+fn parse_sidebar_balance(text: &str) -> Option<f64> {
+    let i = text.find("Монет:")? + "Монет:".len();
+    let digits: String = text[i..].chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() { None } else { digits.parse::<f64>().ok() }
+}
+
+/// Баланс из сайдбара приходит сам (без `/balance`): шлём оркестратору при каждом изменении.
+/// `Add` при входе несёт заглушку «0», поэтому берём только `Change`.
+fn on_sidebar_team(g: &boot::Global, p: &azalea::protocol::packets::game::ClientboundSetPlayerTeam) {
+    use azalea::protocol::packets::game::c_set_player_team::Method;
+    if !p.name.starts_with("TAB-Sidebar") {
+        return;
+    }
+    let Method::Change(params) = &p.method else { return };
+    let text = format!("{}{}", params.player_prefix, params.player_suffix);
+    let Some(bal) = parse_sidebar_balance(&text) else { return };
+    {
+        let mut st = g.state.lock();
+        st.sidebar_known = true;
+        if st.balance == Some(bal) {
+            return;
+        }
+        st.balance = Some(bal);
+    }
+    emit(&WorkerMsg {
+        name: "balance".into(),
+        username: Some(g.boot.username.clone()),
+        balance: Some(bal),
+        ..empty_msg()
+    });
+}
+
+#[cfg(test)]
+mod sidebar_balance_tests {
+    use super::parse_sidebar_balance;
+    #[test]
+    fn reads_the_coins_line() {
+        assert_eq!(parse_sidebar_balance("╠ $ Монет: 712,071,992"), Some(712_071_992.0));
+        assert_eq!(parse_sidebar_balance("╠ ⛁ Токенов: 5"), None);
+    }
 }

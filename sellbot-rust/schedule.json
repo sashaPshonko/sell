@@ -1,0 +1,23 @@
+{
+  "duty": "rapufuzavur",
+  "handoffs_done": 76,
+  "last_handoff_msk": "22.11 18:55",
+  "next": "marirezahex",
+  "now_msk": "22.11 18:55",
+  "order": [
+    "rapufuzavur",
+    "marirezahex",
+    "lahemetulon",
+    "momahibacev",
+    "hupehevukas",
+    "geranavisoz",
+    "tusofowuru",
+    "lowidirilaz",
+    "lofiniwaxez",
+    "gobicelufom"
+  ],
+  "pays": 0,
+  "pays_before_rotate": 2,
+  "pending_orders": 0,
+  "rotating": false
+}

@@ -1,3 +1,9 @@
+import {
+    isMergePrimaryLive,
+    mergeEnabled,
+    mergedTotalPay,
+    mergeIntoPrimary,
+} from './lib/order-merge.mjs';
 import { DELIVERY_ANARCHY } from './messages.mjs';
 
 /** По умолчанию — клиент к sellbot; встроенный hub только при WS_EMBEDDED=1 */
@@ -32,6 +38,17 @@ export async function dispatchOrder(order, state = null, opts = {}) {
     const force = Boolean(opts.force || opts.resync);
     const oid = order.orderId || order.dealId;
     const existing = state?.orders?.[oid];
+
+    // Приклеенный к другому заказу (lib/order-merge.mjs) — отдельно в sellbot не шлём никогда:
+    // он едет в переводе основного; если основной сорвался, poll (healMergedOrders) его отвяжет.
+    if (state && existing?.mergedInto) {
+        const prim = state.orders[existing.mergedInto];
+        const live = prim && isMergePrimaryLive(prim) && (prim.mergedOrderIds || []).includes(oid);
+        console.log(
+            `[dispatch] ${oid?.slice(0, 8)}… едет с основным ${existing.mergedInto.slice(0, 8)}…${live ? '' : ' (основной не в выдаче — ждём разбор группы)'}, отдельно не шлём`,
+        );
+        return { sent: 1, merged: true };
+    }
     if (existing) {
         const { canDispatchToSellbot, isBotFatalPaused } = await import(
             './lib/playerok-deal-sync.mjs'
@@ -56,6 +73,30 @@ export async function dispatchOrder(order, state = null, opts = {}) {
         console.warn('[dispatch] WS отключён');
         return { sent: 0 };
     }
+
+    // Объединение заказов одного покупателя в один перевод (lib/order-merge.mjs)
+    let mergedAmount = null;
+    if (state && existing && mergeEnabled()) {
+        if ((existing.mergedOrderIds || []).length) {
+            mergedAmount = mergedTotalPay(state, existing);
+        } else if (!opts.resync) {
+            const m = mergeIntoPrimary(
+                state,
+                {
+                    ...existing,
+                    ...order,
+                    orderId: oid,
+                    chatId: order.chatId ?? existing.chatId,
+                    buyerId: order.buyerId ?? existing.buyerId,
+                },
+                order.nick,
+            );
+            if (m) mergedAmount = m.total;
+        }
+    } else if (state && existing && (existing.mergedOrderIds || []).length) {
+        // MERGE_ORDERS=0 включили, когда группа уже в пути — сумму группы всё равно держим
+        mergedAmount = mergedTotalPay(state, existing);
+    }
     const priorWithdrawn = Number(
         existing?.clanPlayerWithdrawn ?? order.clanPlayerWithdrawn ?? 0,
     );
@@ -66,7 +107,7 @@ export async function dispatchOrder(order, state = null, opts = {}) {
         buyer: order.buyer,
         buyerId: order.buyerId,
         nick: order.nick,
-        amount: order.payAmountKk ?? order.amountKk,
+        amount: mergedAmount ?? order.payAmountKk ?? order.amountKk,
         paidAtMs: order.paidAtMs ?? (order.paidAt ? Date.parse(order.paidAt) : undefined),
         anarchy: DELIVERY_ANARCHY,
         itemName: order.itemName,

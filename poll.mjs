@@ -34,6 +34,9 @@ import {
 import { cancelClosedOrdersOnSellbot } from './lib/sellbot-cancel.mjs';
 import { isRetryableDeliveryFailure } from './lib/delivery-retry.mjs';
 import { recordPurchase } from './lib/purchases.mjs';
+import { healMergedOrders, markMergedDelivered, mergedTotalPay } from './lib/order-merge.mjs';
+import { remindAfterUpsellRefund } from './lib/refund-reminder.mjs';
+import { buildUpsellRefundReminderHint } from './messages.mjs';
 import {
     isOrderFulfilled,
     clanDeliveryRetryReset,
@@ -46,6 +49,7 @@ import { composeInsufficientFundsHint } from './lib/insufficient-funds-hint.mjs'
 import { sendChatMessage } from './chat.mjs';
 import {
     buildWrongNickHint,
+    buildCaptchaWaitHint,
     buildDeliveryFailHint,
     buildBotBalanceRefillingHint,
     buildQueueStallHint,
@@ -55,7 +59,6 @@ import {
 } from './messages.mjs';
 import { confirmDealOnPlayerok } from './confirm.mjs';
 import { fulfillPopcornSubscriptions } from './lib/popcorn-license.mjs';
-import { scheduleRepublishItem, republishWhen, recoverStuckRepublishes } from './publish.mjs';
 import {
     registerDealOrders,
     filterActionableDeals,
@@ -104,7 +107,27 @@ acquirePidLock(POLL_LOCK, 'sell', { processPattern: 'poll.mjs' });
 
 const once = process.argv.includes('--once');
 const pollMs = Number(process.env.POLL_MS || 15000);
-let republishRecovered = false;
+
+/** Закрыть заказ, который ехал одним переводом с основным (выдан вместе с ним). */
+async function finishMergedOrder(client, state, sid, so, primaryId) {
+    const payKk = so?.payAmountKk ?? so?.amountKk;
+    void audit('delivery_ok', {
+        orderId: sid,
+        nick: so?.nick,
+        amountKk: so?.amountKk,
+        payAmountKk: payKk,
+        mergedInto: primaryId,
+    });
+    await markPlayerokDone(client, state, sid, so?.chatId);
+    console.log(`[sell] выдано вместе с ${String(primaryId).slice(0, 8)}…: ${sid} (${payKk}kk)`);
+    recordPurchase({
+        kind: 'delivered',
+        orderId: sid,
+        amountKk: payKk,
+        buyer: so?.buyer,
+        nick: so?.nick,
+    });
+}
 
 async function markPlayerokDone(client, state, dealId, chatId) {
     if (process.env.AUTO_MARK_PLAYEROK === '0') {
@@ -112,7 +135,20 @@ async function markPlayerokDone(client, state, dealId, chatId) {
         return;
     }
     try {
-        await confirmDealOnPlayerok(client, dealId);
+        // PlayerOK бывает отвечает 5xx / «не найдено» — пробуем несколько раз.
+        let lastErr = null;
+        for (let attempt = 1; attempt <= 4; attempt++) {
+            try {
+                await confirmDealOnPlayerok(client, dealId);
+                lastErr = null;
+                break;
+            } catch (e) {
+                lastErr = e;
+                console.warn(`[sell] PlayerOK отметка ${dealId.slice(0, 8)}… попытка ${attempt}/4: ${e.message}`);
+                if (attempt < 4) await new Promise((r) => setTimeout(r, 5000 * attempt));
+            }
+        }
+        if (lastErr) throw lastErr;
         setOrderPhase(state, dealId, 'completed', {
             playerokMarkedAt: new Date().toISOString(),
             playerokStatus: process.env.CONFIRM_DEAL_STATUS || 'SENT',
@@ -181,7 +217,7 @@ function orderAmountKk(order) {
  */
 async function notifyInsufficientFundsExpensive(client, state, primaryOrderId) {
     const primary = getOrder(state, primaryOrderId);
-    const threshold = orderAmountKk(primary);
+    const threshold = primary ? mergedTotalPay(state, primary) : 0; // с учётом приклеенных заказов
 
     for (const orderId of localLiveQueueIds(state)) {
         if (orderId === primaryOrderId) continue;
@@ -441,6 +477,8 @@ async function handleBotEvents(client, state) {
                 setOrderPhase(state, ev.orderId, 'completed', {
                     gameDeliveryAt: new Date().toISOString(),
                 });
+                // Приклеенные заказы ехали в этом же переводе — закрыть сразу, до любых await
+                const mergedDelivered = markMergedDelivered(state, getOrder(state, ev.orderId) || order);
                 void audit('delivery_ok', {
                     orderId: ev.orderId,
                     nick: order.nick,
@@ -468,12 +506,12 @@ async function handleBotEvents(client, state) {
                 });
                 void dispatchCancelOrder(ev.orderId);
                 await markPlayerokDone(client, state, ev.orderId, chatId);
-                if (republishWhen() === 'sent') {
-                    scheduleRepublishItem(client, state, order);
-                }
                 console.log(
                     `[sell] выдано: ${ev.orderId} (${payKk}kk, лот ${order.amountKk}kk)`,
                 );
+                for (const sid of mergedDelivered) {
+                    await finishMergedOrder(client, state, sid, getOrder(state, sid), ev.orderId);
+                }
                 recordPurchase({
                     kind: 'delivered',
                     orderId: ev.orderId,
@@ -566,6 +604,18 @@ async function handleBotEvents(client, state) {
                     );
                 }
                 console.warn(`[sell] fail ${ev.orderId}: ${reason}`);
+            } else if (ev.type === 'delivery_waiting') {
+                // бот ещё заходит (капча): один раз просим подождать, заказ остаётся в работе
+                if (!shouldProcessBotRetryEvent(order) || order.captchaWaitHintAt) continue;
+                setOrderPhase(state, ev.orderId, order.phase, {
+                    captchaWaitHintAt: new Date().toISOString(),
+                });
+                try {
+                    await sendChatMessage(client, chatId, buildCaptchaWaitHint());
+                } catch (e) {
+                    setOrderPhase(state, ev.orderId, order.phase, { captchaWaitHintAt: undefined });
+                    throw e;
+                }
             } else if (ev.type === 'invalid_nick') {
                 if (!shouldProcessBotRetryEvent(order)) {
                     console.log(
@@ -667,6 +717,24 @@ async function handleBotEvents(client, state) {
  * Ответ «заказ уже выполнен» — только на явный /nick после закрытия старой сделки.
  * «ник Steve» и /nick для новой оплаты — в syncChatNick / applyNickIntakes (и /nick от продавца).
  */
+/** После автовозврата покупатель пишет в чат (ник, /cancel) — напомнить, что заказа нет, и дать ссылку. */
+async function remindRefundedBuyer(client, state, chatId, messages, sellerUserId) {
+    const sent = await remindAfterUpsellRefund(
+        state,
+        chatId,
+        messages,
+        sellerUserId,
+        (cid, text) => sendChatMessage(client, cid, text),
+        (o) =>
+            buildUpsellRefundReminderHint({
+                baseKk: o.profileUpsellBaseKk ?? o.amountKk,
+                upsellKk: o.profileUpsellKk,
+                url: o.profileUpsellUrl,
+            }),
+    );
+    if (sent) await saveState(state);
+}
+
 async function handleCompletedLateNick(client, state, chatId, messages, dealTimeline, sellerUserId) {
     for (const order of Object.values(state.orders)) {
         if (order.chatId !== chatId || order.phase !== 'completed') continue;
@@ -813,6 +881,7 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
                 console.log(`[sell] пропуск (не валюта kk): ${skip.itemName}`);
             }
         }
+        await remindRefundedBuyer(client, state, chatId, messages, sellerUserId);
         await handleCompletedLateNick(client, state, chatId, messages, dealTimeline, sellerUserId);
         return;
     }
@@ -842,15 +911,6 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
     syncChatOrdersFromPlayerok(state, chatId, dealTimeline);
     await rejectBannedBuyerOrdersInChat(client, state, chatId);
 
-    // Republish до profile-upsell refund: иначе ·-лоты отменяются и isActionableOrder=false.
-    if (republishWhen() === 'paid') {
-        for (const order of newlyRegistered) {
-            if (isBuyerBanned(state, order.buyerId)) continue;
-            if (!isActionableOrder(order)) continue;
-            scheduleRepublishItem(client, state, order);
-        }
-    }
-
     if (newlyRegistered.length) {
         await sendPremiumRefundUpsellForOrders(client, state, chatId, newlyRegistered);
     }
@@ -865,6 +925,7 @@ async function processChat(client, state, chatId, sellerUserId, cutoffIso) {
         ),
     ];
     if (!openDeals.length && !pendingBuyerIds.length) {
+        await remindRefundedBuyer(client, state, chatId, messages, sellerUserId);
         await handleCompletedLateNick(client, state, chatId, messages, dealTimeline, sellerUserId);
         await saveState(state);
         return;
@@ -983,17 +1044,19 @@ async function tick() {
     await handleBotEvents(client, state);
     await flushScheduledChatMessages(client, state);
     await retryWsPendingOrders(state);
+    // Объединённые заказы: основной выпал из выдачи — отвязать; основной доставлен, а событие потеряно — закрыть
+    {
+        const healed = healMergedOrders(state);
+        for (const { sid, pid } of healed.finish) {
+            await finishMergedOrder(client, state, sid, getOrder(state, sid), pid);
+        }
+    }
 
     const viewerData = await client.viewer();
     const sellerUserId = viewerData.viewer.id;
     state.sellerUserId = sellerUserId;
     state.sellerUsername = viewerData.viewer.username;
 
-    if (!republishRecovered) {
-        republishRecovered = true;
-        recoverStuckRepublishes(client, state);
-        await saveState(state);
-    }
     console.log(`[sell] ${viewerData.viewer.username} | чаты…`);
 
     const chatsData = await client.userChats(sellerUserId);

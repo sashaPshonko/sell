@@ -14,7 +14,15 @@ export async function confirmDealOnPlayerok(client, dealId) {
 
     const op = process.env.CONFIRM_DEAL_OPERATION || 'updateDeal';
     console.log(`[sell] PlayerOK updateDeal ${status} dealId=${dealId}…`);
-    return client.runMutationFromFile('CONFIRM_DEAL_MUTATION_FILE', file, variables, op);
+    // Как на сайте: страница сделки (x-gql-path и referer), иначе PlayerOK иногда отвечает «не найдено».
+    return client.runMutationFromFile(
+        'CONFIRM_DEAL_MUTATION_FILE',
+        file,
+        variables,
+        op,
+        '/deal/[id]',
+        `https://playerok.com/deal/${dealId}`,
+    );
 }
 
 /** Опционально: отметить «отправил» (status SENT) */

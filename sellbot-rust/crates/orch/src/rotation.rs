@@ -93,10 +93,23 @@ impl QueueState {
         self.pays >= PAYS_BEFORE_ROTATE && self.order.len() >= 2
     }
 
+    /// Следующий после держателя, которого нет в `banned`.
+    pub fn next_alive(&self, banned: &dyn Fn(&str) -> bool) -> Option<&str> {
+        self.order.iter().skip(1).map(|s| s.as_str()).find(|n| !banned(n))
+    }
+
     /// Держатель в конец, следующий становится первым. pays = 0.
     pub fn rotate(&mut self, now: u64) {
+        self.rotate_skipping(now, &|_| false);
+    }
+
+    /// То же, но забаненные пропускаются: они уходят в конец вслед за прежним держателем.
+    pub fn rotate_skipping(&mut self, now: u64, banned: &dyn Fn(&str) -> bool) {
         if self.order.len() >= 2 {
             let cur = self.order.remove(0);
+            if let Some(p) = self.order.iter().position(|n| !banned(n)) {
+                self.order.rotate_left(p);
+            }
             self.order.push(cur);
         }
         self.pays = 0;
@@ -127,6 +140,15 @@ mod tests {
         assert_eq!(q.order.last().map(|s| s.as_str()), Some("a"));
         assert_eq!(q.pays, 0);
         assert_eq!(q.shift_no, 1);
+    }
+
+    #[test]
+    fn rotate_skips_banned() {
+        let mut q = QueueState::from_nicks(&nicks(&["a", "b", "c", "d"]), "s");
+        assert_eq!(q.next_alive(&|n| n == "b"), Some("c"));
+        q.rotate_skipping(1, &|n| n == "b");
+        assert_eq!(q.duty(), Some("c"));
+        assert_eq!(q.order, nicks(&["c", "d", "b", "a"]));
     }
 
     #[test]

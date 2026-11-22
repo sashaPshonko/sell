@@ -1,3 +1,5 @@
+import { CANCEL_MENU_TTL_MS, cancelMenuLabels, parseCancelChoice } from './lib/cancel-menu.mjs';
+import { isMergedGroupInDelivery } from './lib/order-merge.mjs';
 import {
     parseBuyerNick,
     parseBuyerNickIntakes,
@@ -25,9 +27,14 @@ import {
     buildOrderCancelRefundFailedHint,
     buildOrderCancelDeniedHint,
     buildDispatchingHint,
+    buildOrderCancelInDeliveryHint,
+    buildCancelMenuHint,
+    buildCancelMenuExpiredHint,
+    CANCEL_MENU_KEYS,
     buildNickDeliveryActiveHint,
     buildNickQueueWaitingHint,
     buildPremiumRefundUpsellHint,
+    buildRepeatBuyerOfferHint,
     buildDeliveryAttemptsExceededHint,
 } from './messages.mjs';
 import {
@@ -37,7 +44,7 @@ import {
     buyerHasPriorSuccessfulDelivery,
 } from './lib/profile-upsell.mjs';
 import { scheduleUpsellRepeat } from './lib/scheduled-chat.mjs';
-import { getQueuePosition } from './lib/delivery-queue.mjs';
+import { getQueueOrderIds, getQueuePosition } from './lib/delivery-queue.mjs';
 import { tryOnceClaim, releaseOnceClaim } from './lib/once-claim.mjs';
 import { sendGreeting, sendChatMessage } from './chat.mjs';
 import { dispatchOrder, dispatchNickUpdate, dispatchCancelOrder } from './dispatch.mjs';
@@ -322,6 +329,21 @@ export async function sendTwinRemindersForNewOrders(
     }
 }
 
+
+/** Время самого старого другого заказа покупателя (мс), либо null. */
+function oldestBuyerOrderMs(state, buyerId, excludeOrderId) {
+    if (!buyerId || !state?.orders) return null;
+    let oldest = null;
+    for (const o of Object.values(state.orders)) {
+        if (!o || o.buyerId !== buyerId) continue;
+        if (o.orderId === excludeOrderId || o.dealId === excludeOrderId) continue;
+        const t = o.paidAt ? Date.parse(o.paidAt) : NaN;
+        if (!Number.isFinite(t)) continue;
+        if (oldest == null || t < oldest) oldest = t;
+    }
+    return oldest;
+}
+
 /**
  * Лот без 🎁 — если на профиле есть 🎁-аналог (больше kk, те же ₽):
  * повторным покупателям — отмена на PlayerOK + ссылка;
@@ -401,72 +423,193 @@ export async function sendPremiumRefundUpsellForOrders(client, state, chatId, ne
             continue;
         }
 
-        if (process.env.AUTO_CANCEL_PLAYEROK !== '1') {
+        // Автовозврат: повторный покупатель взял премку, а на профиле есть такой же лот с 🎁
+        // (та же цена, больше кк, ссылка проверена по карточке) — возвращаем деньги и даём ссылку.
+        // Не трогаем заказ, по которому выдача уже начата: тогда только мягкое предложение ниже.
+        const deliveryStarted =
+            order.phase === 'dispatched' || Boolean(order.dispatchedAt) || Boolean(order.gameDeliveryAt);
+        // Только если с самого старого заказа покупателя прошло достаточно времени (по умолчанию 10 ч):
+        // иначе это серия заказов подряд, и отнимать у человека заказ рано.
+        const minHours = Number(process.env.AUTO_REFUND_MIN_HOURS ?? 10);
+        const oldestMs = oldestBuyerOrderMs(state, order.buyerId, order.orderId);
+        const oldEnough =
+            oldestMs != null && Date.now() - oldestMs > (Number.isFinite(minHours) ? minHours : 10) * 3600_000;
+        if (!oldEnough) {
             console.log(
-                `[sell] profile-upsell ${order.orderId.slice(0, 8)}…: аналог ${upsellKk}кк, нет AUTO_CANCEL — выдача`,
+                `[sell] profile-upsell ${order.orderId.slice(0, 8)}…: автовозврат пропущен — с первого заказа покупателя меньше ${minHours} ч`,
             );
-            continue;
+        }
+        if (process.env.AUTO_CANCEL_PLAYEROK === '1' && !deliveryStarted && oldEnough) {
+            let cancelled = false;
+            try {
+                await cancelDealOnPlayerok(client, order.orderId);
+                cancelled = true;
+            } catch (e) {
+                console.warn(
+                    `[sell] profile-upsell автовозврат ${order.orderId.slice(0, 8)}…: ${e.message} — мягкое предложение`,
+                );
+            }
+            if (cancelled) {
+                const refundSentAt = new Date().toISOString();
+                setOrderPhase(state, order.orderId, 'cancelled', {
+                    cancelledAt: refundSentAt,
+                    cancelReason: 'profile_upsell_refund',
+                    premiumRefundUpsellSentAt: refundSentAt,
+                    profileUpsellSentAt: refundSentAt,
+                    profileUpsellUrl: match.url,
+                    profileUpsellKk: upsellKk,
+                    profileUpsellBaseKk: baseKk,
+                    profileUpsellPriceRub: matchPrice,
+                    profileUpsellEmoji: match.emoji ?? profileUpsellEmoji(),
+                    playerokCancelledAt: refundSentAt,
+                });
+                console.log(
+                    `[sell] profile-upsell АВТОВОЗВРАТ ${order.orderId.slice(0, 8)}… → ${upsellKk}кк (было ${baseKk}кк), повторный покупатель`,
+                );
+                if (!(order.buyerId && messagedBuyers.has(order.buyerId))) {
+                    if (order.buyerId) messagedBuyers.add(order.buyerId);
+                    try {
+                        await sendChatMessage(
+                            client,
+                            chatId,
+                            buildPremiumRefundUpsellHint({ upsellKk, baseKk, url: match.url }),
+                        );
+                    } catch (e) {
+                        console.warn(`[sell] profile-upsell возврат чат: ${e.message}`);
+                    }
+                }
+                await saveState(state);
+                continue;
+            }
         }
 
-        try {
-            await cancelDealOnPlayerok(client, order.orderId);
-        } catch (e) {
-            console.warn(
-                `[sell] profile-upsell PlayerOK ${order.orderId.slice(0, 8)}…: ${e.message} — выдача`,
-            );
-            continue;
-        }
+        // Мягкий вариант: заказ не отменяем. Сразу предлагаем 🎁-аналог по той же цене;
+        // хочет — /cancel (возврат) и берёт лот по ссылке, не хочет — выдача идёт как обычно.
+        if (order.buyerId && messagedBuyers.has(order.buyerId)) continue;
+        if (order.buyerId) messagedBuyers.add(order.buyerId);
 
-        const wasDispatched = order.phase === 'dispatched';
-        const refundSentAt = new Date().toISOString();
-        setOrderPhase(state, order.orderId, 'cancelled', {
-            cancelledAt: refundSentAt,
-            cancelReason: 'profile_upsell_refund',
-            premiumRefundUpsellSentAt: refundSentAt,
-            profileUpsellSentAt: refundSentAt,
+        const sentAt = new Date().toISOString();
+        setOrderPhase(state, order.orderId, order.phase, {
+            premiumRefundUpsellSentAt: sentAt,
+            profileUpsellSentAt: sentAt, // чтобы не слать тот же апселл ещё раз после выдачи
             profileUpsellUrl: match.url,
             profileUpsellKk: upsellKk,
             profileUpsellBaseKk: baseKk,
             profileUpsellPriceRub: matchPrice,
             profileUpsellEmoji: match.emoji ?? profileUpsellEmoji(),
-            playerokCancelledAt: refundSentAt,
         });
-        if (wasDispatched) {
-            await dispatchCancelOrder(order.orderId, state);
-        }
-
         console.log(
-            `[sell] profile-upsell refund ${order.orderId.slice(0, 8)}… → ${upsellKk}кк (было ${baseKk}кк)`,
+            `[sell] profile-upsell offer ${order.orderId.slice(0, 8)}… → ${upsellKk}кк (было ${baseKk}кк), повторный покупатель`,
         );
-
-        if (order.buyerId && messagedBuyers.has(order.buyerId)) {
-            continue;
-        }
-        if (order.buyerId) messagedBuyers.add(order.buyerId);
-
         try {
             await sendChatMessage(
                 client,
                 chatId,
-                buildPremiumRefundUpsellHint({
-                    upsellKk,
-                    baseKk,
-                    url: match.url,
-                }),
+                buildRepeatBuyerOfferHint({ upsellKk, url: match.url }),
             );
-            scheduleUpsellRepeat(state, chatId, order.orderId, {
-                fromSentAtMs: Date.parse(refundSentAt),
-            });
-            // Сразу на диск: иначе early-return в poll без saveState теряет повтор на 40с
             await saveState(state);
         } catch (e) {
-            console.warn(`[sell] profile-upsell refund чат: ${e.message}`);
+            console.warn(`[sell] profile-upsell offer чат: ${e.message}`);
         }
     }
 }
 
 /**
- * /cancel — отменить один последний незавершённый заказ покупателя (оплаченный не позже /cancel).
+ * Отменить заказы (у нас + возврат на PlayerOK). Заказ, который отменить нельзя, пропускается и считается.
+ * @returns {Promise<{cancelled:number, blocked:number, inDelivery:number, playerokCancelled:number, playerokRefundFailed:number, playerokRefundError:string}>}
+ */
+async function cancelBuyerOrders(client, state, orders) {
+    const r = {
+        cancelled: 0,
+        blocked: 0,
+        inDelivery: 0,
+        playerokCancelled: 0,
+        playerokRefundFailed: 0,
+        playerokRefundError: '',
+    };
+    const autoPok = process.env.AUTO_CANCEL_PLAYEROK === '1';
+    for (const order of orders) {
+        if (isSubscriptionCancelBlocked(order)) {
+            console.log(`[sell] /cancel проигнорирован: подписка ${order.orderId.slice(0, 8)}…`);
+            continue;
+        }
+        if (isMergedGroupInDelivery(state, order)) {
+            r.inDelivery += 1;
+            console.log(`[sell] /cancel отклонён: общий перевод уже в выдаче ${order.orderId.slice(0, 8)}…`);
+            continue;
+        }
+        if (isClanInvestCancelBlocked(order)) {
+            r.blocked += 1;
+            console.log(`[sell] /cancel отклонён: деньги в казне ${order.orderId.slice(0, 8)}…`);
+            continue;
+        }
+
+        const retryRefund = order.phase === 'cancelled';
+        if (!retryRefund) {
+            const wasDispatched = order.phase === 'dispatched';
+            setOrderPhase(state, order.orderId, 'cancelled', {
+                cancelledAt: new Date().toISOString(),
+            });
+            if (wasDispatched) {
+                await dispatchCancelOrder(order.orderId, state);
+            }
+        }
+
+        if (autoPok) {
+            try {
+                await cancelDealOnPlayerok(client, order.orderId);
+                setOrderPhase(state, order.orderId, 'cancelled', {
+                    playerokCancelledAt: new Date().toISOString(),
+                });
+                r.playerokCancelled += 1;
+            } catch (e) {
+                r.playerokRefundFailed += 1;
+                r.playerokRefundError = e?.message || String(e);
+                console.warn(`[sell] PlayerOK отмена ${order.orderId.slice(0, 8)}…: ${r.playerokRefundError}`);
+            }
+        }
+
+        r.cancelled += 1;
+        console.log(`[sell] ${order.orderId.slice(0, 8)}…: отменён покупателем (${order.amountKk}кк)`);
+    }
+    return r;
+}
+
+/** Ответ покупателю по итогам отмены (одно сообщение). */
+async function replyCancelResult(client, chatId, r) {
+    let text = null;
+    if (r.cancelled > 0 && r.playerokRefundFailed > 0) {
+        text = buildOrderCancelRefundFailedHint(r.playerokRefundError);
+    } else if (r.cancelled > 0) {
+        text = buildOrderCancelledHint(r.playerokCancelled > 0, r.cancelled);
+        if (r.inDelivery > 0) text += `\n\n${buildOrderCancelInDeliveryHint()}`;
+    } else if (r.inDelivery > 0) {
+        text = buildOrderCancelInDeliveryHint();
+    } else if (r.blocked > 0) {
+        text = buildOrderCancelDeniedHint();
+    }
+    if (!text) return false;
+    try {
+        await sendChatMessage(client, chatId, text);
+    } catch (e) {
+        console.warn(`[sell] отмена, ответ в чат: ${e.message}`);
+    }
+    return true;
+}
+
+/** Заказ ещё можно отменить прямо сейчас (не выдан, не в общем переводе у бота, не казна/подписка). */
+function isCancellableNow(state, order) {
+    if (!order || order.phase === 'completed' || order.phase === 'cancelled') return false;
+    if (isOrderFulfilled(order)) return false;
+    if (isSubscriptionCancelBlocked(order) || isClanInvestCancelBlocked(order)) return false;
+    return !isMergedGroupInDelivery(state, order);
+}
+
+/**
+ * /cancel.
+ * Один отменяемый заказ — отменяем сразу (как раньше).
+ * Несколько — шлём меню «какой отменить? 1️⃣ 70кк 2️⃣ 300кк 3️⃣ Все заказы» и ждём ответ цифрой
+ * (CANCEL_MENU_TTL_MS). На момент ответа каждый заказ проверяется заново.
  */
 export async function applyCancelCommands(
     client,
@@ -488,6 +631,45 @@ export async function applyCancelCommands(
         if (!msg?.text || msg.deal) continue;
         if (!isBuyerUser(msg, buyerId, buyerUsername)) continue;
         const msgAt = Date.parse(msg.createdAt);
+
+        // Ответ на меню отмены
+        const menu = session.cancelMenu;
+        if (menu && !known.has(msg.id) && msgAt > Date.parse(menu.at)) {
+            const n = (menu.orderIds || []).length + 1;
+            const choice = parseCancelChoice(msg.text, n);
+            if (choice != null) {
+                known.add(msg.id);
+                delete session.cancelMenu;
+                const age = Date.now() - Date.parse(menu.sentAt);
+                if (age > CANCEL_MENU_TTL_MS) {
+                    console.log(`[sell] меню /cancel: ответ ${choice} пришёл поздно (чат ${chatId.slice(0, 8)}…)`);
+                    // совсем старое меню — молча забываем (цифра могла быть про другое)
+                    if (age <= 2 * CANCEL_MENU_TTL_MS) {
+                        try {
+                            await sendChatMessage(client, chatId, buildCancelMenuExpiredHint());
+                        } catch (e) {
+                            console.warn(`[sell] меню /cancel, ответ в чат: ${e.message}`);
+                        }
+                        replied = true;
+                    }
+                    continue;
+                }
+                const ids = choice === n ? menu.orderIds : [menu.orderIds[choice - 1]];
+                const targets = ids
+                    .map((id) => getOrder(state, id))
+                    .filter((o) => o && o.phase !== 'completed' && !(o.phase === 'cancelled' && o.playerokCancelledAt));
+                console.log(
+                    `[sell] меню /cancel: выбран ${choice === n ? 'все' : choice} → ${targets.map((o) => o.orderId.slice(0, 8) + '…').join(', ') || 'нечего'}`,
+                );
+                const r = await cancelBuyerOrders(client, state, targets);
+                if (!(await replyCancelResult(client, chatId, r))) {
+                    console.log(`[sell] меню /cancel: выбранные заказы уже закрыты (чат ${chatId.slice(0, 8)}…)`);
+                }
+                replied = true;
+                continue;
+            }
+        }
+
         if (isCancelCommand(msg.text) && after && msgAt < after) {
             known.add(msg.id);
             continue;
@@ -497,11 +679,6 @@ export async function applyCancelCommands(
 
         known.add(msg.id);
 
-        let cancelled = 0;
-        let blocked = 0;
-        let playerokCancelled = 0;
-        let playerokRefundFailed = 0;
-        let playerokRefundError = '';
         const autoPok = process.env.AUTO_CANCEL_PLAYEROK === '1';
         const eligible = [];
         for (const order of ordersInChat(state, chatId)) {
@@ -521,84 +698,37 @@ export async function applyCancelCommands(
             (a, b) => Date.parse(b.paidAt || 0) - Date.parse(a.paidAt || 0),
         );
 
-        for (const order of eligible.slice(0, 1)) {
-            if (isSubscriptionCancelBlocked(order)) {
+        const cancellable = eligible
+            .filter((o) => isCancellableNow(state, o))
+            .sort((a, b) => Date.parse(a.paidAt || 0) - Date.parse(b.paidAt || 0))
+            .slice(-(CANCEL_MENU_KEYS.length - 1));
+
+        if (cancellable.length >= 2) {
+            session.cancelMenu = {
+                at: msg.createdAt,
+                sentAt: new Date().toISOString(),
+                orderIds: cancellable.map((o) => o.orderId),
+            };
+            try {
+                await sendChatMessage(client, chatId, buildCancelMenuHint(cancelMenuLabels(cancellable)));
                 console.log(
-                    `[sell] /cancel проигнорирован: подписка ${order.orderId.slice(0, 8)}…`,
+                    `[sell] /cancel: меню ${cancellable.length} заказов (чат ${chatId.slice(0, 8)}…)`,
                 );
-                continue;
+            } catch (e) {
+                delete session.cancelMenu;
+                known.delete(msg.id); // повторим на следующем проходе
+                console.warn(`[sell] меню /cancel, отправка: ${e.message}`);
             }
-            if (isClanInvestCancelBlocked(order)) {
-                blocked += 1;
-                console.log(
-                    `[sell] /cancel отклонён: деньги в казне ${order.orderId.slice(0, 8)}…`,
-                );
-                continue;
-            }
-
-            const retryRefund = order.phase === 'cancelled';
-            if (!retryRefund) {
-                const wasDispatched = order.phase === 'dispatched';
-                setOrderPhase(state, order.orderId, 'cancelled', {
-                    cancelledAt: new Date().toISOString(),
-                });
-                if (wasDispatched) {
-                    await dispatchCancelOrder(order.orderId, state);
-                }
-            }
-
-            if (autoPok) {
-                try {
-                    await cancelDealOnPlayerok(client, order.orderId);
-                    setOrderPhase(state, order.orderId, 'cancelled', {
-                        playerokCancelledAt: new Date().toISOString(),
-                    });
-                    playerokCancelled += 1;
-                } catch (e) {
-                    playerokRefundFailed += 1;
-                    playerokRefundError = e?.message || String(e);
-                    console.warn(
-                        `[sell] PlayerOK отмена ${order.orderId.slice(0, 8)}…: ${playerokRefundError}`,
-                    );
-                }
-            }
-
-            cancelled += 1;
-            console.log(
-                `[sell] ${order.orderId.slice(0, 8)}…: отменён покупателем (${order.amountKk}кк)`,
-            );
+            replied = true;
+            continue;
         }
 
-        if (cancelled > 0 && playerokRefundFailed > 0 && !replied) {
-            try {
-                await sendChatMessage(
-                    client,
-                    chatId,
-                    buildOrderCancelRefundFailedHint(playerokRefundError),
-                );
-            } catch (e) {
-                console.warn(`[sell] отмена, ошибка возврата в чат: ${e.message}`);
-            }
+        // Один отменяемый — его; иначе как раньше: самый свежий (повтор возврата / объяснить, почему нельзя)
+        const targets = cancellable.length === 1 ? cancellable : eligible.slice(0, 1);
+        const r = await cancelBuyerOrders(client, state, targets);
+        if (!replied && (await replyCancelResult(client, chatId, r))) {
             replied = true;
-        } else if (cancelled > 0 && !replied) {
-            try {
-                await sendChatMessage(
-                    client,
-                    chatId,
-                    buildOrderCancelledHint(playerokCancelled > 0),
-                );
-            } catch (e) {
-                console.warn(`[sell] отмена, ответ в чат: ${e.message}`);
-            }
-            replied = true;
-        } else if (blocked > 0 && !replied) {
-            try {
-                await sendChatMessage(client, chatId, buildOrderCancelDeniedHint());
-            } catch (e) {
-                console.warn(`[sell] отмена запрещена, ответ в чат: ${e.message}`);
-            }
-            replied = true;
-        } else if (!cancelled && !blocked) {
+        } else if (!r.cancelled && !r.blocked && !r.inDelivery) {
             console.log(`[sell] /cancel: нечего отменять (чат ${chatId.slice(0, 8)}…)`);
         }
     }
@@ -899,6 +1029,13 @@ function buildQueueStatusMessage(state, order, nick) {
 /** Статус очереди — один раз на заказ (флаг + история чата PlayerOK). */
 async function notifyDeliveryQueueStatus(client, state, chatId, order, nick, opts = {}) {
     if (!client || !order || order.queueStatusSentAt) return;
+    if (order.mergedInto) {
+        // заказ едет вместе с основным — отдельный статус очереди не нужен
+        setOrderPhase(state, order.orderId, order.phase, {
+            queueStatusSentAt: new Date().toISOString(),
+        });
+        return;
+    }
     if (isOrderFulfilled(order)) return;
     if (isBotFatalPaused(order)) return;
     if (
@@ -923,6 +1060,25 @@ async function notifyDeliveryQueueStatus(client, state, chatId, order, nick, opt
             `[sell] очередь → ${order.orderId.slice(0, 8)}… уже в чате («${nick}»), пропуск`,
         );
         return;
+    }
+
+    // Впереди только заказы этого же покупателя — он уже получил «Выдаю на ник», «Ты следующий» лишнее.
+    {
+        const q0 = getQueuePosition(order.orderId, state);
+        if (q0.inQueue && q0.position > 1 && order.buyerId) {
+            const ahead = getQueueOrderIds(state)
+                .slice(0, q0.position - 1)
+                .map((id) => getOrder(state, id));
+            if (ahead.length && ahead.every((o) => o && o.buyerId === order.buyerId)) {
+                setOrderPhase(state, order.orderId, order.phase, {
+                    queueStatusSentAt: new Date().toISOString(),
+                });
+                console.log(
+                    `[sell] очередь → ${order.orderId.slice(0, 8)}… впереди только заказы этого же покупателя, статус не шлём`,
+                );
+                return;
+            }
+        }
     }
 
     // Claim до await — параллельный poll не отправит второй раз

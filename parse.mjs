@@ -376,7 +376,9 @@ export function findGreetingAnchorInChat(messages, sellerUserId) {
     const marker = (process.env.GREETING_MARKER || 'выдача автоматическая').toLowerCase();
     for (const msg of messages) {
         if (!msg?.text || msg.user?.id !== sellerUserId) continue;
-        if (msg.text.toLowerCase().includes(marker)) return msg.createdAt;
+        const t = msg.text.toLowerCase();
+        // «заходи на анархию» — новое приветствие (без строки «выдача автоматическая»)
+        if (t.includes(marker) || t.includes('заходи на анархию')) return msg.createdAt;
     }
     return null;
 }

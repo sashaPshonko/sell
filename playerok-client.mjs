@@ -345,12 +345,14 @@ export function createClient() {
             variables,
             operationName,
             gqlPath = '/chats/[id]',
+            referer = null,
         ) {
             const query = await loadQuery(fileEnvKey, defaultPath);
             const op = operationName || process.env.CONFIRM_DEAL_OPERATION || 'confirmDeal';
             return request({
                 gqlOp: op,
                 gqlPath,
+                referer,
                 body: { operationName: op, variables, query },
             });
         },

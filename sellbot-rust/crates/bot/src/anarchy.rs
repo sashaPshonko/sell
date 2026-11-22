@@ -63,6 +63,33 @@ pub fn on_lobby_broadcast(state: &Arc<Mutex<BotState>>, text: &str) -> bool {
     true
 }
 
+fn captcha_busy(state: &Arc<Mutex<BotState>>) -> bool {
+    state.lock().captcha_busy
+}
+
+/// Капча в чате — не шлём /an и не считаем это время в таймаут входа (иначе сбиваем стену и солвер).
+async fn wait_captcha_idle(state: &Arc<Mutex<BotState>>, max: Duration) -> bool {
+    let until = Instant::now() + max;
+    let mut logged = false;
+    loop {
+        if state.lock().banned || state.lock().shutdown {
+            return false;
+        }
+        if !captcha_busy(state) {
+            return true;
+        }
+        if Instant::now() >= until {
+            warn!("капча → слишком долго, /an не шлю");
+            return false;
+        }
+        if !logged {
+            info!("капча → жду, /an не шлю");
+            logged = true;
+        }
+        delay::rnd("POLL").await;
+    }
+}
+
 /// Пока нет scoreboard с номером анки — шлём /an и ждём.
 /// `false` = бан / shutdown / таймаут.
 pub async fn wait_until_on_anarchy(
@@ -74,16 +101,29 @@ pub async fn wait_until_on_anarchy(
         return false;
     }
 
+    if captcha_busy(state) && !wait_captcha_idle(state, Duration::from_secs(120)).await {
+        return false;
+    }
+
     if state.lock().on_anarchy {
         settle_after_join(state, &boot.go_type).await;
         return !state.lock().banned;
     }
 
-    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut deadline = Instant::now() + Duration::from_secs(90);
 
     while Instant::now() < deadline {
         if state.lock().banned || state.lock().shutdown {
             return false;
+        }
+
+        // Пока решается капча — таймер стоит; после неё свежие 90 с.
+        if captcha_busy(state) {
+            if !wait_captcha_idle(state, Duration::from_secs(120)).await {
+                return false;
+            }
+            deadline = Instant::now() + Duration::from_secs(90);
+            continue;
         }
 
         if state.lock().on_anarchy {
@@ -102,6 +142,10 @@ pub async fn wait_until_on_anarchy(
         while Instant::now() < retry_at {
             if state.lock().banned || state.lock().shutdown {
                 return false;
+            }
+
+            if captcha_busy(state) {
+                break;
             }
 
             if state.lock().on_anarchy {
