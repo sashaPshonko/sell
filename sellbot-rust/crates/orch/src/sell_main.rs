@@ -48,6 +48,16 @@ impl Orch {
             || (!self.ready.contains(n)
                 && self.login_fail.get(n).map_or(false, |t| t.elapsed() < LOGIN_FAIL_SKIP))
     }
+
+    /// Кому отдать остаток. Передача обязана состояться: сначала бот, который недавно заходил нормально;
+    /// если таких нет — любой не забаненный и без 2FA, даже с недавней неудачей входа (попробуем ещё раз).
+    /// `None` только когда все остальные забанены или ждут 2FA.
+    fn handoff_target(&self) -> Option<String> {
+        self.queue
+            .next_alive(&|n| self.unusable(n))
+            .or_else(|| self.queue.next_alive(&|n| self.bans.contains_key(n) || self.stuck_2fa.contains(n)))
+            .map(|s| s.to_string())
+    }
 }
 /// Минимальный интервал между запусками одного бота. Непривязанный перезаходит снова и снова
 /// (бот сам выходит после запроса привязки), но не чаще, чем раз в это время.
@@ -527,7 +537,7 @@ async fn pump(state: &Arc<Mutex<Orch>>) {
             }
         } else if g.in_flight.is_none() {
             let block = g.rotate_block_until.map_or(false, |t| now < t);
-            let next_alive = g.queue.next_alive(&|n| g.unusable(n)).map(|s| s.to_string());
+            let next_alive = g.handoff_target();
             if g.queue.rotation_due() && !block && next_alive.is_some() {
                 if let Some(to) = next_alive {
                     info!("{} выдачи у {} → третий перевод {to}", rotation::PAYS_BEFORE_ROTATE, duty.clone().unwrap_or_default());
@@ -536,7 +546,11 @@ async fn pump(state: &Arc<Mutex<Orch>>) {
                 }
             } else if let Some(d) = duty.clone() {
                 // Две выдачи уже были — с этого ника больше не платим, пока остаток не уйдёт следующему.
-                let worn_out = g.queue.rotation_due() && next_alive.is_some();
+                // Без исключений: даже если принять остаток сейчас некому, третью выдачу не делаем.
+                let worn_out = g.queue.limit_reached();
+                if worn_out && next_alive.is_none() && !g.pending.is_empty() {
+                    warn!("лимит выдач у {d} исчерпан, а принять остаток некому (все остальные забанены или ждут 2FA) — заказы ждут");
+                }
                 if worn_out && !g.pending.is_empty() {
                     warn_once_worn(&d);
                 }
@@ -970,9 +984,6 @@ async fn on_worker_line(state: &Arc<Mutex<Orch>>, username: &str, line: &str) ->
                 }
                 if g.queue.duty() == Some(username) {
                     g.queue.on_delivery_ok();
-                    if g.queue.order.len() < 2 && g.queue.pays >= rotation::PAYS_BEFORE_ROTATE {
-                        g.queue.pays = 0; // единственный бот: некому передавать
-                    }
                     info!("{username}: выдач {}/{}", g.queue.pays, rotation::PAYS_BEFORE_ROTATE);
                 }
                 save_state(&g);

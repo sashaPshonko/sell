@@ -88,6 +88,12 @@ impl QueueState {
         self.pays >= PAYS_BEFORE_ROTATE
     }
 
+    /// Лимит выдач у держателя исчерпан. Строго, без исключений: больше `PAYS_BEFORE_ROTATE` выдач
+    /// с одного бота нельзя, пока остаток не ушёл следующему (даже если следующего сейчас нет).
+    pub fn limit_reached(&self) -> bool {
+        self.pays >= PAYS_BEFORE_ROTATE
+    }
+
     /// Нужно ли передавать остаток (и есть ли кому).
     pub fn rotation_due(&self) -> bool {
         self.pays >= PAYS_BEFORE_ROTATE && self.order.len() >= 2
@@ -124,6 +130,18 @@ mod tests {
 
     fn nicks(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn limit_is_strict_even_without_next() {
+        // Один бот в очереди: передавать некому, но третью выдачу делать всё равно нельзя.
+        let mut q = QueueState::from_nicks(&nicks(&["a"]), "s");
+        assert!(!q.limit_reached());
+        q.on_delivery_ok();
+        assert!(!q.limit_reached());
+        q.on_delivery_ok();
+        assert!(q.limit_reached());
+        assert!(!q.rotation_due());
     }
 
     #[test]
