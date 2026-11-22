@@ -135,8 +135,11 @@ async fn handle(bot: Client, event: Event, state: HandleState) -> anyhow::Result
                             phase.store(2, Ordering::SeqCst);
                         }
                         inner.lock().funauth_verified = false;
-                        // Ждём анку, пока не зайдём: капча/рестарт анки могут занять и больше 90 с.
-                        // Бот не умирает после одного таймаута; выходим только по бану/shutdown.
+                        // Ждём анку. Передача остатка держателю (`SELL_BOOT_WAIT=forever`, ставит sell-orch участникам
+                        // передачи): капча/рестарт анки могут занять и больше 90 с — ждём кругами, пока не зайдём;
+                        // выходим только по бану/shutdown. Выдача покупателю: один заход (~90 с), не зашли — выдачу
+                        // не стартуем, оркестратор скажет покупателю «не вышло, напиши ник ещё раз».
+                        let forever = std::env::var("SELL_BOOT_WAIT").map_or(false, |v| v == "forever");
                         let mut round = 0u32;
                         loop {
                             if anarchy::wait_until_on_anarchy(&bot2, &boot2, &inner).await {
@@ -149,8 +152,12 @@ async fn handle(bot: Client, event: Event, state: HandleState) -> anyhow::Result
                             if inner.lock().shutdown {
                                 return false;
                             }
+                            if !forever {
+                                warn!("на анку не зашли — выдачу не стартую");
+                                return false;
+                            }
                             round += 1;
-                            warn!("на анку пока не зашли (круг {round}) — продолжаю ждать");
+                            warn!("на анку пока не зашли (круг {round}) — передача остатка, продолжаю ждать");
                         }
                         tokio::time::sleep(Duration::from_secs(5)).await;
                         {

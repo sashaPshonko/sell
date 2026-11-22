@@ -706,11 +706,17 @@ async fn spawn_one(
     restart_tx: mpsc::UnboundedSender<String>,
     username: String,
 ) -> Result<()> {
-    let (boot, bin) = {
+    let (boot, bin, handoff_party) = {
         let g = state.lock().await;
         if g.workers.contains_key(&username) {
             return Ok(());
         }
+        // Участник передачи остатка (получатель или отправитель): боту нельзя сдаться после одного таймаута захода.
+        let handoff_party = g.handoff.as_ref().map_or(false, |h| {
+            h.to == username
+                || h.from.as_deref() == Some(username.as_str())
+                || (h.from.is_none() && g.queue.duty() == Some(username.as_str()))
+        });
         let rt = g.bots.get(&username).context("unknown bot")?;
         let boot = BotBoot {
             username: rt.cfg.username.clone(),
@@ -729,13 +735,17 @@ async fn spawn_one(
             owner_reason: None,
             treasurer_nick: None,
         };
-        (boot, g.bot_bin.clone())
+        (boot, g.bot_bin.clone(), handoff_party)
     };
     if !bin.is_file() {
         bail!("нет {} — cargo build -p bot --release", bin.display());
     }
     pretty_log::line(&username, LineKind::Info, "spawn");
-    let mut child = Command::new(&bin)
+    let mut cmd = Command::new(&bin);
+    if handoff_party {
+        cmd.env("SELL_BOOT_WAIT", "forever");
+    }
+    let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
