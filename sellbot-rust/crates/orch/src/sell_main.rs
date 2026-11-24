@@ -7,6 +7,7 @@
 mod config;
 mod rotation;
 mod session;
+mod topup;
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -252,6 +253,14 @@ struct Orch {
     /// Когда заказ впервые увидели в очереди на выдачу; уведомление «бот решает капчу» шлём один раз на заказ.
     wait_seen: HashMap<String, Instant>,
     wait_notified: HashSet<String>,
+    /// Пополнение анархий фермы (настройки и список анархий присылает Go).
+    topup_cfg: topup::Cfg,
+    /// Идущее сейчас пополнение: держатель заходит на анархию фермы и платит казначею.
+    topup: Option<topup::Job>,
+    /// До какого момента не пополняем анархию снова.
+    topup_cool: HashMap<u16, Instant>,
+    /// Последние пополнения для панели.
+    topup_log: VecDeque<Value>,
 }
 
 struct WaitPay {
@@ -364,6 +373,10 @@ async fn main() -> Result<()> {
         stuck_2fa: HashSet::new(),
         wait_seen: HashMap::new(),
         wait_notified: HashSet::new(),
+        topup_cfg: topup::Cfg::default(),
+        topup: None,
+        topup_cool: HashMap::new(),
+        topup_log: VecDeque::new(),
     }));
 
     let (restart_tx, mut restart_rx) = mpsc::unbounded_channel::<String>();
@@ -377,6 +390,7 @@ async fn main() -> Result<()> {
         tokio::spawn(async move {
             loop {
                 pump(&st).await;
+                topup_tick(&st).await;
                 notify_waiting(&st).await;
                 let _ = tick_spawns(st.clone(), rtx.clone()).await;
                 sleep(Duration::from_secs(1)).await;
@@ -462,7 +476,7 @@ fn needed(g: &Orch) -> HashSet<String> {
     if let Some(duty) = g.queue.duty() {
         // баланс держателя неизвестен (первый запуск): один раз заходим, чтобы вкладка «Автопродажа» его показала
         let unknown_balance = !g.balances.contains_key(duty);
-        if unknown_balance || g.wait_pay.is_some() || !g.pending.is_empty() || g.in_flight.is_some() || g.handoff.is_some() {
+        if unknown_balance || g.wait_pay.is_some() || !g.pending.is_empty() || g.in_flight.is_some() || g.handoff.is_some() || g.topup.is_some() {
             out.insert(duty.to_string());
         }
     }
@@ -554,7 +568,8 @@ async fn pump(state: &Arc<Mutex<Orch>>) {
                 if worn_out && !g.pending.is_empty() {
                     warn_once_worn(&d);
                 }
-                if g.ready.contains(&d) && !worn_out {
+                // Пока держатель на анархии фермы (пополнение), заказы покупателям ему не отдаём: он не там.
+                if g.ready.contains(&d) && !worn_out && g.topup.is_none() {
                     let pos = g.pending.iter().position(|p| p.not_before.map_or(true, |t| now >= t));
                     if let Some(i) = pos {
                         let job = g.pending.remove(i).unwrap();
@@ -653,10 +668,143 @@ async fn pump(state: &Arc<Mutex<Orch>>) {
     }
 }
 
+/// Убрать воркера (он вернётся на основную анархию, когда понадобится).
+fn kill_worker(g: &mut Orch, nick: &str) {
+    if let Some(mut w) = g.workers.remove(nick) {
+        let _ = w.child.start_kill();
+        // не поднимаем заново раньше SPAWN_GAP: старый воркер должен успеть отчитаться об уходе
+        g.last_spawn.insert(nick.to_string(), Instant::now());
+    }
+    g.ready.remove(nick);
+}
+
+/// Закрыть пополнение: пауза по анархии, запись для панели и в ledger, держатель уходит с анархии фермы.
+/// Без `ok` и с причиной «пришёл заказ» / «выключено» паузу не ставим (это не сбой).
+fn topup_close(g: &mut Orch, ok: bool, reason: &str) {
+    let Some(job) = g.topup.take() else { return };
+    let neutral = !ok && (reason == "пришёл заказ" || reason == "выключено");
+    if !neutral {
+        let pause = if ok { topup::COOLDOWN_OK } else { topup::COOLDOWN_FAIL };
+        g.topup_cool.insert(job.anarchy, Instant::now() + pause);
+    }
+    let level = if ok { "ok" } else { "fail" };
+    if ok {
+        info!("пополнение an{}: {} → {} {}kk — готово", job.anarchy, job.duty, job.to, job.amount_kk);
+    } else {
+        warn!("пополнение an{} → {} не вышло: {reason}", job.anarchy, job.to);
+    }
+    g.topup_log.push_back(json!({
+        "at": session::fmt_msk(session::now_unix_ms()),
+        "anarchy": job.anarchy, "to": job.to, "amount_kk": job.amount_kk, "from": job.duty,
+        "result": level, "reason": reason,
+    }));
+    while g.topup_log.len() > 8 {
+        g.topup_log.pop_front();
+    }
+    ledger(&g.farm_root, json!({
+        "ev": if ok { "topup_ok" } else { "topup_fail" },
+        "from": job.duty, "to": job.to, "anarchy": job.anarchy, "amount_kk": job.amount_kk, "reason": reason,
+    }));
+    kill_worker(g, &job.duty);
+}
+
+/// Раз в секунду: начать пополнение анархии фермы или довести идущее.
+async fn topup_tick(state: &Arc<Mutex<Orch>>) {
+    let pay_job = {
+        let mut g = state.lock().await;
+        let now = Instant::now();
+        let mut to_pay: Option<topup::Job> = None;
+        if let Some(job) = g.topup.clone() {
+            let duty = g.queue.duty().map(|s| s.to_string());
+            if job.sent_at.is_some() {
+                if job.sent_at.map_or(false, |t| now.duration_since(t) > topup::PAY_TIMEOUT) {
+                    g.in_flight = None;
+                    topup_close(&mut g, false, "нет ответа о переводе");
+                }
+            } else if !g.topup_cfg.enabled {
+                topup_close(&mut g, false, "выключено");
+            } else if !g.pending.is_empty() {
+                topup_close(&mut g, false, "пришёл заказ");
+            } else if duty.as_deref() != Some(job.duty.as_str()) || g.handoff.is_some() || g.queue.limit_reached() {
+                topup_close(&mut g, false, "смена держателя или передача остатка");
+            } else if now.duration_since(job.started) > topup::START_TIMEOUT {
+                topup_close(&mut g, false, "держатель не зашёл на анархию");
+            } else if g.ready.contains(&job.duty) && g.in_flight.is_none() {
+                g.in_flight = Some(job.order_id.clone());
+                if let Some(j) = g.topup.as_mut() {
+                    j.sent_at = Some(now);
+                }
+                let mut sent_job = job;
+                sent_job.sent_at = Some(now);
+                to_pay = Some(sent_job);
+            }
+        } else {
+            // начать: всё тихо, настройки свежие, есть кому платить и есть чем
+            let cfg_ok = g.topup_cfg.enabled && g.topup_cfg.fresh(now) && !g.topup_cfg.targets.is_empty();
+            let quiet = g.pending.is_empty()
+                && g.in_flight.is_none()
+                && g.handoff.is_none()
+                && g.wait_pay.is_none()
+                && g.rotate_block_until.map_or(true, |t| now >= t);
+            if cfg_ok && quiet {
+                if let Some(duty) = g.queue.duty().map(|s| s.to_string()) {
+                    // после перевода дальше должна быть возможна передача остатка (лимит две выдачи)
+                    let can_rotate = g.queue.pays + 1 < rotation::PAYS_BEFORE_ROTATE || g.handoff_target().is_some();
+                    let bal = g.balances.get(&duty).map(|b| b.0);
+                    if !g.queue.limit_reached()
+                        && can_rotate
+                        && !g.unusable(&duty)
+                        && topup::enough_money(bal, g.topup_cfg.amount_kk)
+                    {
+                        if let Some(t) = topup::pick_target(&g.topup_cfg.targets, &g.topup_cool, now) {
+                            let amount = g.topup_cfg.amount_kk;
+                            let order_id = format!("{}{}-{}", topup::PREFIX, t.anarchy, session::now_unix_ms() / 1000);
+                            info!("пополнение an{}: {duty} зайдёт и заплатит {} {amount}kk", t.anarchy, t.to);
+                            ledger(&g.farm_root, json!({
+                                "ev": "topup_start", "from": duty, "to": t.to, "anarchy": t.anarchy, "amount_kk": amount,
+                            }));
+                            g.topup = Some(topup::Job {
+                                order_id,
+                                anarchy: t.anarchy,
+                                to: t.to,
+                                amount_kk: amount,
+                                duty: duty.clone(),
+                                started: now,
+                                sent_at: None,
+                            });
+                            // если держатель уже сидит на основной анархии — перезаходит на анархию фермы
+                            kill_worker(&mut g, &duty);
+                        }
+                    }
+                }
+            }
+        }
+        to_pay
+    };
+    if let Some(job) = pay_job {
+        topup_pay(state, job).await;
+    }
+}
+
+async fn topup_pay(state: &Arc<Mutex<Orch>>, job: topup::Job) {
+    info!("пополнение an{}: {} → {} {}kk", job.anarchy, job.duty, job.to, job.amount_kk);
+    let cmd = OrchCmd::Deliver { order_id: job.order_id.clone(), nick: job.to.clone(), amount: job.amount_kk };
+    if send_cmd(state, &job.duty, &cmd).await.is_err() {
+        let mut g = state.lock().await;
+        g.in_flight = None;
+        topup_close(&mut g, false, "нет связи с воркером");
+    }
+}
+
 /// Подтверждения выдачи не было → перевода не было → пробуем ещё раз (до MAX_DELIVERY_TRIES).
 /// `true` — заказ вернулся в очередь, `false` — попытки кончились.
 fn requeue(g: &mut Orch, oid: &str) -> bool {
     g.in_flight = None;
+    if topup::is_topup(oid) {
+        // перевод-пополнение повторно не шлём: просто закрываем (пауза до следующей попытки)
+        topup_close(g, false, "воркер упал или бан во время перевода");
+        return true;
+    }
     let n = g.attempts.entry(oid.to_string()).or_insert(0);
     *n += 1;
     if *n >= MAX_DELIVERY_TRIES {
@@ -735,10 +883,11 @@ async fn spawn_one(
         let boot = BotBoot {
             username: rt.cfg.username.clone(),
             password: rt.cfg.password.clone(),
-            anarchy: if rt.cfg.anarchy == 0 {
-                g.anarchy
-            } else {
-                rt.cfg.anarchy
+            anarchy: match &g.topup {
+                // пополнение: держатель заходит сразу на анархию фермы
+                Some(t) if g.queue.duty() == Some(username.as_str()) => t.anarchy,
+                _ if rt.cfg.anarchy == 0 => g.anarchy,
+                _ => rt.cfg.anarchy,
             },
             item: "sell".into(),
             go_type: "netherite-1.21".into(),
@@ -1012,6 +1161,20 @@ async fn on_worker_line(state: &Arc<Mutex<Orch>>, username: &str, line: &str) ->
                 .clone()
                 .or_else(|| msg.extra.get("orderId").and_then(|v| v.as_str()).map(|s| s.to_string()))
                 .unwrap_or_default();
+            if topup::is_topup(&oid) {
+                // пополнение анархии фермы: считается выдачей держателя, но покупателю/poll ничего не шлём
+                let mut g = state.lock().await;
+                if g.in_flight.as_deref() == Some(oid.as_str()) {
+                    g.in_flight = None;
+                }
+                if g.queue.duty() == Some(username) {
+                    g.queue.on_delivery_ok();
+                    info!("{username}: выдач {}/{} (пополнение)", g.queue.pays, rotation::PAYS_BEFORE_ROTATE);
+                }
+                topup_close(&mut g, true, "");
+                save_state(&g);
+                return Ok(());
+            }
             {
                 let mut g = state.lock().await;
                 if g.in_flight.as_deref() == Some(oid.as_str()) {
@@ -1041,6 +1204,14 @@ async fn on_worker_line(state: &Arc<Mutex<Orch>>, username: &str, line: &str) ->
         "delivery_failed" => {
             let oid = msg.id.clone().unwrap_or_default();
             let reason = msg.reason.clone().unwrap_or_else(|| "fail".into());
+            if topup::is_topup(&oid) {
+                let mut g = state.lock().await;
+                if g.in_flight.as_deref() == Some(oid.as_str()) {
+                    g.in_flight = None;
+                }
+                topup_close(&mut g, false, &reason);
+                return Ok(());
+            }
             // «timeout» = подтверждения выдачи не было и баланс не упал: перевода не было, пробуем снова
             if reason == "timeout" {
                 let again = {
@@ -1487,6 +1658,17 @@ async fn sell_state_msg(state: &Arc<Mutex<Orch>>) -> Value {
             "at": session::fmt_msk(*t),
             "ip": g.bots.get(n).map(|rt| proxy_host_only(&rt.cfg.proxy)).unwrap_or_default(),
         })).collect::<Vec<_>>(),
+        "topup": json!({
+            "enabled": g.topup_cfg.enabled,
+            "amount_kk": g.topup_cfg.amount_kk,
+            "targets": g.topup_cfg.targets.iter().map(|t| json!({ "anarchy": t.anarchy, "to": t.to })).collect::<Vec<_>>(),
+            "data_fresh": g.topup_cfg.fresh(Instant::now()),
+            "active": g.topup.as_ref().map(|t| json!({
+                "anarchy": t.anarchy, "to": t.to, "amount_kk": t.amount_kk,
+                "paying": t.sent_at.is_some(), "age_s": t.started.elapsed().as_secs(),
+            })),
+            "log": g.topup_log.iter().cloned().collect::<Vec<_>>(),
+        }),
         "wait_pay": g.wait_pay.as_ref().map(|w| json!({ "nick": w.nick, "since_ms": w.since_ms })),
         "last_payment": g.last_payment.as_ref().map(|(n, f, a, t)| json!({ "nick": n, "from": f, "amount": a, "at_ms": t })),
         "queue": queue,
@@ -1511,6 +1693,25 @@ async fn on_go_command(state: &Arc<Mutex<Orch>>, text: &str) {
             } else if g.wait_pay.take().is_some() {
                 info!("кнопка «принять перевод» снята вручную");
             }
+        }
+        Some("sell_topup") => {
+            let mut g = state.lock().await;
+            g.topup_cfg.enabled = v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(false);
+            g.topup_cfg.amount_kk = topup::clamp_kk(v.get("amount_kk").and_then(|x| x.as_f64()).unwrap_or(topup::DEFAULT_KK));
+            g.topup_cfg.targets = v
+                .get("targets")
+                .and_then(|x| x.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|t| {
+                            let anarchy = t.get("anarchy").and_then(|x| x.as_u64())? as u16;
+                            let to = t.get("to").and_then(|x| x.as_str())?.trim().to_string();
+                            Some(topup::Target { anarchy, to })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            g.topup_cfg.at = Some(Instant::now());
         }
         Some("sell_rescue") => {
             let from = v
