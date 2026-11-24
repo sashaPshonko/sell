@@ -78,18 +78,13 @@ export const tooSmallManual = (amountKk, minKk) =>
         `Если нужна валюта — оформи новый заказ от ${minKk}кк.`,
     ].join('\n');
 
-/** «90 дней» → «3 месяцев», иначе «N дней». */
-export const ageLimitText = (days) => (days % 30 === 0 ? `${days / 30} ${days / 30 === 1 ? 'месяца' : 'месяцев'}` : `${days} дней`);
+// Возраст аккаунта и порог в текст не попадают — это внутренняя информация магазина.
+const NEW_ACCOUNT_LINE = '⚠️ Новорегам валюту не выдаём.';
+const REFUND_VIA_SUPPORT = '💸 Деньги верни через поддержку FunPay (откройте заказ и нажмите «Написать в поддержку»).';
 
-// Тон нейтральный: правило магазина, без обвинений (покупателем может оказаться модератор или честный новичок).
-export const refundedYoungAccount = (days) =>
-    `⚠️ Автоматическая выдача доступна аккаунтам FunPay старше ${ageLimitText(days)} — это правило магазина, претензий к тебе нет.`;
+export const refundedYoungAccount = () => [NEW_ACCOUNT_LINE, REFUND_VIA_SUPPORT].join('\n');
 
-export const youngAccountManual = (days) =>
-    [
-        `⚠️ Автоматическая выдача доступна аккаунтам FunPay старше ${ageLimitText(days)} — это правило магазина, претензий к тебе нет.`,
-        '💸 Продавец вернёт деньги вручную, подожди немного.',
-    ].join('\n');
+export const youngAccountManual = () => [NEW_ACCOUNT_LINE, REFUND_VIA_SUPPORT].join('\n');
 
 /** Автоответ тем, кто пишет до покупки («можно купить?»). Свой текст — FUNPAY_AUTOREPLY в .env. */
 export function autoReply(minKk = Number(process.env.FUNPAY_MIN_KK || 200)) {

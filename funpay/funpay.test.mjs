@@ -135,8 +135,11 @@ test('parseRegisteredAt: нет блока / незнакомый месяц →
     assert.equal(parseRegisteredAt(PROFILE('4 фруктября 2022, 14:29')), null);
 });
 
-test('текст возврата: 90 дней → «3 месяцев»', async () => {
+test('текст возврата: без срока и цифр, отправляет в поддержку', async () => {
     const T = await import('./texts.mjs');
-    assert.match(T.refundedYoungAccount(90), /старше 3 месяцев/);
-    assert.match(T.refundedYoungAccount(45), /старше 45 дней/);
+    for (const t of [T.refundedYoungAccount(90), T.youngAccountManual(45)]) {
+        assert.match(t, /Новорегам валюту не выдаём/);
+        assert.match(t, /через поддержку/);
+        assert.doesNotMatch(t, /месяц|90|45|дн|вручную/i);
+    }
 });
