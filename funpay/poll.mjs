@@ -174,26 +174,20 @@ async function buyerRegisteredAt(client, buyerId) {
     }
 }
 
+// Новорегов не возвращаем сами: сообщение «через поддержку», заказ уходит в ручной (manual), возврат — только через поддержку FunPay.
 async function refundYoungAccount(client, order, days, ageDays) {
     if (!LIVE) {
-        log(`(не отправляю) #${order.id}: аккаунт ${order.buyerName} ${ageDays} дн. < ${days} — был бы возврат + сообщение`);
+        log(`(не отправляю) #${order.id}: аккаунт ${order.buyerName} ${ageDays} дн. < ${days} — было бы сообщение «через поддержку»`);
         order.phase = 'refunded_dry';
         saveState();
         return;
     }
-    try {
-        await client.refund(order.id);
-        order.phase = 'refunded';
-        journal({ ev: 'refund', order: order.id, amountKk: order.amountKk, reason: 'young_account', accountAgeDays: ageDays });
-        log(`возврат #${order.id}: аккаунт ${order.buyerName} ${ageDays} дн. < ${days}`);
-        await say(client, order, T.refundedYoungAccount(days), 'refund_young');
-    } catch (e) {
-        order.phase = 'manual';
-        order.manualReason = `аккаунт младше ${days} дн., возврат не удался: ${e.message}`;
-        log(`ВОЗВРАТ НЕ УДАЛСЯ #${order.id}: ${e.message} — нужен ручной возврат`);
-        await say(client, order, T.youngAccountManual(days), 'refund_young_manual');
-    }
+    order.phase = 'manual';
+    order.manualReason = `аккаунт младше ${days} дн. (${ageDays} дн.), возврат только через поддержку FunPay`;
+    journal({ ev: 'young_account', order: order.id, amountKk: order.amountKk, accountAgeDays: ageDays });
+    log(`новорег #${order.id}: аккаунт ${order.buyerName} ${ageDays} дн. < ${days} — автовозврата нет, написал про поддержку`);
     saveState();
+    await say(client, order, T.youngAccountManual(days), 'young_account');
 }
 
 // ───────────── новые оплаты ─────────────

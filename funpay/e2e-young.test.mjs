@@ -65,10 +65,8 @@ test('покупатель с аккаунтом младше 90 дней → в
     };
     await until(() => existsSync(join(dir, 's.json')), 'первый запуск');
     sales = row('YNG1', 'info', 'Монеты') + sales;
-    await until(() => refunds.length === 1, 'возврат');
-    assert.deepEqual(refunds, ['YNG1']);
-    await until(() => sent.some((s) => s.includes('Новорегам валюту не выдаём') && !/мошен|обман|подозр/i.test(s)), 'сообщение о возврате');
+        await until(() => sent.some((s) => s.includes('Новорегам валюту не выдаём') && !/мошен|обман|подозр/i.test(s)), 'сообщение о возврате');
     await new Promise((r) => setTimeout(r, 800));
-    assert.equal(refunds.length, 1, 'второй возврат не делаем');
-    assert.equal(JSON.parse(readFileSync(join(dir, 's.json'), 'utf8')).orders.YNG1.phase, 'refunded');
+    assert.equal(refunds.length, 0, 'автовозврата новорегам нет');
+    assert.equal(JSON.parse(readFileSync(join(dir, 's.json'), 'utf8')).orders.YNG1.phase, 'manual');
 });
